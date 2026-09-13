@@ -5523,6 +5523,7 @@ dependencies = [
  "rfd",
  "ron",
  "sdroxide-aprs",
+ "sdroxide-audio",
  "sdroxide-config",
  "sdroxide-midi",
  "sdroxide-proto",
