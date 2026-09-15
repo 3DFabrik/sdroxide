@@ -1,4 +1,5 @@
 # SDR Oxide
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/W7J0271P9Q)
 
 A PowerSDR/Thetis-style software-defined-radio transceiver client in Rust, with
 pluggable radio backends (**SoapySDR**, **OpenHPSDR**, **TCI**, **SmartSDR**, **Icom LAN**, **ELAD**, and **CAT**), an
