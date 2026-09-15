@@ -1323,7 +1323,14 @@ use sdroxide_types::{
 /// `ServerMsg::Hd` carrying `HdRadioStatus`, and `Command::SetHdProgram` for the
 /// HD-2 subchannels, all appended last so no surviving discriminant moved, but a
 /// v147 peer handed any of them fails to decode the message carrying it.
-pub const PROTO_VERSION: u16 = 148;
+///
+/// v149: station profiles (issue #197). `Command` gains `ProfileSave`,
+/// `ProfileApply` and `ProfileDelete`, appended last so no surviving
+/// discriminant moved, but a v148 station has no name for them and fails to
+/// decode the message carrying one. `RadioEvent::Profiles` is deliberately not
+/// forwarded — there is no `ServerMsg` variant for it — so a remote client can
+/// ask for a saved profile by name but cannot list them.
+pub const PROTO_VERSION: u16 = 149;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]
