@@ -77,6 +77,13 @@ pub struct HdDemod {
     /// Fractional part of the input-to-audio sample accounting.
     frame_debt: f64,
 
+    /// Audio frames dropped by the backlog trim, cumulatively. A steady
+    /// stream of these is a decoder that is not being drained at the rate it
+    /// produces, which is how the old one-value-per-frame pacing bug showed
+    /// itself; exposing the count lets a test or the capture harness assert
+    /// it stays zero.
+    drops: u64,
+
     /// Which programme is being listened to, 0-based.
     selected: u8,
 
@@ -110,6 +117,7 @@ impl HdDemod {
             level: 0.0,
             power: 0.0,
             frame_debt: 0.0,
+            drops: 0,
             selected: 0,
             status: HdRadioStatus::default(),
             status_dirty: true,
@@ -146,6 +154,16 @@ impl HdDemod {
         self.audio.clear();
         self.status.program = program;
         self.status_dirty = true;
+    }
+
+    /// Audio frames dropped by the backlog trim since construction.
+    ///
+    /// Zero on a healthy decode at the right rate. A climbing count means the
+    /// queue is not being drained as fast as the decoder fills it — the shape
+    /// the old one-value-per-frame pacing bug took — so a capture test or the
+    /// harness can assert this stays at zero.
+    pub fn backlog_drops(&self) -> u64 {
+        self.drops
     }
 
     /// Resample the block to the decoder's rate, normalise it and pipe it in.
@@ -250,6 +268,7 @@ impl HdDemod {
         while self.audio.len() > MAX_BACKLOG_FRAMES * 2 {
             let drop = (self.audio.len() / 2 - TARGET_BACKLOG_FRAMES) * 2;
             self.audio.drain(..drop);
+            self.drops += (drop / 2) as u64;
             debug!(frames = drop / 2, "dropped an HD Radio audio backlog");
         }
     }
