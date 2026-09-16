@@ -9913,10 +9913,12 @@ than a continuous control).
 
 Leave the port **empty** and an FDM-DUO is still usable on its receive cable
 alone: the driver tunes, changes mode and keys through the CAT gateway on the
-same USB interface. What you give up is everything that needs an *answer* — the
-S-meter, the SWR, the power readback, and any notice that somebody has touched
-the front panel. That is also the setting for an FDM-S1 or FDM-S2, which have no
-CAT port at all.
+same USB interface, and the radio's own dial is followed — the receive cable
+carries a read-back of the frequency the radio is tuned to, which sdroxide asks
+for four times a second, so turning the knob moves the panadapter with it. What
+you give up is the rest of what needs an *answer*: the S-meter, the SWR, the
+power readback, and any notice of a mode changed at the front panel. That is
+also the setting for an FDM-S1 or FDM-S2, which have no CAT port at all.
 
 **Transmit input** is the radio's `TI` command, menu 32 `TX IN` at the front
 panel, asserted when the port opens. **USB audio** is what makes transmit work

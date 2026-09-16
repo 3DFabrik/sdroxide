@@ -372,6 +372,13 @@ pub(crate) struct Shared {
     /// every block so a ring that fills during an over is accounted for as the
     /// cost of transmitting rather than as an overrun.
     pub rx_paused: AtomicBool,
+    /// What an FDM-DUO last said it was tuned to, in whole Hz, or zero before
+    /// the first answer and on every other model.
+    ///
+    /// The radio's own knob moves this window, so it is read back rather than
+    /// assumed — see `Device::read_tuned`. Whole Hz because the radio reports
+    /// whole Hz, which also makes an atomic the whole of the plumbing.
+    pub duo_tuned_hz: AtomicU64,
 }
 
 impl Shared {
@@ -380,6 +387,7 @@ impl Shared {
             alive: AtomicBool::new(true),
             last_rx_ms: AtomicU64::new(0),
             rx_paused: AtomicBool::new(false),
+            duo_tuned_hz: AtomicU64::new(0),
         }
     }
 }
@@ -483,6 +491,19 @@ impl EladHandle {
         // A closed channel means the thread has exited; `needs_reopen` will
         // pick that up from `is_alive`, so there is nothing useful to do here.
         let _ = self.ctrl.send(c);
+    }
+
+    /// Where the radio itself says the window is, if it has said.
+    ///
+    /// Only an FDM-DUO answers: its receive window is its VFO, so the
+    /// front-panel knob moves it and this is how that becomes visible without a
+    /// CAT serial port. `None` until the first read comes back, and on every
+    /// model that has no VFO to turn.
+    pub fn tuned_hz(&self) -> Option<f64> {
+        match self.shared.duo_tuned_hz.load(Ordering::Relaxed) {
+            0 => None,
+            hz => Some(hz as f64),
+        }
     }
 
     pub fn set_center_hz(&self, hz: f64) {

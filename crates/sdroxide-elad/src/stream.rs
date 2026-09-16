@@ -34,6 +34,15 @@ use crate::trace::{self, Trace};
 /// idle loop costs nothing.
 const COMPLETE_TIMEOUT: Duration = Duration::from_millis(5);
 
+/// How often an FDM-DUO is asked where its VFO now is.
+///
+/// The window rides on that VFO, so a hand on the knob moves the samples and
+/// nothing else says so when there is no CAT serial port. Four times a second
+/// keeps a spun dial from being visibly behind, and costs one short control
+/// transfer between blocks — the same endpoint a retune already uses, and far
+/// less traffic than one retune's busy-wait.
+const TUNE_POLL: Duration = Duration::from_millis(250);
+
 /// How long a stream may deliver nothing at all before it is said out loud.
 ///
 /// This is the one failure this backend can produce with no error anywhere in
@@ -187,6 +196,9 @@ fn pump(
     let mut samples: Vec<f32> = Vec::with_capacity(TRANSFER_BYTES / 2);
     let mut logged_first = false;
     let mut said_silent = false;
+    // Far enough back that the first pass asks straight away.
+    let mut last_tune_poll = Instant::now() - TUNE_POLL;
+    let mut said_tune_poll_failed = false;
 
     for _ in 0..IN_FLIGHT {
         ep.submit(ep.allocate(TRANSFER_BYTES));
@@ -222,6 +234,29 @@ fn pump(
             // The front-end switches move the calibrated scale, so it is
             // re-read rather than tracked field by field.
             deconstruct.set_scale(dev.scale());
+        }
+
+        // 1b. Ask the radio where it is, on a timer. Only an FDM-DUO answers,
+        //     and only its own front panel can make the answer differ from what
+        //     we last commanded.
+        if last_tune_poll.elapsed() >= TUNE_POLL {
+            last_tune_poll = Instant::now();
+            match dev.read_tuned() {
+                Ok(Some(t)) => {
+                    shared.duo_tuned_hz.store(t.hz as u64, Ordering::Relaxed);
+                }
+                Ok(None) => {}
+                // Not fatal and not worth a line per failure: the samples are
+                // still arriving, and the frequency axis simply stays where it
+                // was until an answer comes back.
+                Err(e) => {
+                    if !said_tune_poll_failed {
+                        said_tune_poll_failed = true;
+                        tracing::debug!("ELAD: reading the radio's dial failed: {e}");
+                        trace.note(format!("dial read-back failed: {e}"));
+                    }
+                }
+            }
         }
 
         // 2. Refill before draining, so the queue is never empty while the
