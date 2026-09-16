@@ -122,7 +122,7 @@ pub use digi::{
     adif_to_qso_log_counting_swl, clock_health, cq_is_for_us, digi_decode_to_adif_record,
     digi_decodes_to_adif, digi_decodes_to_csv, eu_vhf_rs, fmt_report, next_contest_serial,
     qso_log_to_adif, qso_log_to_text, qso_to_adif_record, tx_level_db, tx_level_from_db,
-    utc_ymd_hms, worked_before, ymd_hms_to_unix,
+    utc_ymd_hms, worked_before, ymd_hms_to_unix, AcarsMessage, AcarsStatus, ACARS_MESSAGE_MAX,
 };
 pub use drm::{
     DrmChannel, DrmCodec, DrmConstellation, DrmRobustness, DrmService, DrmStatus, DrmSync, DrmTime,

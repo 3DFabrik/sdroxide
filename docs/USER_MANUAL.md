@@ -18,8 +18,9 @@ or connects to a remote sdroxide server.
 2. [Basic operation](#2-basic-operation)
     - [2.20 HD Radio (NRSC-5)](#220-hd-radio-nrsc-5)
     - [2.22 QO-100 beacon plugin](#222-qo-100-beacon-plugin)
-3. [Digital modes (FT8, FT4, FT2, PSK31, RTTY, Olivia, THOR, FSQ, Hellschreiber, SSTV, RIFP, weather fax, JS8, RF Paint, WSPR, packet, APRS, ADS-B, NAVTEX, VDL2, AIS, AtCHAT NET)](#3-digital-modes)
+3. [Digital modes (FT8, FT4, FT2, PSK31, RTTY, Olivia, THOR, FSQ, Hellschreiber, SSTV, RIFP, weather fax, JS8, RF Paint, WSPR, packet, APRS, ADS-B, NAVTEX, ACARS, VDL2, AIS, AtCHAT NET)](#3-digital-modes)
     - [3.17 AtCHAT NET](#317-atchat-net)
+    - [3.18 ACARS](#318-acars-airline-datalink-on-airband)
 4. [Skimmers (CW, PSK, RTTY)](#4-skimmers)
 5. [ISM band decoder (315 / 345 / 433 / 868 / 915 MHz devices)](#5-ism-band-decoder)
 6. [Settings](#6-settings)
@@ -5493,6 +5494,18 @@ survives fades and drop-outs rather than one that has to be started over.
 A received file is written under a `received/` folder — created next to
 wherever sdroxide was started from — named `<transfer-id>_<filename>`, so two
 stations sending a file with the same name never collide.
+
+### 3.18 ACARS (airline datalink on airband)
+
+ACARS (Aircraft Communications Addressing and Reporting System) is the text datalink airliners and ground stations use on VHF airband. Aircraft send position reports, crew requests and company messages; ground stations answer with clearance data, gate assignments and weather. Every exchange is a short burst — a second or two of MSK at 2400 baud on an AM carrier, usually with a 1800 Hz audio tone.
+
+**Where to listen.** ACARS lives on a handful of airband frequencies shared with voice — the two main service channels are 131.550 and 131.725 MHz, with 129.125, 130.025, 130.450, 131.125 and 136.700 also common. Switch to **AM** (or **Airband** if you are in that preset) and tune so the carrier sits near 1800 Hz in the passband; the ACARS panel provides channel chips to jump between the published frequencies.
+
+**What you see.** The panel lists frames newest first: the aircraft address (a trimmed hex code), the mode character, the two-character label (what kind of message it is), a block identifier, and the text. A CRC check marks frames where the block-check sequence failed. The level meter and frame/bad counters sit in the header — a channel with no ACARS traffic shows no frames but the meter still moves with airband noise, so you know the passband is open.
+
+**Receive only.** ACARS is an airline service shared with air traffic control — there is nothing here for an amateur licence to do. The mode does not transmit, and its channel chips tune the dial without touching the transmit side.
+
+ACARS is also carried over VDL2 on higher frequencies — see [3.15](#315-vdl2-what-the-aircraft-are-saying) for the datalink version.
 
 ## 4. Skimmers
 
@@ -15244,6 +15257,7 @@ using. Bind them under **Speech** on the Controls tab:
 | ADS-B | Aircraft surveillance on 1090 MHz: a target list and a radar picture with history dots, speed vectors and data blocks. Receive only, and needs a receiver streaming at least 2 Msps. See [3.13](#313-ads-b-aircraft-on-1090-mhz). |
 | VDL2 | The VHF datalink aircraft exchange ACARS over, on fourteen channels between 136.650 and 136.975 MHz at once: a message log and the stations sending them. Receive only. See [3.15](#315-vdl2-what-the-aircraft-are-saying). |
 | AIS | Ship reporting on the two channels either side of 162.000 MHz at once: a vessel list and a marine chart with hulls drawn to their heading, time-based trails and speed vectors. Receive only. See [3.16](#316-ais-ships-on-162-mhz). |
+| ACARS | Airline datalink on VHF airband: aircraft addresses, labels, message text and CRC checks. Receive only. See [3.18](#318-acars-airline-datalink-on-airband). |
 | ATCHAT | AtCHAT NET — a 2.7 kHz COFDM multi-station keyboard and file mode: dynamic master election, a shared roster, common and directed chat, and block-CRC-ARQ file/image transfer. See [3.17](#317-atchat-net). |
 
 ### Bands

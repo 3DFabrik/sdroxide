@@ -474,6 +474,8 @@ pub struct DigiStatus {
     /// own "are we in NAVTEX?" test — the rule the modes above follow.
     #[serde(default)]
     pub navtex: Option<NavtexStatus>,
+    /// ACARS status, when that mode is selected.
+    pub acars: Option<AcarsStatus>,
     /// APRS: the stations on the map, the messages, and the channel. `None`
     /// in every other mode, so the panel that draws it is its own "are we in
     /// APRS?" test — the same rule [`DigiStatus::js8`] follows.
@@ -818,6 +820,44 @@ pub struct NavtexStatus {
     pub reverse: bool,
 }
 
+/// Most ACARS messages kept. A busy channel produces a few a minute and the
+/// pane is a rolling view, not a log.
+pub const ACARS_MESSAGE_MAX: usize = 300;
+
+/// One decoded ACARS message.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct AcarsMessage {
+    /// The mode character, as text.
+    pub mode: String,
+    /// The aircraft address, trimmed.
+    pub address: String,
+    /// The technical acknowledgement character.
+    pub ack: String,
+    /// The two-character message label.
+    pub label: String,
+    /// The block identifier.
+    pub block_id: String,
+    /// The message text.
+    pub text: String,
+    /// Whether the block-check sequence matched.
+    pub crc_ok: bool,
+    /// When it was decoded, Unix seconds UTC.
+    pub at: i64,
+}
+
+/// What the ACARS receiver is doing.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AcarsStatus {
+    /// Smoothed audio level, for a meter.
+    pub level: f32,
+    /// Messages received, newest last.
+    pub messages: Vec<AcarsMessage>,
+    /// Frames decoded with a good block check.
+    pub frames: u64,
+    /// Frames whose block check failed.
+    pub bad: u64,
+}
+
 /// Most frames kept for the monitor pane. A busy VHF channel produces a few a
 /// second, and the pane is a rolling view rather than a log.
 pub const PACKET_HEARD_MAX: usize = 200;
@@ -887,6 +927,7 @@ impl DigiStatus {
             rade: None,
             packet: None,
             navtex: None,
+            acars: None,
             aprs: None,
             js8: None,
             atchat: None,

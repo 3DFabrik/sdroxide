@@ -24,7 +24,7 @@ pub const BAUD: f64 = 2400.0;
 
 /// One decoded ACARS message.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct AcarsMessage {
+pub struct AcarsFrame {
     /// The mode character, as text.
     pub mode: String,
     /// The 7-character aircraft address, trimmed.
@@ -44,7 +44,7 @@ pub struct AcarsMessage {
 /// What the decoder produces.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AcarsEvent {
-    Message(AcarsMessage),
+    Message(AcarsFrame),
 }
 
 /// Odd parity over the low seven bits, compared with bit 7.
@@ -78,7 +78,7 @@ fn bytes_lsb_first(bits: &[u8]) -> Vec<u8> {
 /// Returns `None` when no frame with a valid block check is found — the parse
 /// is what rejects noise, so a false positive costs a check rather than a
 /// phantom message.
-pub fn parse_frame(bits: &[u8]) -> Option<AcarsMessage> {
+pub fn parse_frame(bits: &[u8]) -> Option<AcarsFrame> {
     // Byte-align every shift of the stream and keep the headings; the real one
     // is whichever ends with a block check that matches.
     for shift in 0..8 {
@@ -98,7 +98,7 @@ pub fn parse_frame(bits: &[u8]) -> Option<AcarsMessage> {
 }
 
 /// Parse the header and text that follow `SOH`.
-fn parse_from(rest: &[u8]) -> Option<AcarsMessage> {
+fn parse_from(rest: &[u8]) -> Option<AcarsFrame> {
     // mode(1) address(7) ack(1) label(2) block_id(1) STX(1)
     if rest.len() < 13 {
         return None;
@@ -155,7 +155,7 @@ fn parse_from(rest: &[u8]) -> Option<AcarsMessage> {
     covered.insert(0, 0x01);
     let crc_ok = crc16(&covered) == bcs;
 
-    Some(AcarsMessage {
+    Some(AcarsFrame {
         mode,
         address: address.trim().to_string(),
         ack,
@@ -202,6 +202,11 @@ pub struct AcarsRx {
     /// Samples to skip while the low-pass fills, so the symbol grid lines up
     /// with the signal rather than with the filter's group delay.
     warmup: usize,
+    /// Smoothed audio level, for the panel's meter.
+    level: f32,
+    /// Frames decoded with a good block check, and frames whose check failed.
+    frames: u64,
+    bad: u64,
 }
 
 impl AcarsRx {
@@ -222,11 +227,32 @@ impl AcarsRx {
             levels: Vec::new(),
             // Half the 63-tap low-pass, in samples.
             warmup: 31,
+            level: 0.0,
+            frames: 0,
+            bad: 0,
         }
+    }
+
+    /// Smoothed audio level, 0-1-ish.
+    pub fn level(&self) -> f32 {
+        self.level
+    }
+
+    /// Frames decoded with a good block check.
+    pub fn frames(&self) -> u64 {
+        self.frames
+    }
+
+    /// Frames whose block check failed.
+    pub fn bad(&self) -> u64 {
+        self.bad
     }
 
     /// Consume audio, appending any messages found.
     pub fn process(&mut self, audio: &[f32], out: &mut Vec<AcarsEvent>) {
+        // A running level for the meter.
+        let ms = audio.iter().map(|s| s * s).sum::<f32>() / audio.len().max(1) as f32;
+        self.level += 0.3 * (ms.sqrt() - self.level);
         // Mix the 1800 Hz centre down to DC, then low-pass.
         self.mix_re.clear();
         self.mix_im.clear();
@@ -278,6 +304,11 @@ impl AcarsRx {
         if self.levels.len() >= 8 * 32 {
             let bits = nrzi_decode(&self.levels);
             if let Some(msg) = parse_frame(&bits) {
+                if msg.crc_ok {
+                    self.frames += 1;
+                } else {
+                    self.bad += 1;
+                }
                 out.push(AcarsEvent::Message(msg));
                 self.levels.clear();
             } else if self.levels.len() > 8 * 280 {
@@ -294,7 +325,7 @@ mod tests {
     /// Build a frame's bit stream from a message, the way a transmitter would:
     /// SOH, header, STX, text, ETX, BCS, DEL, each character 7 bits LSB-first
     /// plus odd parity — then NRZI-encode it.
-    pub(super) fn encode(msg: &AcarsMessage) -> Vec<u8> {
+    pub(super) fn encode(msg: &AcarsFrame) -> Vec<u8> {
         let mut bytes: Vec<u8> = Vec::new();
         let ch = |c: char| -> u8 {
             let d = (c as u8) & 0x7f;
@@ -348,8 +379,8 @@ mod tests {
         levels
     }
 
-    fn sample() -> AcarsMessage {
-        AcarsMessage {
+    fn sample() -> AcarsFrame {
+        AcarsFrame {
             mode: "2".into(),
             address: ".N12345".into(),
             ack: " ".into(),
@@ -428,7 +459,7 @@ mod tests {
         for chunk in audio.chunks(4096) {
             rx.process(chunk, &mut events);
         }
-        let got: Vec<&AcarsMessage> = events
+        let got: Vec<&AcarsFrame> = events
             .iter()
             .filter_map(|e| match e {
                 AcarsEvent::Message(m) => Some(m),

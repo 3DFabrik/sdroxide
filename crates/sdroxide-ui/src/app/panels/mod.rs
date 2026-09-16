@@ -26,6 +26,7 @@ pub(in crate::app) mod cw;
 pub(in crate::app) mod decodes;
 pub(in crate::app) mod fsq;
 pub(in crate::app) mod js8;
+mod acars;
 mod navtex;
 pub(in crate::app) mod packet;
 pub(in crate::app) mod rade;
