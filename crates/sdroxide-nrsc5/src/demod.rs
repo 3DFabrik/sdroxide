@@ -63,10 +63,12 @@ pub struct HdDemod {
     rs_buf: Vec<Complex32>,
     /// ...and the same, as the interleaved floats the decoder reads.
     iq_buf: Vec<f32>,
-    /// Decoded mono audio waiting to be played, at [`AUDIO_RATE`].
+    /// Decoded audio waiting to be played, at [`AUDIO_RATE`], as the
+    /// interleaved stereo pairs nrsc5 produces — two `i16` per frame.
     audio: VecDeque<i16>,
-    /// Raw audio scratch for one drain.
-    raw: Vec<i16>,
+    /// The side, `(L - R) / 2`, of the block being played, for the stereo
+    /// blend. Built by `process`, read once by `take_side`.
+    side: Vec<f32>,
 
     /// Mean square of the resampled input, for the level normalisation.
     level: f32,
@@ -104,7 +106,7 @@ impl HdDemod {
             rs_buf: Vec::new(),
             iq_buf: Vec::new(),
             audio: VecDeque::new(),
-            raw: Vec::new(),
+            side: Vec::new(),
             level: 0.0,
             power: 0.0,
             frame_debt: 0.0,
@@ -120,6 +122,7 @@ impl HdDemod {
         let was_open = self.receiver.is_some();
         self.receiver = None;
         self.audio.clear();
+        self.side.clear();
         self.frame_debt = 0.0;
         self.status = HdRadioStatus::default();
         self.status_dirty = true;
@@ -185,7 +188,6 @@ impl HdDemod {
         let Some(receiver) = self.receiver.as_ref() else {
             return;
         };
-        self.raw.clear();
         // `poll` is non-blocking, so this ends when the queue is empty.
         while let Some(ev) = receiver.poll() {
             match ev {
@@ -243,17 +245,43 @@ impl HdDemod {
 
         // A backlog is latency; drop the oldest audio rather than play it out
         // late. It only builds if the decoder catches up in a burst after
-        // acquiring.
-        while self.audio.len() > MAX_BACKLOG_FRAMES {
-            let drop = self.audio.len() - TARGET_BACKLOG_FRAMES;
+        // acquiring. The queue holds interleaved stereo pairs, so it is two
+        // values per frame and the caps are in frames.
+        while self.audio.len() > MAX_BACKLOG_FRAMES * 2 {
+            let drop = (self.audio.len() / 2 - TARGET_BACKLOG_FRAMES) * 2;
             self.audio.drain(..drop);
-            debug!(drop, "dropped an HD Radio audio backlog");
+            debug!(frames = drop / 2, "dropped an HD Radio audio backlog");
         }
+    }
+}
+
+/// Move `want` audio frames from the interleaved stereo queue into `out` (as
+/// mono, `(L + R) / 2`) and `side` (`(L - R) / 2`), padding with silence for
+/// frames the queue cannot supply.
+///
+/// Free rather than a method so the pairing can be tested without a decoder.
+fn emit_frames(audio: &mut VecDeque<i16>, side: &mut Vec<f32>, want: usize, out: &mut Vec<f32>) {
+    let available = audio.len() / 2;
+    let take = want.min(available);
+    out.reserve(want);
+    side.reserve(want);
+    for _ in 0..take {
+        let l = audio.pop_front().unwrap_or(0) as f32 / 32_768.0;
+        let r = audio.pop_front().unwrap_or(0) as f32 / 32_768.0;
+        out.push((l + r) * 0.5);
+        side.push((l - r) * 0.5);
+    }
+    // Whatever the queue could not supply is silence, not a gap: the block
+    // still has to be as long as real time says.
+    for _ in take..want {
+        out.push(0.0);
+        side.push(0.0);
     }
 }
 
 impl Demodulator for HdDemod {
     fn process(&mut self, iq: &[Complex32], out: &mut Vec<f32>) {
+        self.side.clear();
         if iq.is_empty() {
             return;
         }
@@ -277,16 +305,13 @@ impl Demodulator for HdDemod {
             return;
         }
 
-        let take = want.min(self.audio.len());
-        out.reserve(want);
-        for _ in 0..take {
-            if let Some(s) = self.audio.pop_front() {
-                out.push(s as f32 / 32_768.0);
-            }
-        }
-        // Whatever the queue could not supply is silence, not a gap: the block
-        // still has to be as long as real time says.
-        out.resize(out.len() + (want - take), 0.0);
+        // nrsc5 hands over interleaved stereo pairs, two `i16` per frame, so a
+        // frame is taken as a pair: the sum for the mono output the receive
+        // chain plays, the difference for the side `take_side` offers the
+        // stereo blend. Popping one value per frame (the old behaviour) halved
+        // the rate, played L and R alternately, and grew the queue until the
+        // backlog trim fired several times a second.
+        emit_frames(&mut self.audio, &mut self.side, want, out);
     }
 
     /// Nothing to do: the HD Radio channel's width is fixed by the FM hybrid,
@@ -302,6 +327,22 @@ impl Demodulator for HdDemod {
         if self.power <= 1e-20 { -200.0 } else { 10.0 * self.power.log10() }
     }
 
+    /// The side channel of the block just decoded, for the stereo blend. HDC
+    /// audio is stereo, so this is offered whenever there is anything to offer;
+    /// a mono transmission has `L == R` and a zero side, which sums back to the
+    /// same mono signal.
+    fn take_side(&mut self, out: &mut Vec<f32>) -> bool {
+        if self.side.is_empty() {
+            return false;
+        }
+        out.extend_from_slice(&self.side);
+        true
+    }
+
+    fn stereo_locked(&self) -> bool {
+        self.status.audio
+    }
+
     fn reset_hd_radio(&mut self) {
         self.restart();
     }
@@ -315,5 +356,45 @@ impl Demodulator for HdDemod {
             return None;
         }
         Some(self.status.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One output sample per stereo *frame*, not per queued value: nrsc5 hands
+    /// over two `i16` per frame, and consuming one per frame halved the rate
+    /// and played L and R alternately (the on-air bug).
+    #[test]
+    fn a_frame_is_a_stereo_pair() {
+        let mut audio: VecDeque<i16> = VecDeque::new();
+        audio.extend([-32768i16, -32768, 16384, -16384]);
+        let mut side = Vec::new();
+        let mut out = Vec::new();
+        emit_frames(&mut audio, &mut side, 2, &mut out);
+        assert_eq!(out.len(), 2, "one sample per frame, not per value");
+        assert_eq!(side.len(), 2);
+        assert!((out[0] + 1.0).abs() < 1e-6, "mono is (L+R)/2: {}", out[0]);
+        assert!(side[0].abs() < 1e-6, "equal channels carry no side: {}", side[0]);
+        assert!(out[1].abs() < 1e-6);
+        assert!((side[1] - 0.5).abs() < 1e-6, "side is (L-R)/2: {}", side[1]);
+        assert!(audio.is_empty(), "both frames consumed, four values");
+    }
+
+    /// A block is always as long as real time says, whether or not the decoder
+    /// has caught up.
+    #[test]
+    fn a_short_queue_is_padded_with_silence() {
+        let mut audio: VecDeque<i16> = VecDeque::new();
+        audio.extend([16384i16, 16384]);
+        let mut side = Vec::new();
+        let mut out = Vec::new();
+        emit_frames(&mut audio, &mut side, 3, &mut out);
+        assert_eq!(out.len(), 3);
+        assert_eq!(side.len(), 3);
+        assert_eq!(out[1], 0.0);
+        assert_eq!(out[2], 0.0);
+        assert!(audio.is_empty());
     }
 }
