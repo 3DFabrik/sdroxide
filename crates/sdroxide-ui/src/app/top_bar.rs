@@ -6170,6 +6170,10 @@ fn band_mode_menu(
             // transmits, and DRM is a broadcast to listen to — a demodulator,
             // like WFM beside it.
             Mode::Drm,
+            // HD Radio is the same kind of thing — the digital sidecar of an FM
+            // broadcast, a demodulator and not a digi-engine mode — so it sits
+            // here too.
+            Mode::HdRadio,
             Mode::Digu,
             Mode::Digl,
             Mode::Dsb,
