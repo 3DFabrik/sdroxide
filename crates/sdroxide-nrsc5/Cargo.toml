@@ -1,0 +1,25 @@
+[package]
+name = "sdroxide-nrsc5"
+version.workspace = true
+edition.workspace = true
+# The vendored C this wraps — `vendor/nrsc5` (GPL-3.0-or-later) — decodes
+# HD Radio (NRSC-5). Its audio codec needs faad2's HDC variant, which the
+# combined faad2 build in `crates/sdroxide-drm` already provides: the DRM and
+# the HD Radio decoders share one archive (see `crates/sdroxide-drm/Cargo.toml`
+# for the `madmedicnl/faad2-hdc` pin). Whatever binary wants HD Radio must also
+# link `sdroxide-drm`; the single faad2 archive is pulled once, and two copies
+# would collide on the `NeAACDec*` symbols.
+# See `crates/sdroxide-drm/build.rs` for the provenance of `vendor/nrsc5`.
+license.workspace = true
+
+# Native-only: links vendored C. Must never be a dependency of any
+# wasm-targeted crate.
+
+[dev-dependencies]
+# Provokes the faad2 link: nrsc5's `output.o` references `NeAACDec*` symbols,
+# which come from the combined archive that `sdroxide-drm` builds. The final
+# binary already links `sdroxide-drm`, so nothing extra reaches it.
+sdroxide-drm.workspace = true
+
+[build-dependencies]
+cc = "1"

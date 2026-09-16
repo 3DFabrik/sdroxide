@@ -16,6 +16,9 @@
 //! * **faad2 at runtime** — Dream dlopens `libfaad_drm.so.2`, which most
 //!   systems do not have. It is built in from `vendor/faad2` instead, so DRM
 //!   audio decodes out of the box, which is the whole point of the feature.
+//!   `vendor/faad2` is pinned to `madmedicnl/faad2-hdc` (stock 2.11.2 plus
+//!   nrsc5's HDC patch) so the same archive also decodes HD Radio audio; see
+//!   the build script's `build_faad2` for when that pin can go.
 
 use std::path::{Path, PathBuf};
 
@@ -186,6 +189,13 @@ fn main() {
 /// `DRM_SUPPORT` added, which is what brings in `NeAACDecInitDRM` and the DRM
 /// entry into the decoder. Upstream ships this as a second library,
 /// `libfaad_drm`, precisely because the plain one cannot decode DRM at all.
+///
+/// `HDC_SUPPORT` is added as well: `vendor/faad2` is pinned to
+/// `madmedicnl/faad2-hdc`, a two-commit fork (stock 2.11.2 plus nrsc5's
+/// `support/faad2-hdc-support.patch`) so that one archive decodes both DRM and
+/// HD Radio. A second faad2 copy would collide on the `NeAACDec*` symbols in
+/// any binary that also carries nrsc5. Drop the `HDC_SUPPORT` define and the
+/// fork pin again when upstream knik0/faad2 merges the HDC variant.
 fn build_faad2(faad2: &Path) {
     let mut build = cc::Build::new();
     build
@@ -200,6 +210,7 @@ fn build_faad2(faad2: &Path) {
         .define("PACKAGE_VERSION", "\"2.11.2\"")
         .define("APPLY_DRC", None)
         .define("DRM_SUPPORT", None)
+        .define("HDC_SUPPORT", None)
         .opt_level(2)
         .warnings(false);
     if !cfg!(target_env = "msvc") {

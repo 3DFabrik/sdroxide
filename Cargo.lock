@@ -5185,6 +5185,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sdroxide-nrsc5"
+version = "1.6.7"
+dependencies = [
+ "cc",
+ "sdroxide-drm",
+]
+
+[[package]]
 name = "sdroxide-pluto"
 version = "1.6.7"
 dependencies = [
