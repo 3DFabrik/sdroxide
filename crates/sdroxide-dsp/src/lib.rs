@@ -1,3 +1,4 @@
+pub mod acars;
 mod adc;
 pub mod afsk;
 mod agc;
