@@ -44,7 +44,7 @@
 //! available. Everything below is transcribed from the command tables.
 
 use crate::{CatUpdate, Protocol};
-use sdroxide_types::{EladAntenna, EladTxInput, Mode};
+use sdroxide_types::{EladAntenna, EladTxInput, Mode, Vfo};
 use tracing::{debug, info};
 
 /// Digits in the `FA`/`FB` frequency field — "Frequency in Hz (11 digit)",
@@ -127,6 +127,33 @@ const RF_AM_HZ: &[u32] = &[2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000];
 pub fn freq_frame(hz: f64) -> String {
     let hz = hz.round().clamp(0.0, 99_999_999_999.0) as u64;
     format!("FA{hz:0FREQ_DIGITS$};")
+}
+
+/// Which of the radio's own VFOs to receive on, as `FR0;` or `FR1;`.
+///
+/// The FDM-DUO has the pair a transceiver has, and the down-converter window
+/// rides on whichever is selected — measured on hardware: `FR1` moves the I/Q
+/// stream to VFO B's frequency and `FR0` brings it back, while writing `FB`
+/// alone moves nothing. That is what lets sdroxide's own A/B be mirrored onto
+/// the radio's rather than parking it on VFO A and driving that one dial.
+pub fn vfo_frame(vfo: Vfo) -> String {
+    match vfo {
+        Vfo::A => "FR0;".to_string(),
+        Vfo::B => "FR1;".to_string(),
+    }
+}
+
+/// The dial, on one named VFO: `FA` for A, `FB` for B.
+///
+/// [`freq_frame`] is this for VFO A, and remains the one to use wherever the
+/// radio is kept on VFO A — including every path that *reads* the dial back
+/// with `FA;`, which answers VFO A's frequency whichever VFO is selected.
+pub fn freq_frame_on(vfo: Vfo, hz: f64) -> String {
+    let hz = hz.round().clamp(0.0, 99_999_999_999.0) as u64;
+    match vfo {
+        Vfo::A => format!("FA{hz:0FREQ_DIGITS$};"),
+        Vfo::B => format!("FB{hz:0FREQ_DIGITS$};"),
+    }
 }
 
 /// The `MD` frame for an app mode.
@@ -541,6 +568,19 @@ mod tests {
 
     fn frames(v: Vec<Vec<u8>>) -> Vec<String> {
         v.iter().map(|f| String::from_utf8_lossy(f).into_owned()).collect()
+    }
+
+    /// Measured on an FDM-DUO: `FR1` moves the I/Q window to VFO B's
+    /// frequency, `FR0` brings it back, and `FB` on its own moves nothing.
+    #[test]
+    fn each_vfo_has_its_own_dial_and_its_own_selector() {
+        assert_eq!(vfo_frame(Vfo::A), "FR0;");
+        assert_eq!(vfo_frame(Vfo::B), "FR1;");
+        assert_eq!(freq_frame_on(Vfo::A, 14_250_000.0), "FA00014250000;");
+        assert_eq!(freq_frame_on(Vfo::B, 1_200_000.0), "FB00001200000;");
+        // VFO A's frame is the one `freq_frame` has always sent, so the paths
+        // that must stay on VFO A are unaffected by having a choice.
+        assert_eq!(freq_frame_on(Vfo::A, 7_100_000.0), freq_frame(7_100_000.0));
     }
 
     #[test]

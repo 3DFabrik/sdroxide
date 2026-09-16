@@ -9920,6 +9920,17 @@ you give up is the rest of what needs an *answer*: the S-meter, the SWR, the
 power readback, and any notice of a mode changed at the front panel. That is
 also the setting for an FDM-S1 or FDM-S2, which have no CAT port at all.
 
+**A and B are the radio's own two VFOs on that cable.** The FDM-DUO has the
+pair a transceiver has, and its receive window follows whichever is selected, so
+taking up sdroxide's VFO B takes up the radio's: its display, its knob and its
+A/B button are all on the dial you are working, and each VFO keeps its own mode
+at both ends. What it cannot see is that button being pressed *at the radio* —
+the read-back reports a frequency, not which VFO produced it, so sdroxide reads
+a press of A/B as the dial having moved and follows it onto the VFO it already
+thinks you are on. With a CAT serial port set instead, the radio is kept on its
+VFO A and sdroxide drives that one dial, because the dial is read there by
+asking `FA;`, which answers VFO A whichever VFO is selected.
+
 **Transmit input** is the radio's `TI` command, menu 32 `TX IN` at the front
 panel, asserted when the port opens. **USB audio** is what makes transmit work
 here — the radio sends what sdroxide puts into its sound card. A radio left on

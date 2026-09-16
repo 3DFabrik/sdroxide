@@ -7578,6 +7578,23 @@ impl Engine {
                 self.recall_vfo_mode();
                 self.recall_vfo_antenna();
                 self.state.band = Band::containing(self.state.active_freq_hz());
+                // A rig with its own pair of VFOs is told which one is being
+                // worked, so its display and its A/B button agree with ours.
+                // Sent before the tuning below, not after: a rig that selects a
+                // VFO holding a stale number puts its receiver there until the
+                // dial lands, and the two travel together to keep that to the
+                // width of one command. A no-op on every front end without a
+                // second VFO, which is nearly all of them.
+                //
+                // The *rig's* number, not the dial: in CW a radio that keys its
+                // own transmitter sits a sidetone above it, exactly as
+                // `follow_dial` sends it. Passing the bare dial here puts the
+                // radio one pitch low, and since the reply is read back and
+                // believed, the dial then walks down by one pitch on every
+                // switch. `recall_vfo_mode` above has already put the receiver
+                // into this VFO's mode, so the offset asked for is this VFO's.
+                let rig_hz = self.state.active_freq_hz() + self.rig_cw_offset_hz();
+                self.source.select_vfo(v, rig_hz);
                 self.follow_dial();
                 self.update_tuning();
             }
