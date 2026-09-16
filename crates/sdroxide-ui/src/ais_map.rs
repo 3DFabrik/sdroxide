@@ -48,7 +48,9 @@
 //! minutes, so a shorter one would blank most of a harbour between two
 //! perfectly good reports.
 
-use eframe::egui::{Align2, Color32, FontId, Pos2, Sense, Stroke, Ui, pos2, vec2};
+use eframe::egui::{
+    Align2, Color32, FontId, Margin, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2, vec2,
+};
 use sdroxide_types::{AisKind, AisSettings, AisVessel};
 
 use crate::theme;
@@ -88,6 +90,9 @@ const LABEL_LIMIT: usize = 30;
 /// which is what makes converting knots into map degrees exact rather than
 /// approximate.
 const NM_PER_DEG_LAT: f64 = 60.0;
+
+/// The on-chart zoom buttons step by this factor per click.
+const ZOOM_STEP: f64 = 0.7;
 
 /// The map's own state, owned by the panel so the view survives across frames.
 #[derive(Default)]
@@ -501,6 +506,60 @@ pub fn show(
             alpha(Color32::WHITE, 110.0),
         );
     }
+
+    // ── the on-chart zoom controls ──
+    //
+    // The wheel, trackpad pinch, drag and double-click already work, but none
+    // of them announce themselves: a chart that fits a few hundred ships is
+    // assumed to show all there is until someone happens to try the wheel, and
+    // a remote or touch viewer may have no wheel to find. Three small buttons
+    // make the zoom explicit, and the scale note at the other corner says what
+    // the view is actually showing now — so “I cannot zoom in” stops being a
+    // silent failure.
+    let ctrl = Rect::from_min_size(pos2(rect.right() - 92.0, rect.top() + 4.0), vec2(88.0, 20.0));
+    ui.scope_builder(eframe::egui::UiBuilder::new().max_rect(ctrl), |ui| {
+        eframe::egui::Frame::NONE
+            .fill(alpha(theme::BG_DEEP(), 200.0))
+            .inner_margin(Margin::symmetric(3, 1))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if crate::chrome::chip(ui, false, RichText::new("-").size(12.0))
+                        .on_hover_text("Zoom out — the wheel or a pinch do this too")
+                        .clicked()
+                    {
+                        view.zoom_about(1.0 / ZOOM_STEP, 0.5, 0.5, aspect);
+                        view.manual = true;
+                        crate::repaint::animate(ui.ctx());
+                    }
+                    if crate::chrome::chip(ui, false, RichText::new("+").size(12.0))
+                        .on_hover_text("Zoom in about the middle of the chart")
+                        .clicked()
+                    {
+                        view.zoom_about(ZOOM_STEP, 0.5, 0.5, aspect);
+                        view.manual = true;
+                        crate::repaint::animate(ui.ctx());
+                    }
+                    if crate::chrome::chip(ui, false, RichText::new("FIT").size(10.0))
+                        .on_hover_text("Frame everything being tracked again — a double-click does too")
+                        .clicked()
+                    {
+                        view.manual = false;
+                        crate::repaint::animate(ui.ctx());
+                    }
+                });
+            });
+    });
+    // The scale note: what the current view actually spans. Worth saying on a
+    // chart that looks fully zoomed in when it is still half an ocean.
+    let cos = clat.to_radians().cos().abs().max(0.01);
+    let km = lon_span * 111.32 * cos;
+    p.text(
+        rect.left_bottom() + vec2(6.0, -4.0),
+        Align2::LEFT_BOTTOM,
+        format!("{lon_span:.2}° · ~{km:.0} km across"),
+        FontId::proportional(9.0),
+        alpha(Color32::WHITE, 110.0),
+    );
     clicked
 }
 
