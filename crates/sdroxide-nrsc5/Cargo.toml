@@ -26,6 +26,7 @@ tracing.workspace = true
 # which come from the combined archive that `sdroxide-drm` builds. The final
 # binary already links `sdroxide-drm`, so nothing extra reaches it.
 sdroxide-drm.workspace = true
+tracing-subscriber.workspace = true
 
 [build-dependencies]
 cc = "1"
