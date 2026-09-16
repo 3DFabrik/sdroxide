@@ -23,6 +23,7 @@ pub(in crate::app) mod awards;
 pub(in crate::app) mod bands;
 pub(in crate::app) mod drm;
 pub(in crate::app) mod frame;
+pub(in crate::app) mod hd;
 pub(in crate::app) mod ism;
 pub(in crate::app) mod logbook;
 pub(in crate::app) mod net;
@@ -377,6 +378,13 @@ pub struct SdroxideApp {
     /// here from the status stream rather than sent: the engine would be
     /// resending the same history several times a second to say one new thing.
     drm_history: std::collections::VecDeque<(f32, f32)>,
+    /// The HD Radio window's open state, and the latest snapshot from the
+    /// decoder. A whole snapshot each time, like DRM.
+    show_hd: bool,
+    hd: Option<sdroxide_types::HdRadioStatus>,
+    /// Lower and upper sideband MER over the last minute, as (lower, upper)
+    /// dB pairs, accumulated here from the status stream rather than sent.
+    hd_history: std::collections::VecDeque<(f32, f32)>,
     /// Which half of the RDS window is showing.
     rds_tab: rds::RdsTab,
     /// The station picture from the engine's RDS decoder, minus the group log —
@@ -1272,6 +1280,9 @@ impl SdroxideApp {
             drm_channel: sdroxide_types::DrmChannel::Msc,
             drm_const_req: None,
             drm_history: std::collections::VecDeque::new(),
+            show_hd: false,
+            hd: None,
+            hd_history: std::collections::VecDeque::new(),
             rds_tab: rds::RdsTab::default(),
             rds: None,
             rds_log: std::collections::VecDeque::new(),

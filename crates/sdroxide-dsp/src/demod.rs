@@ -101,6 +101,25 @@ pub trait Demodulator: Send {
     /// `None` stops it, which is the state whenever nobody has one on screen —
     /// it is hundreds of floats several times a second.
     fn set_drm_constellation(&mut self, _channel: Option<DrmChannel>) {}
+
+    /// What the HD Radio decoder has made of the multiplex since this was last
+    /// called, or `None` from a demod that is not decoding HD Radio — and from
+    /// the HD Radio one whenever nothing has moved.
+    ///
+    /// The same arrangement as [`Self::take_drm`]: the HD Radio demodulator
+    /// lives in `sdroxide-nrsc5`, which links a vendored C library, so only the
+    /// snapshot type is shared and this is a trait method with a default rather
+    /// than another arm of [`make_demod`].
+    fn take_hd_radio(&mut self) -> Option<sdroxide_types::HdRadioStatus> {
+        None
+    }
+
+    /// Re-acquire the HD Radio transmission from scratch. Like
+    /// [`Self::reset_rds`], the demod cannot see a retune for itself.
+    fn reset_hd_radio(&mut self) {}
+
+    /// Decode a different programme of the HD Radio multiplex, 0-based.
+    fn set_hd_program(&mut self, _program: u8) {}
 }
 
 /// The channel rate a mode's demodulator wants from the DDC.
@@ -110,6 +129,13 @@ pub fn channel_target(mode: Mode) -> f64 {
         // deviation exceeds ±fs/2, so ±128 kHz of margin keeps broadcast
         // peaks (±75 kHz nominal) well clear of click territory.
         Mode::Wfm => 256_000.0,
+        // The FM hybrid's carrier and both OFDM sidebands span roughly
+        // ±198 kHz, and the HD Radio decoder is fed at its own fixed rate
+        // (744,187.5 S/s) by its own resampler. This only has to be wide
+        // enough that the DDC's anti-alias filter passes both sidebands, so a
+        // little over the occupied bandwidth. The AM-band HD variant wants a
+        // far narrower window, which is why it is not wired up yet.
+        Mode::HdRadio => 744_187.5,
         _ => 48_000.0,
     }
 }
@@ -176,8 +202,9 @@ pub fn make_demod(mode: Mode, channel_rate: f64) -> Option<Box<dyn Demodulator>>
         // DRM's decoder is a vendored C++ receiver, which cannot be linked from
         // this crate — see `Demodulator::take_drm`. The engine builds
         // `sdroxide_drm::DrmDemod` itself; reaching here means it forgot to,
-        // and the mode is silent rather than wrong.
-        Mode::Drm => None,
+        // and the mode is silent rather than wrong. HD Radio is the same
+        // arrangement with `sdroxide_nrsc5::HdDemod` and `take_hd_radio`.
+        Mode::Drm | Mode::HdRadio => None,
         // ADS-B produces no audio at all: it is 1 Mbit/s pulse-position
         // modulation two megahertz wide, decoded off the raw I/Q by an engine
         // lane of its own. There is nothing for this chain to demodulate, and a

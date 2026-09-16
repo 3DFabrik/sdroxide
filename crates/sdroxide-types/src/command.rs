@@ -1053,4 +1053,19 @@ pub enum Command {
     ///
     /// Appended for the usual reason — postcard numbers variants by position.
     AtChatReconnect,
+
+    /// Decode a different programme of the HD Radio multiplex, 0-based.
+    ///
+    /// Most digital FM broadcasts carry one programme and this never comes up;
+    /// those that carry two (HD-1 and an HD-2 subchannel) need it, because the
+    /// receiver is stuck on whichever the transmission lists first otherwise.
+    /// Out-of-range values are ignored rather than clamped: the number of
+    /// programmes is a property of the transmission, and a stale click from a
+    /// client that has not seen the multiplex change should do nothing rather
+    /// than land somewhere else.
+    ///
+    /// Appended for the usual reason — postcard numbers variants by position.
+    SetHdProgram {
+        program: u8,
+    },
 }

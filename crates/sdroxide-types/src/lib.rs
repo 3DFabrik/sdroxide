@@ -24,6 +24,7 @@ mod drm;
 mod entity;
 mod entity_flags;
 mod geo;
+mod hd;
 mod input;
 mod ism;
 mod js8;
@@ -132,6 +133,7 @@ pub use geo::{
     bearing_deg, distance_km, great_circle_points, grid_bearing, grid_distance_km, grid_to_latlon,
     latlon_to_grid,
 };
+pub use hd::{HdAudioService, HdRadioStatus};
 pub use input::{
     Action, ActionInput, ActionKind, BindingTuning, ButtonMode, InputSettings, KeyBinding,
     KeyChord, MidiBinding, MidiMsg, MidiMsgKind, MidiSettings, MouseButton, MouseButtonBinding,

@@ -154,6 +154,7 @@ impl<'a> Speaker<'a> {
             // Pronounced "whisper" — the joke the name is built on.
             Mode::Wspr => "whisper",
             Mode::Drm => "D R M",
+            Mode::HdRadio => "H D radio",
             Mode::Adsb => "A D S B",
             // Spelt out like every other number in this table — "F T eight",
             // "J S eight". A bare digit is not something the phonemizer can

@@ -211,7 +211,8 @@ fn mode_digit(m: Mode) -> char {
         | Mode::RttyFm
         | Mode::Adsb
         | Mode::Vdl2
-        | Mode::Ais => '2',
+        | Mode::Ais
+        | Mode::HdRadio => '2',
         Mode::Usb | Mode::Spec | Mode::Sstv | Mode::Wefax | Mode::Navtex | Mode::RfPaint => '2',
     }
 }

@@ -15,6 +15,12 @@ license.workspace = true
 # Native-only: links vendored C. Must never be a dependency of any
 # wasm-targeted crate.
 
+[dependencies]
+sdroxide-types.workspace = true
+sdroxide-dsp.workspace = true
+num-complex.workspace = true
+tracing.workspace = true
+
 [dev-dependencies]
 # Provokes the faad2 link: nrsc5's `output.o` references `NeAACDec*` symbols,
 # which come from the combined archive that `sdroxide-drm` builds. The final

@@ -2935,6 +2935,28 @@ impl SdroxideApp {
                     self.show_drm = !self.show_drm;
                 }
             }
+            RxChip::Hd => {
+                // The same reading as the DRM chip beside it: is this station
+                // being decoded? The window says where the chain stopped when
+                // the answer is no. `decoding` needs the audio, not just the
+                // lock, because holding sync on a silent multiplex is a real
+                // and confusing state.
+                let d = self.hd.as_ref();
+                let decoding = d.is_some_and(|d| d.decoding());
+                let hover = match d {
+                    Some(d) if decoding && !d.station_name.is_empty() => {
+                        format!("HD Radio: {}. Click for the broadcast's details", d.station_name)
+                    }
+                    Some(_) if decoding => {
+                        "HD Radio is decoding — click for the details".to_string()
+                    }
+                    Some(d) => format!("HD Radio: {} — click for the decoder's state", d.summary()),
+                    None => "HD Radio — click for the decoder's state".to_string(),
+                };
+                if crate::chrome::chip(ui, decoding, "HD").on_hover_text(hover).clicked() {
+                    self.show_hd = !self.show_hd;
+                }
+            }
             RxChip::Tone => {
                 // CTCSS/DCS: what is coming in, and optionally what has to be
                 // present before the audio opens. Only NFM carries either.
@@ -5486,6 +5508,8 @@ enum RxChip {
     Rds,
     /// The DRM decoder's state.
     Drm,
+    /// The HD Radio decoder's state.
+    Hd,
     /// NFM's sub-audible tone.
     Tone,
 }
@@ -5525,6 +5549,7 @@ impl RxChip {
             Self::Stereo => "ST",
             Self::Rds => "RDS",
             Self::Drm => "DRM",
+            Self::Hd => "HD",
             // Armed but silent — the dot marks the tone as a requirement
             // rather than a decode, and a DCS code reads longer than any
             // CTCSS tone.
@@ -5678,6 +5703,8 @@ fn rx_chips(mode: Mode) -> Vec<RxChip> {
         Mode::Wfm => chips.extend([RxChip::Stereo, RxChip::Rds]),
         // Only DRM has a decoder whose state is worth a light of its own.
         Mode::Drm => chips.push(RxChip::Drm),
+        // The same for HD Radio, which can hold sync without decoding audio.
+        Mode::HdRadio => chips.push(RxChip::Hd),
         // Only NFM carries a sub-audible tone.
         Mode::Nfm => chips.push(RxChip::Tone),
         _ => {}

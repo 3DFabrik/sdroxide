@@ -265,6 +265,11 @@ pub(crate) struct Latest {
     /// attaches after the decoder locked would otherwise show an empty panel
     /// in front of a perfectly good decode.
     pub drm: Option<sdroxide_types::DrmStatus>,
+    /// What the HD Radio decoder has made of the broadcast currently tuned.
+    /// Replayed on connect for the same reason as `drm`, its neighbour in the
+    /// same position: sync and multiplex facts are standing conditions, not
+    /// events.
+    pub hd: Option<sdroxide_types::HdRadioStatus>,
 }
 
 /// Everything the routes are served out of: the station's radios and the
@@ -1083,6 +1088,10 @@ fn handle_event(shared: &Shared, ev: RadioEvent) {
             RadioEvent::Drm(d) => {
                 latest.drm = Some(d.clone());
                 Some(ServerMsg::Drm(d))
+            }
+            RadioEvent::HdRadio(h) => {
+                latest.hd = Some(h.clone());
+                Some(ServerMsg::Hd(h))
             }
             RadioEvent::SkimmerSpots(s) => Some(ServerMsg::SkimmerSpots(s)),
             RadioEvent::IsmReports(r) => {

@@ -5189,7 +5189,11 @@ name = "sdroxide-nrsc5"
 version = "1.6.7"
 dependencies = [
  "cc",
+ "num-complex",
  "sdroxide-drm",
+ "sdroxide-dsp",
+ "sdroxide-types",
+ "tracing",
 ]
 
 [[package]]
@@ -5276,6 +5280,7 @@ dependencies = [
  "sdroxide-ism",
  "sdroxide-kiss",
  "sdroxide-net",
+ "sdroxide-nrsc5",
  "sdroxide-qo100",
  "sdroxide-relay",
  "sdroxide-rigctld",

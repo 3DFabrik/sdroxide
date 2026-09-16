@@ -26,6 +26,9 @@
 
 #![deny(missing_docs)]
 
+pub mod demod;
+pub use demod::HdDemod;
+
 use std::ffi::{c_char, c_float, c_int, c_uint, c_void};
 use std::sync::mpsc::{self, Receiver};
 

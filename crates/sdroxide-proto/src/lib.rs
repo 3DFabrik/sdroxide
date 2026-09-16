@@ -1311,7 +1311,12 @@ use sdroxide_types::{
 /// costs every picture sent while it runs out (issue #397). Appended, so no
 /// surviving discriminant moved, but a v145 station has no name for it and
 /// fails to decode the message carrying it.
-pub const PROTO_VERSION: u16 = 146;
+///
+/// v147: HD Radio reception — the FM digital sidecar (issue #437). `Mode::HdRadio`,
+/// `ServerMsg::Hd` carrying `HdRadioStatus`, and `Command::SetHdProgram` for the
+/// HD-2 subchannels, all appended last so no surviving discriminant moved, but a
+/// v146 peer handed any of them fails to decode the message carrying it.
+pub const PROTO_VERSION: u16 = 147;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]
@@ -1745,6 +1750,16 @@ pub enum ServerMsg {
     ///
     /// Appended last, for the usual reason.
     CapabilitiesUpdated(DeviceCaps),
+
+    /// What the HD Radio decoder has made of the digital FM broadcast on the
+    /// main receiver. A snapshot — see [`sdroxide_types::HdRadioStatus`].
+    ///
+    /// Like DRM, the decoding happens where the radio is and only the result
+    /// travels, because the whole decoder sits in a vendored C library that
+    /// never reaches the browser.
+    ///
+    /// Appended last, for the usual reason.
+    Hd(sdroxide_types::HdRadioStatus),
 }
 
 /// One radio in a station's roster, as a client sees it.

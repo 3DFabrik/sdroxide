@@ -100,6 +100,7 @@ sdroxide-dsp = { path = "crates/sdroxide-dsp" }
 sdroxide-atchat = { path = "crates/sdroxide-atchat" }
 sdroxide-rade = { path = "crates/sdroxide-rade" }
 sdroxide-drm = { path = "crates/sdroxide-drm" }
+sdroxide-nrsc5 = { path = "crates/sdroxide-nrsc5" }
 sdroxide-audio = { path = "crates/sdroxide-audio" }
 sdroxide-server = { path = "crates/sdroxide-server" }
 sdroxide-config = { path = "crates/sdroxide-config" }

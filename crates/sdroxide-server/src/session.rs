@@ -182,6 +182,7 @@ async fn run_session(
         vdl2_status,
         ais_status,
         drm,
+        hd,
         relay,
     ) = {
         let latest = shared.latest.lock().unwrap();
@@ -206,6 +207,7 @@ async fn run_session(
             latest.vdl2_status.clone(),
             latest.ais_status.clone(),
             latest.drm.clone(),
+            latest.hd.clone(),
             latest.relay.clone(),
         )
     };
@@ -246,6 +248,10 @@ async fn run_session(
     // above: sync and a service label are conditions, not events.
     if let Some(d) = drm {
         let _ = socket.send(msg(&ServerMsg::Drm(d))).await;
+    }
+    // The HD Radio broadcast being decoded, for the same reason again.
+    if let Some(d) = hd {
+        let _ = socket.send(msg(&ServerMsg::Hd(d))).await;
     }
     // The ISM device table and where the decoder is listening. Both are slow
     // conditions — see `Latest::ism_reports`.
