@@ -13,8 +13,7 @@
 
 #include <stdint.h>
 
-typedef struct rtlsdr_dev rtlsdr_dev_t;
-typedef void (*rtlsdr_read_async_cb_t)(unsigned char *buf, uint32_t len, void *ctx);
+#include <rtl-sdr.h>
 
 #if defined(__GNUC__) || defined(__clang__)
 #define WEAK __attribute__((weak))
