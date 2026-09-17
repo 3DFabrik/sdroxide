@@ -449,6 +449,19 @@ impl IqSource for HpsdrSource {
         self.rx.as_ref()?.adc_overload()
     }
 
+    /// What the predistortion loop is doing, for the operator rather than for
+    /// the log (issue #441). Only the radio that owns the transmitter runs one,
+    /// so every other DDC's tab answers `None` and shows nothing.
+    fn puresignal(&mut self) -> Option<sdroxide_types::PsMeter> {
+        let ps = self.puresignal.as_ref()?;
+        Some(sdroxide_types::PsMeter {
+            locked: ps.locked(),
+            correction_db: ps.correction_db(),
+            score: ps.score(),
+            frozen: ps.frozen(),
+        })
+    }
+
     /// The board's front-end LNA gain. On a Hermes-Lite 2 this is the only
     /// analogue gain there is, and leaving it at whatever the gateware came up
     /// with is the difference between a deaf receiver and a clipping one.

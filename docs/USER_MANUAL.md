@@ -7912,9 +7912,20 @@ adds another 25 dB. Two things hold whatever it is fed:
   top, so a compressing amplifier is linearised by taking small-signal gain away
   rather than by asking for more than full scale.
 
-The log says which it is: while transmitting you get either *"PureSignal is
-correcting N dB of compression"* or *"PureSignal has not found the transmission
-in the receiver's stream"*, every few seconds. **Table steps** is how finely the
+**The S-meter says which it is.** With PureSignal switched on, the meter face
+carries a small **PS** readout in its bottom-right corner, opposite the
+temperature: `PS 4dB` while the loop is locked and correcting (a `*` after it
+means **Hold** is on), and an amber `PS --` while it is switched on but has not
+found the transmission in the feedback — which is the ordinary failure, and one
+that is otherwise invisible, since an unlocked loop transmits exactly as it
+would have with the feature off. Hover the meter for the match score behind it.
+Nothing is shown at all on a radio that is not running a loop. The reading is
+from the last over and stays put between them, which is when you want to read
+it.
+
+The log says the same thing at more length: while transmitting you get either
+*"PureSignal is correcting N dB of compression"* or *"PureSignal has not found
+the transmission in the receiver's stream"*, every few seconds. **Table steps** is how finely the
 curve is modelled (32 is a sensible start) and **Adaptation** how fast it
 follows the coupler; slow is right, because it is averaging a curve that does
 not move out of a path that has noise in it. **Hold** stops it adapting and

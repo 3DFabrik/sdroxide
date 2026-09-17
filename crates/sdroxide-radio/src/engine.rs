@@ -4539,6 +4539,11 @@ fn engine_thread(
             // side's view of the samples that arrived, and on a direct-sampling
             // radio the two answer different questions (issue #362).
             let adc_overload = engine.source.adc_overload();
+            // The predistortion loop, where the radio runs one. Also read once
+            // for both branches: whether it locked is asked mostly *after* the
+            // over, and a reading that vanished at unkey would hide the answer
+            // (issue #441).
+            let puresignal = engine.source.puresignal();
             let meters = if engine.tx_active || engine.rig_tx {
                 // CAT/TCI rigs report real forward power / SWR; HackRF and other
                 // IQ sources have no such sensor and leave both `None` (the meter
@@ -4670,6 +4675,7 @@ fn engine_thread(
                     // Transmitting: the receiver is stood down and whatever the
                     // chain last measured belongs to a moment that has passed.
                     passband_dbfs: f32::NEG_INFINITY,
+                    puresignal,
                 })
             } else {
                 // Not transmitting: both SWR counters belong to an over, so they
@@ -4701,6 +4707,7 @@ fn engine_thread(
                     stereo,
                     tone,
                     passband_dbfs,
+                    puresignal,
                 })
             };
             if let Some(m) = meters {

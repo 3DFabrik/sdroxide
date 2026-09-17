@@ -1323,7 +1323,13 @@ use sdroxide_types::{
 /// `ServerMsg::Hd` carrying `HdRadioStatus`, and `Command::SetHdProgram` for the
 /// HD-2 subchannels, all appended last so no surviving discriminant moved, but a
 /// v147 peer handed any of them fails to decode the message carrying it.
-pub const PROTO_VERSION: u16 = 148;
+///
+/// v149: [`sdroxide_types::Meters`] gains `puresignal`, what the adaptive
+/// predistortion loop is doing on a radio running one (issue #441). Appended
+/// last, but `Meters` is a struct in a non-self-describing encoding: a v148
+/// peer reads the extra bytes as the start of the next field and fails to
+/// decode every meter update.
+pub const PROTO_VERSION: u16 = 149;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]

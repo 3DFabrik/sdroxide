@@ -448,6 +448,20 @@ pub trait IqSource: Send {
     fn adc_overload(&mut self) -> Option<bool> {
         None
     }
+    /// What this radio's adaptive-predistortion loop is doing, where it runs
+    /// one — see [`sdroxide_types::PsMeter`].
+    ///
+    /// Polled on the meter tick in receive as well as transmit. A loop that
+    /// never locks is PureSignal's ordinary failure and it is invisible from
+    /// the air: the transmitter simply goes out uncorrected, exactly as it
+    /// would have if the feature were off. The operator's only way to tell the
+    /// two apart used to be the log (issue #441).
+    ///
+    /// `None` on every radio that is not running one, which is nearly all of
+    /// them. Default: none.
+    fn puresignal(&mut self) -> Option<sdroxide_types::PsMeter> {
+        None
+    }
     /// The rig's own S-meter in dBm, polled by the engine while receiving.
     ///
     /// For a source that hands us already-demodulated audio (a CAT rig on a
@@ -1529,6 +1543,9 @@ impl IqSource for ConvertedSource {
     }
     fn adc_overload(&mut self) -> Option<bool> {
         self.inner.adc_overload()
+    }
+    fn puresignal(&mut self) -> Option<sdroxide_types::PsMeter> {
+        self.inner.puresignal()
     }
 
     fn rx_signal_dbm(&mut self) -> Option<f32> {
