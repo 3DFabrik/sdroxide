@@ -402,7 +402,10 @@ impl AudioCatSource {
 /// arithmetic about wall-clock time and a monotonic total, which is exactly
 /// where it went wrong before and exactly what should be checkable without a
 /// radio plugged in.
-struct DropWatch {
+///
+/// Shared with [`crate::usb_audio_source`], whose capture card is watched the
+/// same way.
+pub(crate) struct DropWatch {
     /// The card's lifetime drop total as of the last look.
     seen: u64,
     /// When that look happened — the time it *did*, not the time the next one
@@ -414,13 +417,17 @@ struct DropWatch {
 }
 
 impl DropWatch {
-    fn started(now: std::time::Instant) -> Self {
+    pub(crate) fn started(now: std::time::Instant) -> Self {
         DropWatch { seen: 0, last_check: now }
     }
 
     /// Frames lost since the last look and the window they were lost in, or
     /// `None` when it is not yet time to look or nothing was lost.
-    fn check(&mut self, now: std::time::Instant, total: u64) -> Option<(u64, std::time::Duration)> {
+    pub(crate) fn check(
+        &mut self,
+        now: std::time::Instant,
+        total: u64,
+    ) -> Option<(u64, std::time::Duration)> {
         let window = now.duration_since(self.last_check);
         if window < DROP_CHECK_INTERVAL {
             return None;
@@ -437,7 +444,7 @@ impl DropWatch {
     /// Forget what the counter accumulated and start the window again from
     /// `now` — for drops that happened while nobody was reading the stream and
     /// so say nothing about whether this machine can keep up with it.
-    fn rebase(&mut self, now: std::time::Instant, total: u64) {
+    pub(crate) fn rebase(&mut self, now: std::time::Instant, total: u64) {
         self.seen = total;
         self.last_check = now;
     }
@@ -1184,42 +1191,7 @@ impl IqSource for AudioCatSource {
         let Some((_, producer)) = self.out.as_mut() else {
             return Ok(()); // no TX audio device — PTT still keyed the rig
         };
-        // Resample 48 kHz → card rate, then interleave to stereo.
-        //
-        // A *pair* per sample, whatever the card's own channel count is: the
-        // ring `start_output` hands back is interleaved stereo by definition,
-        // and the playback callback takes two out of it for every frame it
-        // fills and mixes them down itself where the device opened mono. One
-        // per sample on such a card is therefore not a quieter over — the
-        // callback consumes the ring twice as fast as it is filled, so the
-        // audio goes out at double speed with every pair averaged together and
-        // silence spliced in wherever it ran dry. On a virtual cable, which is
-        // where a mono output turns up (VB-Audio's CABLE-B opens as one
-        // channel), that is an FT8 burst arriving as a smear across the whole
-        // passband (issue #247).
-        self.tx_scratch.clear();
-        match self.tx_resampler.as_mut() {
-            Some(rs) => rs.push(audio, &mut self.tx_scratch),
-            None => self.tx_scratch.extend_from_slice(audio),
-        }
-        // Block until the card drains room, applying backpressure so the engine's
-        // TX loop is paced to real time. Without this a long continuous burst
-        // (e.g. a 110 s SSTV image) is generated at CPU speed and mostly dropped
-        // on a full ring, so the radio only transmits the first buffer-full.
-        for &s in &self.tx_scratch {
-            for _ in 0..2 {
-                let mut v = s;
-                let mut tries = 0u32;
-                while let Err(rtrb::PushError::Full(x)) = producer.push(v) {
-                    v = x;
-                    tries += 1;
-                    if tries > 200 {
-                        break; // output device stalled — drop rather than hang TX
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                }
-            }
-        }
+        write_tx_audio(producer, self.tx_resampler.as_mut(), &mut self.tx_scratch, audio);
         Ok(())
     }
 
@@ -1227,15 +1199,70 @@ impl IqSource for AudioCatSource {
         // The output ring holds ~1 s; wait for it to play out before PTT is
         // released so the tail of a burst (critical for FT8 decode) isn't cut.
         if let Some((_, producer)) = self.out.as_ref() {
-            let cap = producer.buffer().capacity();
-            for _ in 0..1000 {
-                let buffered = cap.saturating_sub(producer.slots());
-                if buffered <= cap / 40 {
-                    break;
+            drain_tx_audio(producer);
+        }
+    }
+}
+
+/// Send 48 kHz transmit audio to a sound card's playback ring: resampled to the
+/// card's rate, then interleaved to stereo.
+///
+/// A *pair* per sample, whatever the card's own channel count is: the ring
+/// `start_output` hands back is interleaved stereo by definition, and the
+/// playback callback takes two out of it for every frame it fills and mixes
+/// them down itself where the device opened mono. One per sample on such a card
+/// is therefore not a quieter over — the callback consumes the ring twice as
+/// fast as it is filled, so the audio goes out at double speed with every pair
+/// averaged together and silence spliced in wherever it ran dry. On a virtual
+/// cable, which is where a mono output turns up (VB-Audio's CABLE-B opens as
+/// one channel), that is an FT8 burst arriving as a smear across the whole
+/// passband (issue #247).
+///
+/// Blocks until the card drains room, applying backpressure so the engine's TX
+/// loop is paced to real time. Without this a long continuous burst (e.g. a
+/// 110 s SSTV image) is generated at CPU speed and mostly dropped on a full
+/// ring, so the radio only transmits the first buffer-full — and on a VOX-keyed
+/// radio the gap that follows is a key that drops out mid-sentence.
+///
+/// Shared with [`crate::usb_audio_source`], which drives its card the same way.
+pub(crate) fn write_tx_audio(
+    producer: &mut rtrb::Producer<f32>,
+    resampler: Option<&mut MonoResampler>,
+    scratch: &mut Vec<f32>,
+    audio: &[f32],
+) {
+    scratch.clear();
+    match resampler {
+        Some(rs) => rs.push(audio, scratch),
+        None => scratch.extend_from_slice(audio),
+    }
+    for &s in scratch.iter() {
+        for _ in 0..2 {
+            let mut v = s;
+            let mut tries = 0u32;
+            while let Err(rtrb::PushError::Full(x)) = producer.push(v) {
+                v = x;
+                tries += 1;
+                if tries > 200 {
+                    break; // output device stalled — drop rather than hang TX
                 }
-                std::thread::sleep(std::time::Duration::from_millis(2));
+                std::thread::sleep(std::time::Duration::from_millis(1));
             }
         }
+    }
+}
+
+/// Wait for a playback ring (~1 s deep) to play out, so the tail of a burst —
+/// critical for FT8 decode — is not cut when the radio unkeys. Gives up after
+/// about two seconds rather than hang an unkey on a stalled device.
+pub(crate) fn drain_tx_audio(producer: &rtrb::Producer<f32>) {
+    let cap = producer.buffer().capacity();
+    for _ in 0..1000 {
+        let buffered = cap.saturating_sub(producer.slots());
+        if buffered <= cap / 40 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
     }
 }
 
