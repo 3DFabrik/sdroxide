@@ -336,7 +336,7 @@ pub struct SdroxideApp {
     public_sdrs_asked: bool,
     public_sdr_search: String,
     /// Indexed by `PublicSdrNetwork::ALL`, positionally.
-    public_sdr_nets_shown: [bool; 2],
+    public_sdr_nets_shown: [bool; sdroxide_types::PublicSdrNetwork::ALL.len()],
     public_sdr_free_only: bool,
     public_sdr_in_band: bool,
     /// Take a SpyServer in its VFO+FFT shape rather than wideband. No effect on
@@ -1267,7 +1267,7 @@ impl SdroxideApp {
             public_sdrs_asked: false,
             public_sdr_search: String::new(),
             // Both on: the point of the window is to show what is out there.
-            public_sdr_nets_shown: [true, true],
+            public_sdr_nets_shown: [true; sdroxide_types::PublicSdrNetwork::ALL.len()],
             // On, because a full receiver is not a receiver an operator can
             // use, and the reason is still shown for the ones this hides.
             public_sdr_free_only: true,

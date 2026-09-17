@@ -1337,7 +1337,14 @@ use sdroxide_types::{
 /// discriminant moved, but a v149 peer has no name for the new ones and reads
 /// the status's extra field as the start of the next, so every SSTV update
 /// fails to decode.
-pub const PROTO_VERSION: u16 = 150;
+///
+/// v151: [`sdroxide_types::PublicSdrNetwork`] gains `SdrList`, the
+/// `sdr-list.xyz` directory of PhantomSDR-Plus and friends (issue #482).
+/// Appended, so no surviving discriminant moved, but it rides inside
+/// `ProbeAnswer::PublicSdrs`: a v150 client handed a receiver from that
+/// directory fails to decode the whole answer, and its browse window stays
+/// empty rather than showing the two lists it does know.
+pub const PROTO_VERSION: u16 = 151;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]

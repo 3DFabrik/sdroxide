@@ -15021,12 +15021,24 @@ All in [§6.2.17](#6217-limesdr-family--limerfe-limesuite):
 
 About eleven hundred receivers are published for anyone to listen on, and
 sdroxide can open one as an ordinary radio — same panadapter, same
-demodulators, same digital modes, same logbook. Two networks are covered.
+demodulators, same digital modes, same logbook. Two networks are covered, and
+a third is listed but not yet reachable.
 
 **KiwiSDR and Web-888** (the board its own listing calls "KiwiSDR 2") are the
 0–30 MHz receivers, about 870 of them online. **SpyServer** is Airspy's own
 server and the several that speak its protocol, about 230 online, mostly
 VHF/UHF dongles.
+
+**sdr-list.xyz** is the directory of the newer RX-888-class web receivers —
+PhantomSDR-Plus, UberSDR, NovaSDR, VertexSDR — about seventy of them. They are
+listed here so you can see what is on the air and where, but **none of them can
+be opened yet**, and every row says why in its own words. PhantomSDR-Plus comes
+closest: recent builds answer the KiwiSDR protocol alongside their own, they do
+retune, and what they send back is *demodulated audio* rather than the I/Q that
+sdroxide's KiwiSDR interface decodes — so the interface that looks like it
+should fit does not. The others each speak a protocol of their own. Turn the
+**sdr-list.xyz** button off at the top of the list if you would rather not see
+them.
 
 Everything here is **receive only**, and not because of a missing feature.
 These are other people's antennas.
