@@ -180,6 +180,13 @@ pub struct EladSource {
     /// [`IqSource::select_vfo`] on this type for why the serial path stays on
     /// VFO A.
     rig_vfo: Vfo,
+    /// A VFO taken up while the rig was keyed, waiting for [`Self::tx_end`].
+    ///
+    /// Selecting a VFO moves the radio onto its frequency, and mid-over that is
+    /// the transmitter moving — to a frequency the transmit checks at key-down
+    /// never saw. So the choice is held and made at the unkey, where the
+    /// receive dial goes back anyway.
+    pending_vfo: Option<Vfo>,
     /// Whether the transceiver's VFO is something this end can move at all,
     /// and so whether the window centre is the dial ([`IqSource::center_is_dial`]).
     ///
@@ -357,6 +364,7 @@ impl EladSource {
             antenna: EladAntenna::default(),
             expect_freq: None,
             rig_vfo: Vfo::A,
+            pending_vfo: None,
             dial_reachable,
             keyed: false,
             last_telem: None,
@@ -720,8 +728,21 @@ impl IqSource for EladSource {
     /// has. Lifting that means teaching the CAT layer to ask for the dial it
     /// is actually on, which is a change in another crate and needs a serial
     /// cable to test.
+    ///
+    /// Never while keyed: see [`Self::pending_vfo`]. The frequency needs no
+    /// holding with it — the engine re-centres through `set_center_hz`, which
+    /// records the centre that [`Self::tx_end`] puts the radio back on.
     fn select_vfo(&mut self, vfo: Vfo, hz: f64) {
-        if !matches!(self.control, Control::Gateway) || self.rig_vfo == vfo {
+        if !matches!(self.control, Control::Gateway) {
+            return;
+        }
+        // Checked before the no-change test: A and back to A inside one over
+        // has to cancel the B it was holding, not leave it to be selected.
+        if self.keyed {
+            self.pending_vfo = (vfo != self.rig_vfo).then_some(vfo);
+            return;
+        }
+        if self.rig_vfo == vfo {
             return;
         }
         self.rig_vfo = vfo;
@@ -883,6 +904,12 @@ impl IqSource for EladSource {
         // this the panadapter would spend the rest of the session looking at
         // wherever the last over went out.
         self.keyed = false;
+        // A VFO taken up during the over is selected now, with the transmitter
+        // off, and the centre below lands on it.
+        if let Some(vfo) = self.pending_vfo.take() {
+            self.rig_vfo = vfo;
+            self.handle.send_cat(sdroxide_cat::elad::vfo_frame(vfo));
+        }
         self.command_freq(self.center);
         self.last_telem = None; // drop the stale SWR reading on unkey
         Ok(())
