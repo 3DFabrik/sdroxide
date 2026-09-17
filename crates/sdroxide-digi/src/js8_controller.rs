@@ -393,9 +393,7 @@ impl Js8Controller {
             return None;
         }
         let grid = self.cfg.my_grid.to_ascii_uppercase();
-        Compound::cq(&call, (!grid.is_empty()).then_some(grid.as_str()), 0)
-            .pack()
-            .map(Self::single)
+        Compound::cq(&call, (!grid.is_empty()).then_some(grid.as_str()), 0).pack().map(Self::single)
     }
 
     /// The directed frame a message opens with, and how much text it ate.
