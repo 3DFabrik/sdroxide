@@ -327,7 +327,7 @@ impl EladSource {
             if audio_out.is_none() {
                 status.push(
                     "no sound card is set for transmit audio — the FDM-DUO's own USB \
-                     Audio port should be chosen under Settings → General → Radio audio, \
+                     Audio port should be chosen under Settings → Radio → Radio audio, \
                      or transmit will go out through whatever the system default is"
                         .to_string(),
                 );

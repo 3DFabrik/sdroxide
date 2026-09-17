@@ -129,7 +129,7 @@ impl AudioCatSource {
             tracing::warn!(
                 "no sound card chosen for the {} rig on {} ({}) — falling back to the system \
                  default, which is not this radio unless it happens to be the default. Pick its \
-                 card under Settings → General → Radio audio.",
+                 card under Settings → Radio → Radio audio.",
                 cfg.family.label(),
                 sdroxide_cat::link_label(&cfg),
                 match (audio_in.is_none(), audio_out.is_none()) {

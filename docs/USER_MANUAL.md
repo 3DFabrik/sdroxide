@@ -6323,50 +6323,14 @@ startup nor the window waits that out: the radio comes up, and the microphone
 joins it when its open finishes. If the open fails, transmit carries silence and
 the log says which device refused.
 
-**Receive audio gain** — a fixed trim, in decibels, on everything this radio
-sends to the speakers, on top of the volume control. Leave it at 0 dB unless the
-radio is quiet at full volume: the volume rail's top is the audio *as it
-arrives*, so it can turn a radio down but never up, and some transceivers' USB
-sound output sits well below full scale — a Yaesu on CAT is the usual case. Go up
-6 dB at a time. Too much clips: the audio is limited at full scale rather than
-allowed to wrap round, so overdoing it sounds harsh rather than loud.
-
-It belongs to the radio and not to the station, because what it corrects is that
-radio's interface; in `radio.json` it is `rx_audio_gain_db`. Recordings are taken
-ahead of it and are not affected, which is the same rule the volume control
-follows.
-
-**Radio audio (sound card)** — a third section appears below those two, but
-*only when the radio interface is CAT / Audio* ([6.2.2](#622-cat-radios-serial-control--usb-audio)):
-every other backend carries its audio in-band and needs no sound card, which is
-why the screenshot above (taken with a TCI rig) does not show it.
-
-- **From radio (RX)** — the capture device carrying the radio's receive audio.
-- **To radio (TX)** — the playback device carrying your transmit audio to the
-  radio.
-- **Apply / reconnect** — reopens the CAT rig with the chosen cards.
-
-Device names include the manufacturer, model, ALSA card id, and USB id — for
-example `C-Media Electronics Inc. USB Audio Device, USB Audio [Device · 0d8c:0012]`
-— so two identical adapters can be told apart. Where the operating system itself
-hands out the same name twice (Windows and macOS do, and two Icoms are two of
-the same USB codec) the second one carries a short tag of its own, as in
-`USB Audio CODEC [#a3f1]`. The tag comes from the device rather than from the
-order it was found in, so it stays the same across restarts and a radio keeps
-the sound card it was given.
-
-> **IQ needs a stereo device.** IQ format requires a two-channel capture
-> interface (I and Q). A mono USB audio adapter cannot carry IQ; if you pick one
-> for IQ, sdroxide refuses it and shows a warning banner. Use a stereo line-input
-> interface for IQ, or choose **Demod audio**.
-
-On a PipeWire system, the desktop audio server can hold a USB radio codec's
-capture device open, which intermittently blocks sdroxide from opening it (the
-symptom is silent receive and a "waiting for spectrum" panadapter). For a
-sound card dedicated to the radio, the reliable fix is to tell WirePlumber to
-stop managing that card, leaving it for sdroxide. Create a drop-in such as
-`~/.config/wireplumber/wireplumber.conf.d/51-radio.conf` that disables the
-card, then restart WirePlumber. See [troubleshooting](#14-troubleshooting).
+> **The radio's own sound card is not here.** *Radio audio (sound card)* and
+> *Receive audio gain* used to sit on this page and moved to the **Radio** tab
+> in 1.6.9, beside the rest of the interface's settings
+> ([6.2.2](#622-cat-radios-serial-control--usb-audio)). They belong to a radio,
+> not to the station: with two rigs running at once there are two sound cards in
+> use at once, and one pair of pickers on a shared page could only ever describe
+> one of them (issue #474). Nothing in `radio.json` changed — they were always
+> stored per radio, and only the page they were edited on was wrong.
 
 **Remote access** — the **Username** and **Password** a remote client has to
 give before this station will let it operate: the browser page, another sdroxide
@@ -6856,8 +6820,57 @@ on a dirty LO.
 ![The Radio tab with the CAT / Audio interface selected](images/settings-radio-cat.jpg)
 
 A CAT radio is controlled over a serial port while its audio arrives over a USB
-sound card — chosen on the **General** tab ([6.1](#61-general-station-audio-and-remote-access)),
-separately from your computer's own speakers and microphone.
+sound card — chosen at the foot of this tab under **Radio audio (sound card)**,
+separately from your computer's own speakers and microphone
+([6.1](#61-general-station-audio-and-remote-access)).
+
+**Radio audio (sound card)** — below the control settings, and only for this
+interface: every other backend carries its audio in the same stream as its I/Q
+and needs no card at all.
+
+- **From radio (RX)** — the capture device carrying the radio's receive audio.
+- **To radio (TX)** — the playback device carrying your transmit audio to the
+  radio.
+- **Apply / reconnect** — reopens the rig with the chosen cards, without a
+  restart.
+- **Receive audio gain** — a fixed trim, in decibels, on everything this radio
+  sends to the speakers, on top of the volume control. Leave it at 0 dB unless
+  the radio is quiet at full volume: the volume rail's top is the audio *as it
+  arrives*, so it can turn a radio down but never up, and some transceivers' USB
+  sound output sits well below full scale — a Yaesu on CAT is the usual case. Go
+  up 6 dB at a time. Too much clips: the audio is limited at full scale rather
+  than allowed to wrap round, so overdoing it sounds harsh rather than loud.
+  Recordings are taken ahead of it and are not affected, which is the same rule
+  the volume control follows. It takes effect as you type — no **Apply**.
+
+All four belong to *this radio*, which is why they are here rather than on the
+General tab where they used to be (issue #474): a station running two rigs at
+once is running two sound cards at once, and one pair of pickers on a shared
+page could only ever describe one of them. In `radio.json` they are
+`radio_audio_in`, `radio_audio_out` and `rx_audio_gain_db`, and they always
+were — only the page they were edited on was wrong.
+
+Device names include the manufacturer, model, ALSA card id, and USB id — for
+example `C-Media Electronics Inc. USB Audio Device, USB Audio [Device · 0d8c:0012]`
+— so two identical adapters can be told apart. Where the operating system itself
+hands out the same name twice (Windows and macOS do, and two Icoms are two of
+the same USB codec) the second one carries a short tag of its own, as in
+`USB Audio CODEC [#a3f1]`. The tag comes from the device rather than from the
+order it was found in, so it stays the same across restarts and a radio keeps
+the sound card it was given.
+
+> **IQ needs a stereo device.** IQ format requires a two-channel capture
+> interface (I and Q). A mono USB audio adapter cannot carry IQ; if you pick one
+> for IQ, sdroxide refuses it and shows a warning banner. Use a stereo line-input
+> interface for IQ, or choose **Demod audio**.
+
+On a PipeWire system, the desktop audio server can hold a USB radio codec's
+capture device open, which intermittently blocks sdroxide from opening it (the
+symptom is silent receive and a "waiting for spectrum" panadapter). For a
+sound card dedicated to the radio, the reliable fix is to tell WirePlumber to
+stop managing that card, leaving it for sdroxide. Create a drop-in such as
+`~/.config/wireplumber/wireplumber.conf.d/51-radio.conf` that disables the
+card, then restart WirePlumber. See [troubleshooting](#14-troubleshooting).
 
 **Sound format** — how the radio's audio is interpreted:
 
@@ -6867,7 +6880,7 @@ separately from your computer's own speakers and microphone.
   X6100.
 - **IQ (stereo)** — the radio sends a stereo IQ signal (I on the left channel, Q
   on the right). This gives a full panadapter but requires a **stereo** capture
-  device (see the note in [6.1](#61-general-station-audio-and-remote-access)).
+  device (see the note above).
 
   The radio's dial is the centre of that panadapter, and every way of tuning
   the active VFO moves the radio, with the display recentring on it: a click on
@@ -10101,7 +10114,7 @@ panel, asserted when the port opens. **USB audio** is what makes transmit work
 here — the radio sends what sdroxide puts into its sound card. A radio left on
 **Microphone** transmits the room instead, with nothing on screen to say so,
 which is why this is a visible setting rather than an assumption. Pick the
-radio's own USB Audio device beside it, or under Settings → General → Radio
+radio's own USB Audio device beside it, or under Settings → Radio → Radio
 audio.
 
 **The panadapter centre is the dial, because on this radio they are one knob.**

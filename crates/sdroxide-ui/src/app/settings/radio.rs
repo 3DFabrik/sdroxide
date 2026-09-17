@@ -170,7 +170,11 @@ pub(in crate::app) fn settings_cat_tab(
     // antenna, where it has one, is in the receive path.
     antenna_rx: &str,
     rx_antenna: bool,
+    // The sound cards on the machine the *rig* is plugged into, once that
+    // machine has answered. `None` until it has.
+    radio_audio: Option<(&[String], &[String])>,
     can_probe: bool,
+    apply: &mut bool,
     cmds: &mut Vec<Command>,
 ) {
     use sdroxide_types::{
@@ -887,8 +891,73 @@ pub(in crate::app) fn settings_cat_tab(
             }
         }
     });
+    cat_radio_audio(ui, cfg, radio_audio, can_probe, apply);
     ui.add_space(6.0);
     ui.label(RichText::new("Press \"Apply / reconnect\" to switch without a restart.").weak());
+}
+
+/// The rig's own sound card, and how loud what comes back off it is.
+///
+/// On this tab rather than under General, where it used to live: a sound card
+/// belongs to a radio, not to the program. A station running two rigs at once
+/// runs two interfaces at once, and one pair of card pickers on a shared page
+/// could only ever describe one of them (issue #474). The `UsbAudio` backend's
+/// identical pickers have always been on this tab; these are now beside them.
+///
+/// Only the CAT interface has this: every other backend carries its audio in
+/// the same stream as its I/Q.
+///
+/// The cards offered are the ones on the machine the *radio* is plugged into,
+/// asked for by name rather than taken from the audio-device list — that list
+/// is this screen's own speaker and microphone, and offering a laptop's
+/// built-in mic as the shack transceiver's transmit path would be worse than
+/// offering nothing at all.
+fn cat_radio_audio(
+    ui: &mut egui::Ui,
+    cfg: &mut sdroxide_types::RadioConfig,
+    devices: Option<(&[String], &[String])>,
+    can_probe: bool,
+    apply: &mut bool,
+) {
+    ui.add_space(10.0);
+    ui.separator();
+    ui.add_space(6.0);
+    ui.label(RichText::new("Radio audio (sound card)").strong());
+    let Some((inputs, outputs)) = devices else {
+        ui.label(
+            RichText::new("Waiting for the sound cards on the machine the radio is plugged into.")
+                .weak(),
+        );
+        return;
+    };
+    let (ci, co) = (cfg.radio_audio_in.clone(), cfg.radio_audio_out.clone());
+    egui::Grid::new("radio-audio").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+        ui.label("From radio (RX)");
+        probe_only(ui, can_probe, |ui| {
+            device_combo(ui, "r-in", inputs, &ci, |n| cfg.radio_audio_in = n)
+        });
+        ui.end_row();
+        ui.label("To radio (TX)");
+        probe_only(ui, can_probe, |ui| {
+            device_combo(ui, "r-out", outputs, &co, |n| cfg.radio_audio_out = n)
+        });
+        ui.end_row();
+    });
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        if ui
+            .button("Apply / reconnect")
+            .on_hover_text("Reopen the CAT rig with these sound cards — no restart")
+            .clicked()
+        {
+            *apply = true;
+        }
+        ui.add(
+            egui::Label::new(RichText::new("Reconnects the radio without restarting.").weak())
+                .wrap(),
+        );
+    });
+    crate::app::settings::general::settings_rx_audio_gain(ui, cfg);
 }
 
 /// The sound-card radio: no control cable, so the whole tab is the two card

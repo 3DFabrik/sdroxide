@@ -1703,8 +1703,6 @@ impl SdroxideApp {
         // and the page they open.
         ui.add_space(8.0);
 
-        let backend = io.radio_edit.as_ref().map(|c| c.backend);
-
         match io.tab {
             SettingsTab::General => {
                 // Which build this is, taken from the crate metadata at compile
@@ -1808,65 +1806,14 @@ impl SdroxideApp {
                 ui.add_space(10.0);
                 ui.separator();
                 ui.add_space(6.0);
+                // This screen's own speaker and microphone, and nothing else.
+                // The *radio's* sound card and the gain on what comes back off
+                // it are the radio's, not the program's, and live on the Radio
+                // tab beside the rest of that interface's settings — a station
+                // running two rigs at once runs two interfaces at once, and one
+                // pair of pickers on a shared page could only describe one of
+                // them (issue #474).
                 self.settings_user_audio(ui, io.audio_pick);
-                if let Some(cfg) = io.radio_edit.as_mut() {
-                    crate::app::settings::general::settings_rx_audio_gain(ui, cfg);
-                }
-                // The radio's own sound card is only used by the CAT / Audio
-                // interface; every other backend carries its audio in-band.
-                //
-                // These are the cards on the machine the *rig* is plugged into,
-                // asked for by name rather than taken from `audio_devices` —
-                // that list is this screen's own speaker and microphone, and
-                // offering a laptop's built-in mic as the shack transceiver's
-                // transmit path would be worse than offering nothing at all.
-                if backend == Some(Backend::Cat) && self.radio_audio_devices.is_none() {
-                    ui.add_space(8.0);
-                    ui.label(RichText::new("Radio audio (sound card)").strong());
-                    ui.label(
-                        RichText::new(
-                            "Waiting for the sound cards on the machine the radio is plugged \
-                             into.",
-                        )
-                        .weak(),
-                    );
-                }
-                if backend == Some(Backend::Cat)
-                    && let (Some((inputs, outputs)), Some(cfg)) =
-                        (self.radio_audio_devices.as_ref(), io.radio_edit.as_mut())
-                {
-                    ui.add_space(8.0);
-                    ui.label(RichText::new("Radio audio (sound card)").strong());
-                    egui::Grid::new("radio-audio").num_columns(2).spacing([12.0, 6.0]).show(
-                        ui,
-                        |ui| {
-                            let (ci, co) =
-                                (cfg.radio_audio_in.clone(), cfg.radio_audio_out.clone());
-                            ui.label("From radio (RX)");
-                            device_combo(ui, "r-in", inputs, &ci, |n| cfg.radio_audio_in = n);
-                            ui.end_row();
-                            ui.label("To radio (TX)");
-                            device_combo(ui, "r-out", outputs, &co, |n| cfg.radio_audio_out = n);
-                            ui.end_row();
-                        },
-                    );
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        if ui
-                            .button("Apply / reconnect")
-                            .on_hover_text("Reopen the CAT rig with these sound cards — no restart")
-                            .clicked()
-                        {
-                            *io.apply_iface = true;
-                        }
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new("Reconnects the radio without restarting.").weak(),
-                            )
-                            .wrap(),
-                        );
-                    });
-                }
 
                 if let Some(access) = io.access_edit.as_deref_mut() {
                     ui.add_space(10.0);
@@ -2343,7 +2290,11 @@ impl SdroxideApp {
                         self.caps.as_ref(),
                         &self.state.antenna_rx,
                         self.state.rx_antenna,
+                        self.radio_audio_devices
+                            .as_ref()
+                            .map(|(i, o)| (i.as_slice(), o.as_slice())),
                         io.can_probe,
+                        io.apply_iface,
                         cmds,
                     ),
                     Backend::UsbAudio => settings_usb_audio_tab(
