@@ -3856,7 +3856,9 @@ more here than the numbers do. Check them against a current plan for your region
 Choose **SSTV** from the DIGITAL row to send and receive pictures. The panel has
 a received-image gallery on the left and a transmit compositor on the right, with
 a row of mode buttons across the top: **Auto**, **Scottie 1**, **Scottie 2**,
-**Scottie DX**, **Martin 1**, **Martin 2**, **Robot 72**, and **Robot 36**.
+**Scottie DX**, **Martin 1**, **Martin 2**, **Robot 72**, **Robot 36**,
+**SC2-180**, **SC2-120**, and the **PD** family — **PD50**, **PD90**, **PD120**,
+**PD160**, **PD180**, **PD240** and **PD290**.
 
 ![The SSTV panel: received-image gallery and the transmit compositor](images/sstv.jpg)
 
@@ -3864,6 +3866,21 @@ a row of mode buttons across the top: **Auto**, **Scottie 1**, **Scottie 2**,
 if you tune in mid-picture, from the sync cadence — and transmits in **Martin 1**
 until a mode has been detected. Selecting a specific mode instead pins both the
 receive decoder and the transmit compositor to that mode.
+
+The **PD** family is worth knowing about if you have only ever used Scottie and
+Martin: it sends the colour information for two lines at once, which buys a
+bigger picture for the same air time. PD120 and PD180 are 640×496 and PD290 is
+800×616, against 320×256 for everything else — and PD120 is one of the two or
+three modes you are most likely to meet on 3.730 and 14.230. **Wraase SC2-180**
+is the other, at 320×256 in three minutes. The transmit compositor follows the
+mode's size automatically, so picking PD180 gives you a 640×496 canvas to crop
+into.
+
+**If a mode arrives that sdroxide does not have**, the panel says so where it
+would otherwise say *listening…* — for example `Pasokon P3 — not decoded`. That
+is not a fault at your end: the header was read perfectly and there is simply no
+decoder for that one. Before 1.6.9 nothing was said at all, which made an
+unimplemented mode look exactly like a broken receiver (issue #421).
 
 Band buttons tune to that band's common SSTV calling frequency, staying in SSTV.
 14.230 MHz on 20 m, 21.340 on 15 m and 28.680 on 10 m are the same the world
@@ -3893,7 +3910,7 @@ mode at all.
 **On VHF and UHF, use SSTV-FM instead.** Above 30 MHz a picture is normally sent
 on an FM carrier rather than a sideband, so the DIGITAL row has a second entry —
 **SSTV-FM** — beside SSTV. Everything about the picture is the same: the same
-seven transmission modes, the same decoder, the same gallery and the same
+transmission modes, the same decoder, the same gallery and the same
 compositor. What differs is the radio underneath. SSTV puts a CAT-controlled rig
 in USB (or LSB); SSTV-FM puts it in FM, and the dial is the centre of a channel
 rather than the foot of a passband.

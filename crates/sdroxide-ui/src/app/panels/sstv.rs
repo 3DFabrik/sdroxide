@@ -746,6 +746,23 @@ impl SdroxideApp {
                                             .strong()
                                             .color(crate::theme::GREEN()),
                                     );
+                                } else if let Some(bad) = st.unsupported.as_deref() {
+                                    // A header came through cleanly for a mode
+                                    // this build cannot draw. Without this the
+                                    // panel says "listening…" beside a textbook
+                                    // signal and the receiver looks broken
+                                    // (issue #421).
+                                    ui.label(
+                                        RichText::new(format!("{bad} — not decoded"))
+                                            .size(10.5)
+                                            .strong()
+                                            .color(crate::theme::ALERT()),
+                                    )
+                                    .on_hover_text(
+                                        "A station is sending in a mode sdroxide does not have. \
+                                         The signal and the tuning are fine — there is simply no \
+                                         decoder for this one. Nothing to fix at your end.",
+                                    );
                                 } else if let Some(m) = st.detected {
                                     ui.label(
                                         RichText::new(format!("last: {}", m.label()))

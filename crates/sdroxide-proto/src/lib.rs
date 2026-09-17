@@ -1329,7 +1329,15 @@ use sdroxide_types::{
 /// last, but `Meters` is a struct in a non-self-describing encoding: a v148
 /// peer reads the extra bytes as the start of the next field and fails to
 /// decode every meter update.
-pub const PROTO_VERSION: u16 = 149;
+///
+/// v150: the SSTV vocabulary grows — [`sdroxide_types::SstvMode`] gains the PD
+/// family and the two Wraase SC-2 modes, and [`sdroxide_types::SstvStatus`]
+/// gains `unsupported`, the name of a mode a header arrived for and this build
+/// cannot draw (issue #421). The variants are appended so no surviving
+/// discriminant moved, but a v149 peer has no name for the new ones and reads
+/// the status's extra field as the start of the next, so every SSTV update
+/// fails to decode.
+pub const PROTO_VERSION: u16 = 150;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]
