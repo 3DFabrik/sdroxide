@@ -34,8 +34,11 @@ use crate::{Event, HdReceiver, Mode, NrsError};
 /// level that swings with fading costs decodes. Slow to follow, like DRM's.
 const TARGET_RMS: f32 = 0.06;
 
-/// One-pole coefficient for the level estimate, ~0.5 s at the channel rate.
-const LEVEL_ALPHA: f32 = 1.0 / (0.5 * 96_000.0);
+/// One-pole coefficient for the level estimate: ~0.5 s at the rate it runs at,
+/// which is the decoder's own, after resampling. Written for 96 kHz, it made the
+/// time constant 65 ms at 744 kHz — a gain that followed fading instead of
+/// riding it out.
+const LEVEL_ALPHA: f32 = (1.0 / (0.5 * FM_RATE_HZ)) as f32;
 
 /// How much channel I/Q the queue into this thread holds, in seconds. A
 /// decoder that falls further behind than this loses the oldest samples rather
@@ -228,6 +231,9 @@ fn run(
             chunk.commit_all();
         }
         let Some(rx) = receiver.as_ref() else { continue };
+        // Only the programme being played is copied out of the decoder; the
+        // others are decoded all the same, since a multiplex is one stream.
+        rx.set_audio_program(Some(shared.audio().selected));
         feed.pipe(&block, rx);
         drain(rx, shared);
     }
@@ -241,7 +247,12 @@ struct Feed {
     /// ...and the same, as the interleaved floats the decoder reads.
     iq_buf: Vec<f32>,
     /// Mean square of the resampled input, for the level normalisation.
-    level: f32,
+    /// `None` until the first block, which seeds it: from zero, a half-second
+    /// average would spend its first second calling a real signal quiet and
+    /// turning it up by orders of magnitude.
+    level: Option<f32>,
+    /// The gain last applied, held while there is nothing to measure.
+    gain: f32,
 }
 
 impl Feed {
@@ -250,7 +261,8 @@ impl Feed {
             resampler: ComplexResampler::new(channel_rate, FM_RATE_HZ),
             rs_buf: Vec::new(),
             iq_buf: Vec::new(),
-            level: 0.0,
+            level: None,
+            gain: 1.0,
         }
     }
 
@@ -265,15 +277,22 @@ impl Feed {
             return;
         }
 
+        let power = |z: &Complex32| z.re * z.re + z.im * z.im;
+        let mut level = self.level.unwrap_or_else(|| {
+            self.rs_buf.iter().map(power).sum::<f32>() / self.rs_buf.len() as f32
+        });
         for z in &self.rs_buf {
-            let p = z.re * z.re + z.im * z.im;
-            self.level += LEVEL_ALPHA * (p - self.level);
+            level += LEVEL_ALPHA * (power(z) - level);
         }
+        self.level = Some(level);
         // A silent input would divide by zero and then clip on the first real
         // sample; hold the gain where it was until there is something to
         // measure.
-        let rms = self.level.sqrt();
-        let gain = if rms > 1e-9 { (TARGET_RMS / rms).clamp(1.0e-3, 1.0e4) } else { 0.0 };
+        let rms = level.sqrt();
+        if rms > 1e-9 {
+            self.gain = (TARGET_RMS / rms).clamp(1.0e-3, 1.0e4);
+        }
+        let gain = self.gain;
 
         self.iq_buf.clear();
         self.iq_buf.reserve(self.rs_buf.len() * 2);

@@ -38,6 +38,7 @@ pub use demod::HdDemod;
 use sdroxide_faad2 as _;
 
 use std::ffi::{c_char, c_float, c_int, c_uint, c_void};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::mpsc::{self, Receiver};
 
 /// The analogue source the decoder expects to see.
@@ -127,7 +128,7 @@ pub enum NrsError {
 pub struct HdReceiver {
     st: *mut NrsCtx,
     rx: Receiver<Event>,
-    _sink: Box<CbSink>,
+    sink: Box<CbSink>,
 }
 
 // The C handle is only touched from the (single) calling thread after the
@@ -146,11 +147,11 @@ impl HdReceiver {
             return Err(NrsError::Open);
         }
         let (tx, rx) = mpsc::channel();
-        let sink = Box::new(CbSink { tx });
+        let sink = Box::new(CbSink { tx, audio_program: AtomicI32::new(-1) });
         let opaque = &*sink as *const CbSink as *mut c_void;
         unsafe { nrsc5_set_callback(st, Some(trampoline), opaque) };
         unsafe { nrsc5_start(st) };
-        Ok(HdReceiver { st, rx, _sink: sink })
+        Ok(HdReceiver { st, rx, sink: sink })
     }
 
     /// Pipes raw 8-bit unsigned I/Q samples (2 bytes per complex sample).
@@ -193,6 +194,16 @@ impl HdReceiver {
         Ok(())
     }
 
+    /// Copy out the audio of one programme only, or of every programme with
+    /// `None` (the default).
+    ///
+    /// Each audio frame is copied as it is reported, and a multiplex decodes
+    /// every programme it carries whichever one is being listened to. On a
+    /// station with three, two of every three copies were thrown away unread.
+    pub fn set_audio_program(&self, program: Option<u8>) {
+        self.sink.audio_program.store(program.map_or(-1, i32::from), Ordering::Relaxed);
+    }
+
     /// Returns the next queued event without waiting.
     pub fn poll(&self) -> Option<Event> {
         self.rx.try_recv().ok()
@@ -230,10 +241,19 @@ impl Iterator for Drain<'_> {
 // outlives the worker because `drop` detaches the callback before joining.
 struct CbSink {
     tx: mpsc::Sender<Event>,
+    /// The programme whose audio is copied out, or -1 for all of them — see
+    /// [`HdReceiver::set_audio_program`].
+    audio_program: AtomicI32,
 }
 
 unsafe extern "C" fn trampoline(evt: *const NrsEvent, opaque: *mut c_void) {
     let sink = unsafe { &*(opaque as *const CbSink) };
+    if !evt.is_null() && unsafe { (*evt).event } == NRS_EVENT_AUDIO {
+        let wanted = sink.audio_program.load(Ordering::Relaxed);
+        if wanted >= 0 && unsafe { (*evt).u.audio.program } != wanted as c_uint {
+            return;
+        }
+    }
     if let Some(ev) = unsafe { translate(evt) } {
         let _ = sink.tx.send(ev);
     }
