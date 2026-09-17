@@ -37,6 +37,16 @@ pub const FM_RATE_HZ: f64 = 744_187.5;
 /// Rate of the decoded audio nrsc5 emits, in samples per second.
 pub const AUDIO_RATE: f64 = 44_100.0;
 
+/// The narrowest channel the decoder is started on.
+///
+/// The FM hybrid's digital sidebands reach 198.4 kHz either side of the
+/// carrier, so a channel under twice that cannot hold them, and the decoder
+/// would spend its time upsampling a stream with nothing to find in it — a
+/// demod-audio sound card at 48 kHz, fifteen-fold, for a lock that can never
+/// come. A little over twice the occupied width, for the channel filter's
+/// skirts.
+pub const MIN_CHANNEL_RATE_HZ: f64 = 400_000.0;
+
 /// Decoded audio held back before playback, and the point at which a backlog is
 /// dropped rather than allowed to become latency. In steady state the decoder
 /// produces almost exactly real time and neither applies; the cap is what keeps
@@ -75,17 +85,32 @@ impl HdDemod {
     /// Build an FM HD Radio demodulator for a chain whose channel rate is
     /// `channel_rate`.
     pub fn new(channel_rate: f64) -> Self {
-        let worker = match HdWorker::new(channel_rate) {
-            Ok(w) => {
-                debug!(channel_rate, "HD Radio decoder attached to the receive chain");
-                Some(w)
-            }
-            Err(e) => {
-                warn!(?e, "could not start the HD Radio decoder; the mode will be silent");
-                None
+        let mut unavailable = None;
+        let worker = if channel_rate < MIN_CHANNEL_RATE_HZ {
+            let why = format!(
+                "HD Radio needs at least {:.0} kHz of stream to hold both digital sidebands, \
+                 and this one is {:.1} kHz — raise the device sample rate, or use a receiver \
+                 that hands over I/Q rather than demodulated audio",
+                MIN_CHANNEL_RATE_HZ / 1e3,
+                channel_rate / 1e3
+            );
+            warn!("{why}");
+            unavailable = Some(why);
+            None
+        } else {
+            match HdWorker::new(channel_rate) {
+                Ok(w) => {
+                    debug!(channel_rate, "HD Radio decoder attached to the receive chain");
+                    Some(w)
+                }
+                Err(e) => {
+                    warn!(?e, "could not start the HD Radio decoder; the mode will be silent");
+                    unavailable = Some("the HD Radio decoder could not be started".to_string());
+                    None
+                }
             }
         };
-        let idle_status = worker.is_none().then(HdRadioStatus::default);
+        let idle_status = worker.is_none().then(|| HdRadioStatus { unavailable, ..Default::default() });
         HdDemod {
             worker,
             channel_rate,
@@ -303,6 +328,20 @@ mod tests {
         assert!(out[1].abs() < 1e-6);
         assert!((side[1] - 0.5).abs() < 1e-6, "side is (L-R)/2: {}", side[1]);
         assert!(audio.is_empty(), "both frames consumed, four values");
+    }
+
+    /// A stream too narrow for the digital sidebands starts no decoder, and the
+    /// status says why, naming the rate.
+    #[test]
+    fn a_channel_too_narrow_for_the_sidebands_says_so() {
+        let mut demod = HdDemod::new(48_000.0);
+        let status = demod.take_hd_radio().expect("the reason is published");
+        let why = status.unavailable.expect("unavailable");
+        assert!(why.contains("48.0 kHz"), "{why}");
+        assert!(demod.take_hd_radio().is_none(), "once, not every poll");
+        let mut out = Vec::new();
+        demod.process(&[Complex32::new(0.1, 0.0); 480], &mut out);
+        assert!(out.is_empty());
     }
 
     /// HD-1 is always selectable; anything else only once the station has

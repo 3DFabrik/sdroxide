@@ -90,6 +90,10 @@ impl SdroxideApp {
         self.hd_sync_row(ui, &d);
         ui.add_space(8.0);
 
+        if let Some(why) = d.unavailable.as_deref() {
+            ui.label(dim(why));
+            return cmds;
+        }
         if !d.locked {
             ui.label(dim(
                 "No HD Radio lock. The digital sidebands are transmitted about 20 dB below \

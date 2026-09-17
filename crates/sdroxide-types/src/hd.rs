@@ -93,6 +93,11 @@ pub struct HdRadioStatus {
     /// A short text the broadcaster is currently airing.
     #[serde(default)]
     pub station_message: String,
+
+    /// Why no decoder is running, when none can: the sentence names the number
+    /// it is about. `None` while decoding is possible, locked or not.
+    #[serde(default)]
+    pub unavailable: Option<String>,
 }
 
 impl HdRadioStatus {
@@ -104,6 +109,9 @@ impl HdRadioStatus {
     /// A one-line summary for a status bar: the station's name if the
     /// multiplex has named itself, else how far the chain has got.
     pub fn summary(&self) -> String {
+        if self.unavailable.is_some() {
+            return "unavailable".to_string();
+        }
         if !self.station_name.is_empty() {
             return self.station_name.clone();
         }
