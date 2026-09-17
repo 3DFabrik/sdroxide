@@ -59,16 +59,17 @@ pub type LoadInbox = std::sync::Arc<std::sync::Mutex<Option<Result<Loaded, Strin
 
 /// Open a text file via a native "Open" dialog (off the UI thread) and store
 /// its contents into `inbox` for the UI to pick up next frame. Native opens a
-/// filesystem picker; the browser openes its own file input (see the wasm arm).
+/// filesystem picker; the browser opens its own file input (see the wasm arm).
+/// `exts` are the file extensions offered, without the dot — every spelling a
+/// format goes by, since a filter that knows only `.adi` hides an `.adif`.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn load_text(filter_name: &str, ext: &str, inbox: LoadInbox) {
+pub fn load_text(filter_name: &str, exts: &[&str], inbox: LoadInbox) {
     let filter_name = filter_name.to_string();
-    let ext = ext.to_string();
+    let exts: Vec<String> = exts.iter().map(|e| e.to_string()).collect();
     std::thread::Builder::new()
         .name("sdroxide-open".into())
         .spawn(move || {
-            let Some(path) =
-                rfd::FileDialog::new().add_filter(&filter_name, &[ext.as_str()]).pick_file()
+            let Some(path) = rfd::FileDialog::new().add_filter(&filter_name, &exts).pick_file()
             else {
                 return;
             };
@@ -166,14 +167,29 @@ fn looks_cyrillic(bytes: &[u8]) -> bool {
 /// the life of the page; opening the dialog again just re-arms its handler,
 /// and resetting the input's value each time keeps the *same* file pickable
 /// twice (a change event only fires when the selection actually changes).
-pub fn load_text(_filter_name: &str, ext: &str, inbox: LoadInbox) {
-    use wasm_bindgen::closure::Closure;
+///
+/// The handlers are kept beside the element rather than forgotten. A
+/// `Closure::forget` is never freed, so forgetting the change handler leaked
+/// one per click, and forgetting both reader handlers leaked whichever of the
+/// two never ran. Kept here, each pick's handlers replace the last pick's,
+/// which drops those — and a read still in flight when the next pick lands is
+/// aborted first, so no callback is left pointing at a handler that has gone.
+pub fn load_text(_filter_name: &str, exts: &[&str], inbox: LoadInbox) {
     use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
 
-    // A file input, kept between calls. `HtmlInputElement` is not `Sync`, so a
-    // `thread_local` instead of a `static`.
+    /// What one pick's read leaves running: the reader and its two handlers.
+    type Reading = (web_sys::FileReader, Closure<dyn FnMut()>, Closure<dyn FnMut()>);
+
+    // A file input, kept between calls, with the change handler it is armed
+    // with and the read the last pick started. `HtmlInputElement` is not
+    // `Sync`, so a `thread_local` instead of a `static`.
     thread_local! {
         static PICKER: std::cell::RefCell<Option<web_sys::HtmlInputElement>> =
+            const { std::cell::RefCell::new(None) };
+        static ON_CHANGE: std::cell::RefCell<Option<Closure<dyn FnMut()>>> =
+            const { std::cell::RefCell::new(None) };
+        static READING: std::cell::RefCell<Option<Reading>> =
             const { std::cell::RefCell::new(None) };
     }
     let Some(window) = web_sys::window() else { return };
@@ -202,26 +218,24 @@ pub fn load_text(_filter_name: &str, ext: &str, inbox: LoadInbox) {
         }
     };
 
-    input.set_accept(&format!(".{ext}"));
+    let accept: Vec<String> = exts.iter().map(|e| format!(".{e}")).collect();
+    input.set_accept(&accept.join(","));
     // The selection can be made again even if it is the same file as last
     // time: clearing the value makes a re-pick a change again.
     input.set_value("");
 
     let for_change = input.clone();
-    let on_change = Closure::wrap(Box::new(move || {
+    let on_change = Closure::<dyn FnMut()>::new(move || {
         let Some(file) = for_change.files().and_then(|list| list.get(0)) else { return };
         let Ok(reader) = web_sys::FileReader::new() else { return };
-        // The reader is reported back into the load handler below, which is
-        // what keeps it alive until the file has actually arrived; nothing on
-        // the page holds it after that.
         let read_here = reader.clone();
         let ok_inbox = inbox.clone();
-        let on_load = Closure::once(move || {
-            let loaded = read_here.result().ok().and_then(|v| {
+        let on_load = Closure::<dyn FnMut()>::new(move || {
+            let loaded = read_here.result().ok().map(|v| {
                 // An ArrayBuffer, read as its bytes and decoded exactly as the
                 // native arm decodes bytes off disk.
                 let bytes = js_sys::Uint8Array::new(&v).to_vec();
-                Some(decode_text(&bytes))
+                decode_text(&bytes)
             });
             if let Ok(mut g) = ok_inbox.lock() {
                 *g = Some(match loaded {
@@ -231,22 +245,28 @@ pub fn load_text(_filter_name: &str, ext: &str, inbox: LoadInbox) {
             }
         });
         let err_inbox = inbox.clone();
-        let on_error = Closure::once(move || {
+        let on_error = Closure::<dyn FnMut()>::new(move || {
             if let Ok(mut g) = err_inbox.lock() {
                 *g = Some(Err("the browser could not read that file".into()));
             }
         });
         reader.set_onload(Some(on_load.as_ref().unchecked_ref()));
         reader.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-        on_load.forget();
-        on_error.forget();
         let _ = reader.read_as_array_buffer(&file);
-    }) as Box<dyn FnMut()>);
+        // The previous pick's read, if it is somehow still going, is stopped
+        // and unhooked before its handlers are dropped with it.
+        let previous = READING.with(|slot| slot.borrow_mut().replace((reader, on_load, on_error)));
+        if let Some((old, _, _)) = previous {
+            old.set_onload(None);
+            old.set_onerror(None);
+            old.abort();
+        }
+    });
 
-    // Re-armed rather than accumulated: swapping the handler drops the one
-    // from the previous pick (its closure graph dies with it).
+    // Re-armed rather than accumulated: the handler from the previous pick is
+    // unhooked by this and dropped with the slot's old value.
     input.set_onchange(Some(on_change.as_ref().unchecked_ref()));
-    on_change.forget();
+    ON_CHANGE.with(|slot| *slot.borrow_mut() = Some(on_change));
     let _ = input.click();
 }
 

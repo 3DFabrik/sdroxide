@@ -341,7 +341,7 @@ impl SdroxideApp {
             self.settings_transfer_note = None;
             crate::download::load_text(
                 "sdroxide settings",
-                "json",
+                &["json"],
                 self.settings_import_inbox.clone(),
             );
         }

@@ -552,7 +552,7 @@ impl SdroxideApp {
                 )
                 .clicked()
             {
-                crate::download::load_text("CHIRP CSV", "csv", self.chirp_import_inbox.clone());
+                crate::download::load_text("CHIRP CSV", &["csv"], self.chirp_import_inbox.clone());
             }
             let have = !self.memories.is_empty();
             ui.add_enabled_ui(have, |ui| {
