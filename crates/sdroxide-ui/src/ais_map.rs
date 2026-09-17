@@ -516,39 +516,51 @@ pub fn show(
     // make the zoom explicit, and the scale note at the other corner says what
     // the view is actually showing now — so “I cannot zoom in” stops being a
     // silent failure.
-    let ctrl = Rect::from_min_size(pos2(rect.right() - 92.0, rect.top() + 4.0), vec2(88.0, 20.0));
-    ui.scope_builder(eframe::egui::UiBuilder::new().max_rect(ctrl), |ui| {
-        eframe::egui::Frame::NONE
-            .fill(alpha(theme::BG_DEEP(), 200.0))
-            .inner_margin(Margin::symmetric(3, 1))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    if crate::chrome::chip(ui, false, RichText::new("-").size(12.0))
-                        .on_hover_text("Zoom out — the wheel or a pinch do this too")
-                        .clicked()
-                    {
-                        view.zoom_about(1.0 / ZOOM_STEP, 0.5, 0.5, aspect);
-                        view.manual = true;
-                        crate::repaint::animate(ui.ctx());
-                    }
-                    if crate::chrome::chip(ui, false, RichText::new("+").size(12.0))
-                        .on_hover_text("Zoom in about the middle of the chart")
-                        .clicked()
-                    {
-                        view.zoom_about(ZOOM_STEP, 0.5, 0.5, aspect);
-                        view.manual = true;
-                        crate::repaint::animate(ui.ctx());
-                    }
-                    if crate::chrome::chip(ui, false, RichText::new("FIT").size(10.0))
-                        .on_hover_text("Frame everything being tracked again — a double-click does too")
-                        .clicked()
-                    {
-                        view.manual = false;
-                        crate::repaint::animate(ui.ctx());
-                    }
-                });
+    //
+    // Anchored on the top-right corner and laid out from the right, so the row
+    // grows into the chart whatever the chips measure — they are wider on a
+    // touch screen, and a fixed box sized for a desktop pushed FIT off the edge
+    // of the map there. A child `Ui` rather than a scope, so the controls float
+    // over the chart without moving the parent's cursor.
+    let inset = Rect::from_min_max(
+        pos2(rect.left() + 4.0, rect.top() + 4.0),
+        pos2(rect.right() - 4.0, rect.bottom() - 4.0),
+    );
+    let mut ctrl_ui = ui.new_child(
+        eframe::egui::UiBuilder::new()
+            .max_rect(inset)
+            .layout(eframe::egui::Layout::right_to_left(eframe::egui::Align::Min)),
+    );
+    eframe::egui::Frame::NONE
+        .fill(alpha(theme::BG_DEEP(), 200.0))
+        .inner_margin(Margin::symmetric(3, 1))
+        .show(&mut ctrl_ui, |ui| {
+            ui.horizontal(|ui| {
+                if crate::chrome::chip(ui, false, RichText::new("\u{2212}").size(12.0))
+                    .on_hover_text("Zoom out — the wheel or a pinch do this too")
+                    .clicked()
+                {
+                    view.zoom_about(1.0 / ZOOM_STEP, 0.5, 0.5, aspect);
+                    view.manual = true;
+                    crate::repaint::animate(ui.ctx());
+                }
+                if crate::chrome::chip(ui, false, RichText::new("+").size(12.0))
+                    .on_hover_text("Zoom in about the middle of the chart")
+                    .clicked()
+                {
+                    view.zoom_about(ZOOM_STEP, 0.5, 0.5, aspect);
+                    view.manual = true;
+                    crate::repaint::animate(ui.ctx());
+                }
+                if crate::chrome::chip(ui, false, RichText::new("FIT").size(10.0))
+                    .on_hover_text("Frame everything being tracked again — a double-click does too")
+                    .clicked()
+                {
+                    view.manual = false;
+                    crate::repaint::animate(ui.ctx());
+                }
             });
-    });
+        });
     // The scale note: what the current view actually spans. Worth saying on a
     // chart that looks fully zoomed in when it is still half an ocean.
     let cos = clat.to_radians().cos().abs().max(0.01);
