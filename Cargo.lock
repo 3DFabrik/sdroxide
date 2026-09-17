@@ -5198,6 +5198,7 @@ version = "1.6.7"
 dependencies = [
  "cc",
  "num-complex",
+ "rtrb",
  "sdroxide-dsp",
  "sdroxide-faad2",
  "sdroxide-types",

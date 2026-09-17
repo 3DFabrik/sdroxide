@@ -18,6 +18,7 @@ sdroxide-faad2.workspace = true
 sdroxide-types.workspace = true
 sdroxide-dsp.workspace = true
 num-complex.workspace = true
+rtrb.workspace = true
 tracing.workspace = true
 
 [build-dependencies]

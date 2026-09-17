@@ -27,6 +27,7 @@
 #![deny(missing_docs)]
 
 pub mod demod;
+mod worker;
 pub use demod::HdDemod;
 
 // Named so its faad2 archive is linked: nrsc5 calls `NeAACDec*` from C, which
