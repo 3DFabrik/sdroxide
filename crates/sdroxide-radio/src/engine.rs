@@ -23,7 +23,6 @@ use sdroxide_digi::{
     WefaxController, WsprController,
 };
 use sdroxide_drm::DrmDemod;
-use sdroxide_nrsc5::HdDemod;
 use sdroxide_dsp::{
     AdcMeter, Agc, AutoNotch, Binaural, Cessb, DcBlock, Ddc, Decimator, DeepFilterNr, Demodulator,
     Duc, Modulator, MonoResampler, Nco, NeuralNr, NoiseBlanker, ParametricEq, SpecBleachNr,
@@ -31,6 +30,7 @@ use sdroxide_dsp::{
     make_demod, make_modulator,
 };
 use sdroxide_ism::{IsmAction, IsmController};
+use sdroxide_nrsc5::HdDemod;
 use sdroxide_qo100::Qo100Controller;
 use sdroxide_rigctld::{RigState, RigctldController};
 use sdroxide_skimmer::{SkimmerAction, SkimmerController};
@@ -905,9 +905,7 @@ impl RxChain {
         // still build for the browser, so they are constructed here instead —
         // see `Demodulator::take_drm` and `Demodulator::take_hd_radio`.
         self.demod = match rx.mode {
-            Mode::Drm => {
-                Some(Box::new(DrmDemod::new(self.ddc.out_rate())) as Box<dyn Demodulator>)
-            }
+            Mode::Drm => Some(Box::new(DrmDemod::new(self.ddc.out_rate())) as Box<dyn Demodulator>),
             Mode::HdRadio => {
                 Some(Box::new(HdDemod::new(self.ddc.out_rate())) as Box<dyn Demodulator>)
             }

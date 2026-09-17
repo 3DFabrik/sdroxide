@@ -110,7 +110,8 @@ impl HdDemod {
                 }
             }
         };
-        let idle_status = worker.is_none().then(|| HdRadioStatus { unavailable, ..Default::default() });
+        let idle_status =
+            worker.is_none().then(|| HdRadioStatus { unavailable, ..Default::default() });
         HdDemod {
             worker,
             channel_rate,

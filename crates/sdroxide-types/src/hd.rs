@@ -115,11 +115,7 @@ impl HdRadioStatus {
         if !self.station_name.is_empty() {
             return self.station_name.clone();
         }
-        if self.locked {
-            "acquiring service".to_string()
-        } else {
-            "no signal".to_string()
-        }
+        if self.locked { "acquiring service".to_string() } else { "no signal".to_string() }
     }
 }
 

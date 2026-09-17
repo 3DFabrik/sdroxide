@@ -151,7 +151,7 @@ impl HdReceiver {
         let opaque = &*sink as *const CbSink as *mut c_void;
         unsafe { nrsc5_set_callback(st, Some(trampoline), opaque) };
         unsafe { nrsc5_start(st) };
-        Ok(HdReceiver { st, rx, sink: sink })
+        Ok(HdReceiver { st, rx, sink })
     }
 
     /// Pipes raw 8-bit unsigned I/Q samples (2 bytes per complex sample).
@@ -289,13 +289,10 @@ unsafe fn translate(evt: *const NrsEvent) -> Option<Event> {
             psmi: unsafe { e.u.sync.psmi },
         }),
         NRS_EVENT_LOST_SYNC => Some(Event::LostSync),
-        NRS_EVENT_MER => Some(Event::Mer {
-            lower: unsafe { e.u.mer.lower },
-            upper: unsafe { e.u.mer.upper },
-        }),
-        NRS_EVENT_BER => Some(Event::Ber {
-            cber: unsafe { e.u.ber.cber },
-        }),
+        NRS_EVENT_MER => {
+            Some(Event::Mer { lower: unsafe { e.u.mer.lower }, upper: unsafe { e.u.mer.upper } })
+        }
+        NRS_EVENT_BER => Some(Event::Ber { cber: unsafe { e.u.ber.cber } }),
         NRS_EVENT_AUDIO => {
             let a = unsafe { e.u.audio };
             if a.data.is_null() || a.count == 0 {
@@ -427,8 +424,7 @@ struct NrsName {
 }
 
 #[allow(clippy::type_complexity)]
-type NrsCallback =
-    unsafe extern "C" fn(evt: *const NrsEvent, opaque: *mut c_void);
+type NrsCallback = unsafe extern "C" fn(evt: *const NrsEvent, opaque: *mut c_void);
 
 unsafe extern "C" {
     fn nrsc5_open_pipe(st: *mut *mut NrsCtx) -> c_int;

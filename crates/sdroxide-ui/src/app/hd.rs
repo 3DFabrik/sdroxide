@@ -118,11 +118,7 @@ impl SdroxideApp {
     fn hd_sync_row(&self, ui: &mut egui::Ui, d: &HdRadioStatus) {
         let dot = |ui: &mut egui::Ui, on: bool| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
-            let ink = if on {
-                Color32::from_rgb(90, 200, 120)
-            } else {
-                crate::theme::gray(90)
-            };
+            let ink = if on { Color32::from_rgb(90, 200, 120) } else { crate::theme::gray(90) };
             ui.painter().circle_filled(rect.center(), 3.5, ink);
         };
         let stages = [

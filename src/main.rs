@@ -1653,10 +1653,8 @@ fn open_hpsdr_source(
         radio.hpsdr.ddc,
     );
     if src.io_inputs_offered() {
-        caps.antennas_rx = sdroxide_types::HpsdrIoRxInput::ALL
-            .iter()
-            .map(|i| i.label().to_string())
-            .collect();
+        caps.antennas_rx =
+            sdroxide_types::HpsdrIoRxInput::ALL.iter().map(|i| i.label().to_string()).collect();
     }
     Ok((Box::new(src), caps))
 }

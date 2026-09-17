@@ -77,18 +77,9 @@ fn decode_sample_capture() {
     eprintln!("fed {fed} bytes of CU8 I/Q");
     eprintln!("{got:#?}");
 
-    assert!(
-        got.syncs > 0,
-        "no sync event — the receive path never locked onto the capture"
-    );
-    assert!(
-        !got.text.is_empty(),
-        "no station name/slogan/message was decoded from the capture"
-    );
-    assert!(
-        got.audio_frames > 0,
-        "no decoded audio — HDC/faad2 path never produced samples"
-    );
+    assert!(got.syncs > 0, "no sync event — the receive path never locked onto the capture");
+    assert!(!got.text.is_empty(), "no station name/slogan/message was decoded from the capture");
+    assert!(got.audio_frames > 0, "no decoded audio — HDC/faad2 path never produced samples");
     eprintln!("station text: {}", got.text.join(" | "));
 }
 
@@ -147,9 +138,9 @@ fn decode_sample_capture_through_the_demod() {
         }
         iq.clear();
         iq.extend(
-            bytes[..n & !1]
-                .chunks_exact(2)
-                .map(|p| Complex32::new((p[0] as f32 - 127.5) / 127.5, (p[1] as f32 - 127.5) / 127.5)),
+            bytes[..n & !1].chunks_exact(2).map(|p| {
+                Complex32::new((p[0] as f32 - 127.5) / 127.5, (p[1] as f32 - 127.5) / 127.5)
+            }),
         );
         audio.clear();
         demod.process(&iq, &mut audio);

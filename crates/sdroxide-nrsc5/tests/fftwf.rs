@@ -43,12 +43,7 @@ fn noise(n: usize, seed: u64) -> Vec<Complex> {
         state ^= state << 17;
         ((state >> 11) as f64 / (1u64 << 53) as f64) - 0.5
     };
-    (0..n)
-        .map(|_| Complex {
-            re: next() as f32,
-            im: next() as f32,
-        })
-        .collect()
+    (0..n).map(|_| Complex { re: next() as f32, im: next() as f32 }).collect()
 }
 
 /// The DFT evaluated directly: O(n^2), exactly what the transform must match.
@@ -92,11 +87,7 @@ fn check(n: usize) {
         worst = worst.max((got.re - want.re).abs()).max((got.im - want.im).abs());
     }
     // Single precision over 2048 terms still leaves a wide margin here.
-    assert!(
-        worst <= peak * 1e-4,
-        "n={n}: worst-bin error {worst} exceeds {:.3e}",
-        peak * 1e-4
-    );
+    assert!(worst <= peak * 1e-4, "n={n}: worst-bin error {worst} exceeds {:.3e}", peak * 1e-4);
 }
 
 #[test]
