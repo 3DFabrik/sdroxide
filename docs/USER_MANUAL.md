@@ -12834,6 +12834,17 @@ The same single-client and sign-in notes as
 [remote operation](#8-remote-operation) apply, and nothing here is encrypted —
 put the server behind HTTPS if it is reachable from an untrusted network.
 
+**Files** go through the browser: every export is a download, and the logbook's
+**IMPORT** and the memory channels' **CHIRP IMPORT** open the browser's own file
+picker, reading a file in any encoding the native application reads. A channel
+import goes to the station, which keeps the memory list. An ADIF import goes
+into *this browser's* logbook, which lives in the page's local storage — not in
+the station's log — and browsers cap that storage at around 5 MB per site: a
+logbook of a few thousand contacts, depending on how much each one carries.
+Past that the import still reports what it added, but the browser declines to
+keep it, and after a reload the log is back to what it was. Keep a large log in
+the native application. Exporting and importing the settings is native only.
+
 ### 9.3 Audio needs a secure context
 
 Browsers only hand out the two APIs the web client's audio is built on —
