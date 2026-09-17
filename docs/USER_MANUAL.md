@@ -138,8 +138,9 @@ or connects to a remote sdroxide server.
   Fobos SDR over USB, a HackRF
   transceiver over USB, an RTL-SDR
   published over the network by
-  `rtl_tcp`, a PlutoSDR, or a CAT-controlled radio with audio over a USB sound
-  card (demodulated audio or stereo IQ).
+  `rtl_tcp`, a PlutoSDR, a CAT-controlled radio with audio over a USB sound
+  card (demodulated audio or stereo IQ), or a radio with no control port at all
+  — a handheld or a walkie keyed by its own VOX — over two sound cards.
 - **Several radios at once** — each in its own tab with its own tuning, mode,
   panadapter and audio, sharing your memories, logbook and a station-wide
   transmit interlock. Multi-receiver hardware serves one tab per receiver from
@@ -6343,6 +6344,10 @@ radio. Everything below the selector changes to match the choice:
   tuned entirely in software. Both HF ports at once are combined by the same
   adaptive filter the RSPduo and LimeSDR use.
   See [6.2.20](#6220-rigexpert-fobos-sdr-usb).
+- **USB audio radio (sound card)** — a radio with no control port: a handheld,
+  a walkie, a USB dongle rig. Its audio comes in on one sound card, transmit
+  audio goes out on another, and the radio keys itself on VOX. See
+  [6.2.21](#6221-usb-audio-radio-sound-card-only).
 
 There is no auto-detect: you pick the interface, and an interface that cannot be
 opened falls back to a silent source rather than guessing at another one.
@@ -10603,6 +10608,49 @@ streams at all, and 50 Msps streams but distorts audibly — and the rate
 selection steers around both. The cost is a practical ceiling around 10 MHz for
 the widest HF views; wider targets need a faster ADC than the safe rates
 provide.
+
+#### 6.2.21 USB audio radio (sound card only)
+
+For a radio sdroxide cannot control at all — a handheld, a walkie, a USB
+dongle rig — but can hear and talk through. Nothing is commanded: no
+frequency, no mode, no PTT. There are two sound cards and the radio's own VOX.
+
+**Receive (radio → PC)** is the card the radio's headphone or speaker socket
+feeds, and **Transmit (PC → radio mic)** is the card whose output goes into
+the radio's mic socket. Pick both by name; the lists are the cards on the
+machine the radio is plugged into and appear once that machine has answered.
+Left on the system default, either one is almost never the radio — it is the
+computer's own headset or speakers — and the log says so when the radio opens.
+**Apply / reconnect** reopens the radio on the cards chosen, handing the old
+ones back first, so the same card can be picked again or moved to a CAT rig
+without a restart.
+
+**The dial is a label.** The radio sits wherever its own knob is, and sdroxide
+has no way to read or move it. Type the frequency the radio is on into the dial
+anyway: it is what the log, the spots and the transmit lockout go by. Received
+audio is already demodulated by the radio, so the panadapter shows a few
+kilohertz of audio around the dial rather than a view of the band, and the
+digital modes decode from it as they do on a CAT rig's demod audio.
+
+**Transmit is audio into the mic socket, and VOX does the keying.** Turn VOX on
+at the radio, and set its mic gain so the audio arriving from the computer
+does not overdrive it. Speech, digital-mode tones and CW (sent as keyed audio
+tones, MCW) all go out the same way. Two consequences of a radio that keys on
+whatever it hears:
+
+- **Anything else played to the transmit card keys the radio too** — a system
+  notification sound, a browser tab, another program's audio. Give the radio a
+  card of its own, and keep it out of the operating system's choice of default
+  output.
+- **The transmit lockout still applies, to the frequency typed in the dial.**
+  With `tx_ham_only` set (the default) sdroxide refuses to key outside the
+  amateur bands, and a licence-free radio — PMR446, FRS, CB — is outside them.
+  See [§12](#12-command-line-reference) for `--oob-tx`, which lifts the lockout
+  for one run, and check that you are licensed for what you are about to do.
+
+There is no S-meter reading, SWR or power readback: the radio has nothing to
+report them on. If the capture card drops audio because the machine is not
+emptying it fast enough, the log says how much was lost.
 
 ### 6.3 UI: display preferences and voice announcements
 
