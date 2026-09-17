@@ -71,12 +71,17 @@ pub enum Event {
         /// Channel bit-error ratio, 0.0 to 1.0.
         cber: f32,
     },
-    /// Decoded PCM audio, signed 16-bit mono, 44.1 kHz.
+    /// Decoded PCM audio: signed 16-bit interleaved stereo, 44.1 kHz.
     Audio {
         /// The program the audio belongs to.
         program: u8,
-        /// Signed 16-bit mono PCM, 44,100 samples per second.
+        /// Signed 16-bit PCM, left and right interleaved, 44,100 frames per
+        /// second.
         data: Vec<i16>,
+        /// `NRSC5_AUDIO_FLAGS_*`. With [`AUDIO_FLAG_UNAVAILABLE`] set the frame
+        /// is silence the decoder filled in for a packet that was missing or
+        /// failed its check, not sound from the station.
+        flags: u32,
     },
     /// An audio service is available on the wave (from SIS descriptors).
     AudioService {
@@ -94,6 +99,10 @@ pub enum Event {
     /// A short text the roadcaster is currently airing.
     StationMessage(String),
 }
+
+/// `NRSC5_AUDIO_FLAGS_UNAVAILABLE`: an [`Event::Audio`] frame that is silence
+/// standing in for audio the decoder did not have.
+pub const AUDIO_FLAG_UNAVAILABLE: u32 = 1 << 0;
 
 /// Errors opening or driving an `HdReceiver`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -266,10 +275,7 @@ unsafe fn translate(evt: *const NrsEvent) -> Option<Event> {
                 return None;
             }
             let data = unsafe { std::slice::from_raw_parts(a.data, a.count) }.to_vec();
-            Some(Event::Audio {
-                program: a.program as u8,
-                data,
-            })
+            Some(Event::Audio { program: a.program as u8, data, flags: a.flags })
         }
         NRS_EVENT_AUDIO_SERVICE => {
             let a = unsafe { e.u.audio_service };

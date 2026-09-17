@@ -58,7 +58,9 @@ pub struct HdRadioStatus {
     /// holds.
     #[serde(default)]
     pub locked: bool,
-    /// Audio frames have arrived since the last lock was acquired.
+    /// The selected programme is producing sound: its latest audio frame was
+    /// decoded, not the silence the decoder fills a missing or failed packet
+    /// with.
     #[serde(default)]
     pub audio: bool,
     /// Residual carrier frequency offset, in Hz, as the sync reported it.

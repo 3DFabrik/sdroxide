@@ -293,16 +293,12 @@ fn drain(receiver: &HdReceiver, shared: &Shared) {
     // `poll` is non-blocking, so this ends when the queue is empty.
     while let Some(ev) = receiver.poll() {
         match ev {
-            Event::Audio { program, data } => {
+            Event::Audio { program, data, flags } => {
                 let mut audio = shared.audio();
                 if program == audio.selected {
                     audio.frames.extend(data);
                     drop(audio);
-                    let mut status = shared.status();
-                    if !status.audio {
-                        status.audio = true;
-                        moved = true;
-                    }
+                    moved |= note_audio(&mut shared.status(), flags);
                 }
             }
             other => {
@@ -314,6 +310,19 @@ fn drain(receiver: &HdReceiver, shared: &Shared) {
     if moved {
         shared.status_dirty.store(true, Ordering::Relaxed);
     }
+}
+
+/// Whether the selected programme is decoding, from the flags on its latest
+/// audio frame. Returns whether the light changed.
+///
+/// Once the frame clock is aligned nrsc5 emits a frame for every slot, and one
+/// whose packet was missing or failed its check is a frame of silence flagged
+/// `UNAVAILABLE`. Counting those as audio lit AUDIO on a marginal signal that
+/// held sync while nothing at all was playing — the one moment the light is
+/// being read. The silence itself is still played: it keeps the audio in time.
+fn note_audio(status: &mut HdRadioStatus, flags: u32) -> bool {
+    let sounding = flags & crate::AUDIO_FLAG_UNAVAILABLE == 0;
+    std::mem::replace(&mut status.audio, sounding) != sounding
 }
 
 /// Fold one non-audio event into the status snapshot.
@@ -346,5 +355,25 @@ fn apply(status: &mut HdRadioStatus, ev: Event) {
         Event::StationSlogan(slogan) => status.station_slogan = slogan,
         Event::StationMessage(message) => status.station_message = message,
         Event::Audio { .. } => debug!("audio reached the status fold"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The silence nrsc5 fills a missing packet with is not audio decoding.
+    #[test]
+    fn a_filled_in_silence_frame_does_not_light_audio() {
+        let mut status = HdRadioStatus { locked: true, ..HdRadioStatus::default() };
+        assert!(!note_audio(&mut status, crate::AUDIO_FLAG_UNAVAILABLE));
+        assert!(!status.audio);
+        assert!(note_audio(&mut status, 0), "a sounding frame lights it");
+        assert!(status.audio);
+        assert!(!note_audio(&mut status, 0), "and a second one changes nothing");
+        // A packet faad2 failed to decode arrives the same way: as stand-in
+        // silence, flagged unavailable as well as with the decoding error.
+        assert!(note_audio(&mut status, crate::AUDIO_FLAG_UNAVAILABLE | 1 << 1));
+        assert!(!status.audio);
     }
 }
