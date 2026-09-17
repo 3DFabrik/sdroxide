@@ -88,9 +88,9 @@ fn decode_sample_capture() {
 /// timer. That puts the decoder thread, the queue into it and the audio queue
 /// out of it under test, which the raw receiver above does not touch.
 ///
-/// Fed at about twice real time — the demod drops what its queue cannot hold,
-/// as it would on a machine that cannot keep up, and a faster feed would test
-/// that instead.
+/// Fed as fast as the decoder thread takes it, waiting on `queued_input`
+/// between blocks — faster, the demod would drop what its queue cannot hold,
+/// as it does on a machine that cannot keep up, and that is a different test.
 #[test]
 #[ignore = "decompresses 48 MB and decodes for several seconds"]
 fn decode_sample_capture_through_the_demod() {
@@ -145,8 +145,9 @@ fn decode_sample_capture_through_the_demod() {
         audio.clear();
         demod.process(&iq, &mut audio);
         absorb(&mut demod, &audio);
-        let block_s = iq.len() as f64 / CU8_RATE;
-        std::thread::sleep(Duration::from_secs_f64(block_s / 2.0));
+        while demod.queued_input() > iq.len() {
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
     assert!(child.wait().expect("xz exit").success());
     // The decoder is behind the feed by its own latency; keep the chain

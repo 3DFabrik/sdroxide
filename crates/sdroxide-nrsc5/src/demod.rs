@@ -170,6 +170,18 @@ impl HdDemod {
         w.shared.status_dirty.store(true, Ordering::Relaxed);
     }
 
+    /// Channel samples handed to [`Demodulator::process`] that the decoder
+    /// thread has not taken yet — zero when no decoder is running.
+    ///
+    /// A receiver never needs this: it hands over I/Q in real time, and a
+    /// decoder that cannot keep up loses the oldest rather than stalling it.
+    /// Something feeding a recording can go far faster than real time, and
+    /// waiting on this between blocks is how it keeps the queue from
+    /// overflowing — see `examples/hd_capture.rs`.
+    pub fn queued_input(&self) -> usize {
+        self.worker.as_ref().map_or(0, HdWorker::queued)
+    }
+
     /// Audio frames dropped by the backlog trim since construction.
     ///
     /// Zero on a healthy decode at the right rate. A climbing count means the

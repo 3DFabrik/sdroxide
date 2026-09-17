@@ -166,6 +166,11 @@ impl HdWorker {
         }
     }
 
+    /// Channel samples queued and not yet taken by the decoder thread.
+    pub fn queued(&self) -> usize {
+        self.input.buffer().capacity() - self.input.slots()
+    }
+
     /// Ask for re-acquisition, after a retune.
     pub fn restart(&self) {
         self.shared.restart.store(true, Ordering::Relaxed);

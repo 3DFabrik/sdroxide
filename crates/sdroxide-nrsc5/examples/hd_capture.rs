@@ -14,9 +14,15 @@
 //! channel's level, how much audio came out, and the backlog drop count (which
 //! must be zero — a climbing one is a queue drained slower than the decoder
 //! fills it).
+//!
+//! The decoder runs on a thread of its own and `process` never waits for it,
+//! so this reads the file only as fast as that thread takes the samples: fed
+//! at disk speed, the queue into it would overflow and a healthy capture would
+//! look like a failing decoder.
 use std::env;
 use std::fs::File;
 use std::io::{BufReader, Read};
+use std::time::Duration;
 
 use num_complex::Complex32;
 use sdroxide_dsp::Demodulator;
@@ -44,8 +50,10 @@ fn main() {
     let decim = (cap_rate / FM_RATE_HZ).round().max(1.0) as u64;
     let program: u8 = a.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
 
+    // The programme is selected once the station has announced it: the demod
+    // ignores a programme the multiplex has not listed, and before the first
+    // station information arrives it has listed none but HD-1.
     let mut demod = HdDemod::new(FM_RATE_HZ);
-    demod.select_program(program);
 
     // Windowed-sinc low-pass, flat to 200 kHz, down by the 372 kHz where the
     // decimated band folds.
@@ -116,6 +124,10 @@ fn main() {
         }
         out.clear();
         demod.process(&chan_iq, &mut out);
+        // Keep at most the block just handed over waiting for the decoder.
+        while demod.queued_input() > chan_iq.len() {
+            std::thread::sleep(Duration::from_millis(1));
+        }
         audio_samples += out.len();
         if dump {
             dumped.extend_from_slice(&out);
@@ -126,10 +138,21 @@ fn main() {
             side_n += side.len();
         }
         if let Some(s) = demod.take_hd_radio() {
+            if s.program != program && s.audio_services.iter().any(|a| a.program == program) {
+                demod.select_program(program);
+            }
             if s.locked {
                 best = Some(s);
             }
         }
+    }
+    // Let the decoder finish what is still queued before reading its verdict.
+    while demod.queued_input() > 0 {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    if let Some(s) = demod.take_hd_radio().filter(|s| s.locked) {
+        best = Some(s);
     }
 
     println!("\n{:.1} MHz, programme HD{}", chan / 1e6, program + 1);
