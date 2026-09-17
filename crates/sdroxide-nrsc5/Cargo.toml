@@ -21,5 +21,10 @@ num-complex.workspace = true
 rtrb.workspace = true
 tracing.workspace = true
 
+[dev-dependencies]
+# For the capture example only: it drives the decoder, and the warnings that
+# path emits are part of what it reports.
+tracing-subscriber.workspace = true
+
 [build-dependencies]
 cc = "1"
