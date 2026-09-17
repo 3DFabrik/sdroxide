@@ -8,6 +8,12 @@
  * unnormalised, as in FFTW: a forward transform followed by a backward one
  * multiplies by the length.
  *
+ * The trigonometry is done once, when the plan is made. Computed in the inner
+ * loop, as it first was, it cost two libm calls per coefficient per transform
+ * — some 22,000 of them for each 2048-point FFT, several hundred FFTs a second
+ * — for numbers that never change. The table holds the same `double`s the loop
+ * computed, so the transform's output is bit for bit what it was.
+ *
  * `fftwf_alloc_complex` returns 16-byte-aligned memory like FFTW's own
  * allocator; the peers only store sample pointers, so any alignment works, but
  * staying aligned costs nothing and matches the upstream contract. */
@@ -27,15 +33,17 @@
 #endif
 
 struct sdrx_nrsc5_plan_s {
-    int    n;        /* the transform length the caller asked for */
-    int    inverse;  /* FFTW_BACKWARD */
-    float *in;
-    float *out;
-    float *work;
+    int     n;        /* the transform length the caller asked for */
+    float  *in;
+    float  *out;
+    float  *work;
+    double *wr;       /* cos(-2*pi*k/n), for k in [0, n/2) */
+    double *wi;       /* sin(-2*pi*k/n), negated for FFTW_BACKWARD */
 };
 
-/* In-place, on interleaved re/im. */
-static void fft_pow2(float *a, int m, int inverse)
+/* In-place, on interleaved re/im. `wr` and `wi` are the plan's twiddle table
+ * for length `m`; the stage of length `len` uses every `m/len`-th entry. */
+static void fft_pow2(float *a, int m, const double *wr_table, const double *wi_table)
 {
     for (int i = 1, j = 0; i < m; i++) {
         int bit = m >> 1;
@@ -55,9 +63,8 @@ static void fft_pow2(float *a, int m, int inverse)
         const int step = m / len;
         for (int i = 0; i < m; i += len) {
             for (int j = 0; j < half; j++) {
-                const double ang = -2.0 * M_PI * (double)(j * step) / (double)m;
-                const double wr = cos(ang);
-                const double wi = inverse ? -sin(ang) : sin(ang);
+                const double wr = wr_table[j * step];
+                const double wi = wi_table[j * step];
                 float *p = a + 2 * (i + j);
                 float *q = a + 2 * (i + j + half);
                 const float xr = (float)(q[0] * wr - q[1] * wi);
@@ -81,13 +88,24 @@ fftwf_plan fftwf_plan_dft_1d(int n, fftwf_complex *in, fftwf_complex *out,
     if (p == NULL)
         return NULL;
     p->n = n;
-    p->inverse = sign == FFTW_BACKWARD;
     p->in = (float *)in;
     p->out = (float *)out;
+    const size_t half = n > 1 ? (size_t)n / 2 : 1;
     p->work = (float *)malloc(sizeof(float) * 2 * (size_t)n);
-    if (p->work == NULL) {
+    p->wr = (double *)malloc(sizeof(double) * half);
+    p->wi = (double *)malloc(sizeof(double) * half);
+    if (p->work == NULL || p->wr == NULL || p->wi == NULL) {
+        free(p->work);
+        free(p->wr);
+        free(p->wi);
         free(p);
         return NULL;
+    }
+    const int inverse = sign == FFTW_BACKWARD;
+    for (size_t k = 0; k < half; k++) {
+        const double ang = -2.0 * M_PI * (double)k / (double)n;
+        p->wr[k] = cos(ang);
+        p->wi[k] = inverse ? -sin(ang) : sin(ang);
     }
     return (fftwf_plan)p;
 }
@@ -98,7 +116,7 @@ void fftwf_execute(fftwf_plan plan)
     if (p == NULL)
         return;
     memcpy(p->work, p->in, sizeof(float) * 2 * (size_t)p->n);
-    fft_pow2(p->work, p->n, p->inverse);
+    fft_pow2(p->work, p->n, p->wr, p->wi);
     memcpy(p->out, p->work, sizeof(float) * 2 * (size_t)p->n);
 }
 
@@ -108,6 +126,8 @@ void fftwf_destroy_plan(fftwf_plan plan)
     if (p == NULL)
         return;
     free(p->work);
+    free(p->wr);
+    free(p->wi);
     free(p);
 }
 
