@@ -2566,7 +2566,7 @@ States and Mexico transmit it, and a hybrid station sounds better on the digital
 side than on the analog one — provided it can be heard at all, because the
 sidebands are far weaker than the carrier they share.
 
-Select `HD Radio` on the **MODE** button and listen. It is a **broadcast** mode,
+Select **HD RADIO** on the **MODE** button and listen. It is a **broadcast** mode,
 like WFM and DRM: there is nothing to transmit and no transcript. The panel is
 receive-only.
 
@@ -2574,9 +2574,10 @@ receive-only.
 would use for plain WFM. Unlike DRM, the digital carriers are not centred on
 that frequency but spread out around it — roughly 129 to 198 kHz either side —
 so the front end has to capture a span of at least about ±200 kHz to see them at
-all. **A complex sample rate of 1 Msps or more is ample**; at much narrower
-rates the decoder still runs but has one or both sidebands missing, and will not
-lock. The default passband is ±200 kHz, which is the channel the sidebands
+all. **A complex sample rate of 1 Msps or more is ample.** Below 400 kHz the
+decoder is not started at all — both sidebands cannot fit, so it could never
+lock — and the window says so, naming the rate this receiver delivers; that is
+also what a CAT rig handing over demodulated audio gets. The default passband is ±200 kHz, which is the channel the sidebands
 occupy, and there are no filter presets — the decoder reads the real channel out
 of the transmission.
 
@@ -2593,7 +2594,7 @@ the decode, in the order they lock:
 | Stage | What it means |
 | --- | --- |
 | **SYNC** | The OFDM frame is being read. |
-| **AUDIO** | Audio frames are decoding. |
+| **AUDIO** | The selected programme's audio is decoding — not the silence the decoder fills a lost or failed packet with. |
 
 Sync without audio is a real state — the frame is locked but the programme's
 audio is not coming through, often because the signal is marginal — so the HD
@@ -2615,7 +2616,12 @@ Below the indicators, once the signal is locked:
 
 Then the station's own text: its name, its slogan, and a message it is currently
 airing. If the multiplex carries more than one programme — HD-1 and an HD-2
-subchannel, say — a row of **HD-n** chips lets you pick which to hear.
+subchannel, say — a row of **HD-n** chips lets you pick which to hear. Tuning to
+another station puts it back on HD-1.
+
+The decoding itself runs on a thread of its own, so it does not hold up the
+panadapter or any other decoder on the same receiver; a machine too slow to keep
+up with it loses samples and re-acquires rather than stalling the radio.
 
 **What is not here.** Transmit: HD Radio is a broadcast system. This build
 decodes the FM hybrid only; **HD on the AM band** is not wired up yet. The album
