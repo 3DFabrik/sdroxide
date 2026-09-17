@@ -5269,6 +5269,18 @@ read the wrong way round, which put ships all over the world map or left it
 empty; the decoder is now checked against a published sentence decoded by
 gpsd — issues #345 and #408.)
 
+#### The chart
+
+The chart frames your station and every vessel with a fresh position, and keeps
+reframing as they move. Zoom with the wheel, a trackpad or a pinch — about the
+point under the pointer — and drag to pan; either one holds the view where you
+left it. The **−**, **+** and **FIT** chips in the top-right corner do the same
+without a wheel, zooming about the middle of the chart, and **FIT** (or a
+double-click) hands the view back to the automatic framing. The note in the
+bottom-left corner says how much the view spans, in degrees of longitude and
+roughly in kilometres, so a chart that looks fully zoomed in but is still half
+an ocean wide says so (issue #459).
+
 #### Data fields
 
 - **slots** — how many transmissions the gate opened on. A high slot count with
