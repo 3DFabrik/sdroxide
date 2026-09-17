@@ -240,6 +240,10 @@ unsafe extern "C" fn trampoline(evt: *const NrsEvent, opaque: *mut c_void) {
 // IQ, SYNC, LOST_SYNC, MER, BER, HDC, AUDIO, ID3, SIG, LOT, SIS, STREAM,
 // PACKET, AUDIO_SERVICE, STATION_ID, STATION_NAME, STATION_SLOGAN,
 // STATION_MESSAGE, STATION_LOCATION, ...
+//
+// These numbers and the `#[repr(C)]` structs below are copied from the header
+// by hand, so `src/layout_check.c` mirrors them in C and fails the build if the
+// pinned nrsc5 no longer agrees. Change the two together.
 const NRS_EVENT_SYNC: c_uint = 2;
 const NRS_EVENT_LOST_SYNC: c_uint = 3;
 const NRS_EVENT_MER: c_uint = 4;

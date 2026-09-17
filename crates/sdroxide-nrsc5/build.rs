@@ -90,6 +90,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed=src/fftwf_compat.c");
     println!("cargo:rerun-if-changed=src/rtlsdr_stubs.c");
+    println!("cargo:rerun-if-changed=src/layout_check.c");
     println!("cargo:rerun-if-changed=include/fftw3.h");
     println!("cargo:rerun-if-changed={}", nrsc5.join("src").display());
     println!("cargo:rerun-if-changed={}", nrsc5.join("include").display());
@@ -122,6 +123,9 @@ fn main() {
     // it on the pipe-only path (see the file's comment).
     build.file(manifest.join("src/rtlsdr_stubs.c"));
     build.file(manifest.join("src/fftwf_compat.c"));
+    // Compile-time only: fails the build if `nrsc5_event_t` no longer matches
+    // what `src/lib.rs` reads out of it.
+    build.file(manifest.join("src/layout_check.c"));
     build.compile("sdroxide_nrsc5");
 
     // The receive path spans a worker thread and rtltcp's sockets.
