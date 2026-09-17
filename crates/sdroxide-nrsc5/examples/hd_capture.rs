@@ -10,8 +10,10 @@
 //! and the shift and decimation fall away.
 //!
 //! Prints what the decoder reports so a real station can be checked without a
-//! GUI: lock, per-sideband MER, CBER, the station's identity, and how much
-//! audio came out.
+//! GUI: lock, per-sideband MER, CBER, the station's identity, the stereo side
+//! channel's level, how much audio came out, and the backlog drop count (which
+//! must be zero — a climbing one is a queue drained slower than the decoder
+//! fills it).
 use std::env;
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -160,6 +162,10 @@ fn main() {
         audio_samples as f64 / 44_100.0,
         audio_samples as f64 / 2.0 / 44_100.0
     );
+    // Zero on a healthy decode. A climbing count is a queue drained slower than
+    // the decoder fills it — the shape the stereo-pair pacing bug took, and the
+    // assertion the SDROXIDE_HD_SAMPLE test makes.
+    println!("  backlog drops: {}", demod.backlog_drops());
     if let Ok(path) = env::var("HD_OUT") {
         let pcm: Vec<u8> =
             dumped.iter().flat_map(|v| ((v * 32_767.0) as i16).to_le_bytes()).collect();
