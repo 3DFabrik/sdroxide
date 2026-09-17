@@ -169,10 +169,27 @@ pub fn duc_command_packet(seq: u32) -> [u8; DUC_COMMAND_LEN] {
 ///
 /// Same convention as Protocol 1's C2 (`protocol1::config_cc`): the seven
 /// outputs occupy bits 7..1 with bit 0 unused, so the word is written shifted
-/// up by one. Offset and shift are from piHPSDR's `new_protocol.c`, which
-/// writes `band->OCtx`/`OCrx << 1` here, and from the N4MTT dissector; like
-/// every other offset in this file they are **not** hardware-verified.
-const HP_OC: usize = 1400;
+/// up by one. The offset is piHPSDR's `new_protocol.c`
+/// (`high_priority_buffer_to_radio[1401] = band->OCtx/OCrx << 1`), which
+/// deskHPSDR and hpsdr-rs both match; **1401, confirmed on air** by an
+/// Odyssey 2 (issue #438).
+///
+/// It used to say 1400, which is [`HP_OC_ANAN7000`] — a byte the boards that
+/// read it use for something else entirely. The word went out on every
+/// high-priority packet and the real open-collector field stayed zero, so a
+/// Protocol 2 station's filter board, antenna relays and band decoder never
+/// switched and nothing anywhere reported an error. That is the failure mode
+/// of an off-by-one into a *defined* neighbouring field: it is silent.
+const HP_OC: usize = 1401;
+
+/// The byte before [`HP_OC`]: on an ANAN-7000 / G2 (Saturn) it carries the
+/// XVTR-out relay (bit 0) and the built-in speaker-amplifier mute (bit 1), and
+/// on every other board it is reserved. sdroxide drives neither, so it stays
+/// zero — named here only so the next reader can see at a glance that 1400 is
+/// a real field and not spare room, which is why writing the OC word into it
+/// switched nothing instead of failing.
+#[allow(dead_code)]
+const HP_OC_ANAN7000: usize = 1400;
 
 /// Build the High-Priority command packet (dest port 1027): the run bit, RX/TX
 /// NCO frequencies, PTT/MOX, drive level (0..=255) and the open-collector
@@ -180,9 +197,9 @@ const HP_OC: usize = 1400;
 ///
 /// Offsets: DDC-*n* RX NCO @ `buf[9 + 4n .. 13 + 4n]` (the spec's frequency
 /// table, 4 bytes per DDC), TX DUC0 NCO @ `buf[329..333]`, drive @ `buf[345]`,
-/// open collectors @ `buf[1400]` (see [`HP_OC`]), run/MOX flags @ `buf[4]` —
-/// canonical P2 values; DDC0's offset is hardware-verified, the stride is per
-/// the TAPR layout.
+/// open collectors @ `buf[1401]` (see [`HP_OC`]), run/MOX flags @ `buf[4]` —
+/// canonical P2 values; DDC0's offset and the OC byte are hardware-verified,
+/// the DDC stride is per the TAPR layout.
 ///
 /// `run` is bit 0 of byte 4 and is the *only* thing that starts and stops the
 /// radio's streams. Sending this packet with it clear is how a session ends —
@@ -894,10 +911,14 @@ mod tests {
         // Outputs 1, 3 and 7.
         let b = high_priority_packet(0, &phases, 0, true, false, 0, 0b100_0101);
         assert_eq!(b[HP_OC], 0b1000_1010, "outputs 1, 3 and 7, shifted off bit 0");
-        assert_eq!(HP_OC, 1400);
+        // The offset itself is the bug of issue #438: 1400 is the ANAN-7000's
+        // XVTR-out/speaker-mute byte, so an OC word written there was accepted
+        // and switched nothing.
+        assert_eq!(HP_OC, 1401);
+        assert_eq!(b[HP_OC_ANAN7000], 0, "byte 1400 is a different field and stays untouched");
         // Nothing else in the packet moved with it.
         assert_eq!(b[345], 0);
-        assert!(b[1401..].iter().all(|&x| x == 0), "nothing written past the OC byte");
+        assert!(b[HP_OC + 1..].iter().all(|&x| x == 0), "nothing written past the OC byte");
         // There is no eighth output: bit 7 of the word cannot reach the wire.
         let b = high_priority_packet(0, &phases, 0, true, false, 0, 0xFF);
         assert_eq!(b[HP_OC], 0xFE);
