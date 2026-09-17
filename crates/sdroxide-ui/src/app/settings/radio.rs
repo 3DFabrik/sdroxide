@@ -897,8 +897,7 @@ pub(in crate::app) fn settings_cat_tab(
 /// sit together in the file.
 pub(in crate::app) fn settings_usb_audio_tab(
     ui: &mut egui::Ui,
-    inputs: &[String],
-    outputs: &[String],
+    devices: Option<(&[String], &[String])>,
     radio_edit: &mut Option<sdroxide_types::RadioConfig>,
     apply: &mut bool,
     can_probe: bool,
@@ -907,26 +906,40 @@ pub(in crate::app) fn settings_usb_audio_tab(
         ui.label("Waiting for the configuration of the machine the radio is attached to.");
         return;
     };
+    // The two lists are the cards on the machine the radio is plugged into,
+    // and they arrive as an answer. Until then the combos would offer nothing
+    // but "System default", which reads as a machine with no sound cards.
+    let Some((inputs, outputs)) = devices else {
+        ui.label(
+            RichText::new("Waiting for the sound cards on the machine the radio is plugged into.")
+                .weak(),
+        );
+        return;
+    };
     // Read out before the combos, which hand the fields to their editors.
     let (ci, co) = (cfg.radio_audio_in.clone(), cfg.radio_audio_out.clone());
     egui::Grid::new("usb-audio-grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+        // Only the combos are greyed: wrapping whole rows would put both of
+        // them, `end_row` and all, inside a single cell of the grid.
+        ui.label("Receive (radio → PC)").on_hover_text(
+            "The sound card the radio's own audio comes in on — its headphone \
+             socket into the computer's line or mic input. Everything on the \
+             panadapter and in the decoders arrives here.",
+        );
         probe_only(ui, can_probe, |ui| {
-            ui.label("Receive (radio → PC)").on_hover_text(
-                "The sound card the radio's own audio comes in on — its headphone \
-                 socket into the computer's line or mic input. Everything on the \
-                 panadapter and in the decoders arrives here.",
-            );
-            device_combo(ui, "ua-in", inputs, &ci, |n| cfg.radio_audio_in = n);
-            ui.end_row();
-            ui.label("Transmit (PC → radio mic)").on_hover_text(
-                "The sound card that carries the audio the radio must broadcast — \
-                 the computer's output into the radio's mic socket. The radio keys \
-                 itself, by VOX, the moment audio arrives here, so this device is \
-                 silent unless the radio is being transmitted through.",
-            );
-            device_combo(ui, "ua-out", outputs, &co, |n| cfg.radio_audio_out = n);
-            ui.end_row();
+            device_combo(ui, "ua-in", inputs, &ci, |n| cfg.radio_audio_in = n)
         });
+        ui.end_row();
+        ui.label("Transmit (PC → radio mic)").on_hover_text(
+            "The sound card that carries the audio the radio must broadcast — \
+             the computer's output into the radio's mic socket. The radio keys \
+             itself, by VOX, the moment audio arrives here, so this device is \
+             silent unless the radio is being transmitted through.",
+        );
+        probe_only(ui, can_probe, |ui| {
+            device_combo(ui, "ua-out", outputs, &co, |n| cfg.radio_audio_out = n)
+        });
+        ui.end_row();
     });
     ui.add_space(4.0);
     ui.label(

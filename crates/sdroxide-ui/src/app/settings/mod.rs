@@ -2346,24 +2346,15 @@ impl SdroxideApp {
                         io.can_probe,
                         cmds,
                     ),
-                    Backend::UsbAudio => {
-                        settings_usb_audio_tab(
-                            ui,
-                            &self
-                                .radio_audio_devices
-                                .as_ref()
-                                .map(|(i, _)| i.as_slice())
-                                .unwrap_or(&[]),
-                            &self
-                                .radio_audio_devices
-                                .as_ref()
-                                .map(|(_, o)| o.as_slice())
-                                .unwrap_or(&[]),
-                            io.radio_edit,
-                            io.apply_iface,
-                            io.can_probe,
-                        );
-                    }
+                    Backend::UsbAudio => settings_usb_audio_tab(
+                        ui,
+                        self.radio_audio_devices
+                            .as_ref()
+                            .map(|(i, o)| (i.as_slice(), o.as_slice())),
+                        io.radio_edit,
+                        io.apply_iface,
+                        io.can_probe,
+                    ),
                     Backend::Tci => settings_tci_tab(
                         ui,
                         io.radio_edit,

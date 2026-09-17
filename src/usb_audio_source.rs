@@ -25,8 +25,8 @@ use crate::audio_cat_source::{DropWatch, drain_tx_audio, write_tx_audio};
 /// demod-audio CAT path defaults to ([`sdroxide_types::CatConfig::audio_bw_hz`]).
 const AUDIO_BW_HZ: f64 = 4000.0;
 
-/// The first missing-box warning also says what the operator can expect; this
-/// one says who must act now.
+/// A radio reached through nothing but two sound cards: demod audio in from
+/// one, transmit audio out to the other, keyed by the rig's own VOX.
 pub struct UsbAudioSource {
     // RX audio from the radio (mono demod). `None` when the capture device
     // could not be opened — the app still runs so the user can fix the device
@@ -50,10 +50,7 @@ pub struct UsbAudioSource {
     /// channel bookkeeping, the digi identity and the log; it never becomes a
     /// command to hardware ([`IqSource::center_is_dial`] is false).
     center: f64,
-    /// Whether a mode that follows the band has to be translated to a plain
-    /// sideband by the engine before this source sees it. False: there is no
-    /// sideband to command, the radio sits wherever its own knob is, and
-    /// whatever arrives at the mic line is what goes out.
+    /// What [`IqSource::describe`] calls this radio: the receive card's name.
     label: String,
     /// Warning captured at open time (RX device unavailable), surfaced to the
     /// UI. `None` when RX came up cleanly.
@@ -81,7 +78,7 @@ impl UsbAudioSource {
             tracing::warn!(
                 "no sound card chosen for the USB audio radio ({}) — falling back to the system \
                  default, which is not this radio unless it happens to be the default. Pick its \
-                 devices under Settings → General → Radio audio.",
+                 devices under Settings → Radio.",
                 match (audio_in.is_none(), audio_out.is_none()) {
                     (true, true) => "receive and transmit",
                     (true, false) => "receive",
