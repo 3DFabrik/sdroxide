@@ -56,6 +56,9 @@ pub struct UsbAudioSource {
     /// Warning captured at open time (RX device unavailable), surfaced to the
     /// UI. `None` when RX came up cleanly.
     status: Option<String>,
+    /// Set by [`IqSource::release`]: both sound devices have been given back,
+    /// and the engine is to build a replacement.
+    released: bool,
 }
 
 impl UsbAudioSource {
@@ -148,6 +151,7 @@ impl UsbAudioSource {
             center: center_hz,
             label: format!("USB audio radio on {dev_label}"),
             status,
+            released: false,
         })
     }
 
@@ -291,6 +295,24 @@ impl IqSource for UsbAudioSource {
 
     fn open_status(&self) -> Option<String> {
         self.status.clone()
+    }
+
+    fn needs_reopen(&self) -> bool {
+        self.released
+    }
+
+    /// Give back both sound devices before the engine opens the replacement,
+    /// which will want at least one of them — the same cards after "Apply /
+    /// reconnect", or the same card for a CAT rig. A named ALSA `hw:` device is
+    /// held exclusively, so opening the new source beside this one fails and
+    /// leaves the radio deaf (issue #15, the same fix `AudioCatSource` has).
+    fn release(&mut self) {
+        if self.released {
+            return;
+        }
+        self.in_stream = None;
+        self.out = None;
+        self.released = true;
     }
 
     fn display_bandwidth(&self) -> Option<f64> {
