@@ -317,7 +317,7 @@ impl DigiEngine for WefaxController {
         let w = self.width as usize;
         if w > 0 {
             let h = self.image.len() / w;
-            sdroxide_types::shift_rows(&mut self.image, w, h, pixels);
+            sdroxide_types::shift_fax_rows(&mut self.image, w, h, pixels);
         }
         self.status_dirty = true;
     }

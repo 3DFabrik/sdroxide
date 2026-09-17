@@ -185,7 +185,7 @@ impl WefaxUi {
         if self.live_w == 0 || self.live_h == 0 {
             return;
         }
-        sdroxide_types::shift_rows(
+        sdroxide_types::shift_fax_rows(
             &mut self.live,
             self.live_w as usize,
             self.live_h as usize,
