@@ -19,15 +19,19 @@
 //! # Linking faad2
 //!
 //! nrsc5 decodes its HDC audio with faad2's `NeAACDec*` symbols. They come
-//! from the one combined DRM+HDC faad2 archive that `sdroxide-drm` builds;
-//! whatever links this crate must link that crate too, or the final link will
-//! fail on those symbols. Two faad2 copies in the same binary must never
-//! happen — they collide on every `NeAACDec*` symbol.
+//! from `sdroxide-faad2`, the one faad2 archive in the binary — upstream faad2
+//! with nrsc5's HDC patch applied at build time, shared with the DRM receiver.
+//! Two faad2 copies in the same binary must never happen: they collide on
+//! every `NeAACDec*` symbol.
 
 #![deny(missing_docs)]
 
 pub mod demod;
 pub use demod::HdDemod;
+
+// Named so its faad2 archive is linked: nrsc5 calls `NeAACDec*` from C, which
+// Rust cannot see.
+use sdroxide_faad2 as _;
 
 use std::ffi::{c_char, c_float, c_int, c_uint, c_void};
 use std::sync::mpsc::{self, Receiver};

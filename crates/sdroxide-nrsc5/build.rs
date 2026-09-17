@@ -15,11 +15,11 @@
 //!   receive path creates is a power of two (2048 in FM, 256 in AM), so the
 //!   stand-in is a plain radix-2 Cooley-Tukey and needs none of Dream's
 //!   Bluestein fallback.
-//! * **faad2** — nrsc5 decodes its HDC audio with `NeAACDec*`, and those
-//!   symbols already exist in the single DRM+HDC faad2 archive that
-//!   `crates/sdroxide-drm` builds. The include path points at that same
-//!   vendored tree so the HDC declarations line up; `sdroxide-drm` must be
-//!   linked into whatever uses this crate. A second faad2 copy must never be
+//! * **faad2** — nrsc5 decodes its HDC audio with `NeAACDec*`, from the one
+//!   DRM+HDC faad2 archive `crates/sdroxide-faad2` builds with nrsc5's HDC
+//!   patch applied. The include path is that crate's patched headers
+//!   (`DEP_FAAD2_INCLUDE`), so `NeAACDecInitHDC` is declared; the unpatched
+//!   `vendor/faad2` does not have it. A second faad2 copy must never be
 //!   compiled in.
 //!
 //! The pipe uses a caller thread and a worker thread (with the callbacks fired
@@ -77,17 +77,14 @@ fn main() {
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     let nrsc5 = manifest.join("../../vendor/nrsc5");
-    let faad2 = manifest.join("../../vendor/faad2");
+    // The patched faad2 headers, exported by `sdroxide-faad2`'s build script.
+    let faad2_include = PathBuf::from(
+        env::var("DEP_FAAD2_INCLUDE").expect("sdroxide-faad2 exports its include directory"),
+    );
     if !nrsc5.join("include/nrsc5.h").exists() {
         panic!(
             "vendored nrsc5 is missing at {}\nSynchronise submodules: git submodule update --init --recursive",
             nrsc5.display()
-        );
-    }
-    if !faad2.join("include/neaacdec.h").exists() {
-        panic!(
-            "vendored faad2 is missing at {}\nSynchronise submodules: git submodule update --init --recursive",
-            faad2.display()
         );
     }
 
@@ -105,7 +102,7 @@ fn main() {
         .include(nrsc5.join("src"))
         .include(nrsc5.join("include"))
         .include(manifest.join("include"))
-        .include(faad2.join("include"))
+        .include(&faad2_include)
         .define("_GNU_SOURCE", None)
         .define("GIT_COMMIT_HASH", "\"0225922\"")
         .opt_level(2)

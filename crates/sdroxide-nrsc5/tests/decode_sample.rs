@@ -4,7 +4,7 @@
 //! FM HD Radio, decoded by upstream's CLI to prove a build works (their
 //! workflow watches the log for the station text). Piping it through this
 //! crate instead proves the whole chain here — the vendored library, the FFTW
-//! stand-in and the combined faad2 link all at once.
+//! stand-in and the patched faad2 link all at once.
 //!
 //! Defaults to ignored: it decompresses ~48 MB and decodes in real-ish time
 //! per sample, so it is not part of the ordinary `cargo test` run. Run with
@@ -16,10 +16,6 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use sdroxide_nrsc5::{Event, HdReceiver, Mode};
-
-// The HDC decode calls resolve to the single DRM+HDC faad2 archive that
-// `sdroxide-drm` builds; keeping its rlib in the link forwards that archive.
-use sdroxide_drm as _;
 
 #[test]
 #[ignore = "decompresses 48 MB and decodes for several seconds"]
