@@ -3156,6 +3156,16 @@ The panel has two halves:
   **CLEAR RX** empties the list by hand, for when the band has gone quiet and
   what is on screen is a list of stations that *were* there. Nothing on the air
   stops, and the next slot starts filling it again.
+  **CSV** and **ADIF** in the DECODES header save the list as it stands — the
+  last 200 decodes — for a listener who has heard stations but worked none, so
+  the logbook's own exports have nothing to write (issue #433). The frequency
+  of each row is the dial it was heard on plus its audio tone, so a row keeps
+  its frequency after a move within the band. **CSV** is one row per decode, for
+  a spreadsheet. **ADIF** is one record per station heard, marked `SWL` so a
+  logger — sdroxide's own **IMPORT** included — takes it as a received report
+  rather than a contact, with no report sent or received; a decode that names
+  no sender (free text, a hashed call not yet resolved) has no call to log and
+  is left out.
 - **QSO** (right) — a **⇵** frequency button listing every band's agreed FT8/FT4
   frequency ([3.1](#31-general-considerations)), a world map
   (your location, the station you are working, and
