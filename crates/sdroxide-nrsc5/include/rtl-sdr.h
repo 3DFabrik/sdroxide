@@ -5,15 +5,35 @@
  * only ever feeds HD Radio through nrsc5's pipe API and never touches the
  * library's own device driver. Rather than make a librtlsdr development package
  * a build requirement, declare the handful of entry points nrsc5.c names; the
- * weak definitions in rtlsdr_stubs.c satisfy the linker. A real librtlsdr
- * linked into a final binary overrides those weak stubs, so nrsc5_open() would
- * still work where the library is present.
+ * definitions in rtlsdr_stubs.c satisfy the linker.
+ *
+ * Every name is renamed first, for nrsc5 and the stubs alike, so the stubs are
+ * private to this library: they cannot collide with, or be mistaken for, a
+ * real librtlsdr anywhere else in a binary.
  *
  * Keep this in step with rtlsdr_stubs.c.
  */
 
 #ifndef SDROXIDE_NRSC5_RTL_SDR_STUB_H
 #define SDROXIDE_NRSC5_RTL_SDR_STUB_H
+
+#define rtlsdr_open sdrx_nrsc5_rtlsdr_open
+#define rtlsdr_close sdrx_nrsc5_rtlsdr_close
+#define rtlsdr_set_center_freq sdrx_nrsc5_rtlsdr_set_center_freq
+#define rtlsdr_get_center_freq sdrx_nrsc5_rtlsdr_get_center_freq
+#define rtlsdr_set_sample_rate sdrx_nrsc5_rtlsdr_set_sample_rate
+#define rtlsdr_set_tuner_gain_mode sdrx_nrsc5_rtlsdr_set_tuner_gain_mode
+#define rtlsdr_set_tuner_gain sdrx_nrsc5_rtlsdr_set_tuner_gain
+#define rtlsdr_get_tuner_gain sdrx_nrsc5_rtlsdr_get_tuner_gain
+#define rtlsdr_get_tuner_gains sdrx_nrsc5_rtlsdr_get_tuner_gains
+#define rtlsdr_set_offset_tuning sdrx_nrsc5_rtlsdr_set_offset_tuning
+#define rtlsdr_set_freq_correction sdrx_nrsc5_rtlsdr_set_freq_correction
+#define rtlsdr_set_bias_tee sdrx_nrsc5_rtlsdr_set_bias_tee
+#define rtlsdr_set_direct_sampling sdrx_nrsc5_rtlsdr_set_direct_sampling
+#define rtlsdr_reset_buffer sdrx_nrsc5_rtlsdr_reset_buffer
+#define rtlsdr_read_sync sdrx_nrsc5_rtlsdr_read_sync
+#define rtlsdr_read_async sdrx_nrsc5_rtlsdr_read_async
+#define rtlsdr_cancel_async sdrx_nrsc5_rtlsdr_cancel_async
 
 #include <stdint.h>
 

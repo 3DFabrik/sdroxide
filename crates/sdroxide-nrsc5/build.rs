@@ -8,8 +8,9 @@
 //!   package manifest for where that sits licence-wise). The CLI (`main.c`) is
 //!   not built; the library itself and `rtltcp.c` are. Its own CMake only
 //!   exists to wire up fftw3f and faad2, neither of which is usable here.
-//!   `src/rtlsdr_stubs.c` supplies weak no-ops for the librtlsdr calls the
-//!   library makes on its device path, which the pipe path never reaches.
+//!   `src/rtlsdr_stubs.c` supplies no-ops, under private names, for the
+//!   librtlsdr calls the library makes on its device path, which the pipe path
+//!   never reaches.
 //! * **fftw3f** — `include/fftw3.h` plus `src/fftwf_compat.c` provide the five
 //!   single-precision entry points the library uses. Every transform the
 //!   receive path creates is a power of two (2048 in FM, 256 in AM), so the
@@ -22,9 +23,11 @@
 //!   `vendor/faad2` does not have it. A second faad2 copy must never be
 //!   compiled in.
 //!
-//! The pipe uses a caller thread and a worker thread (with the callbacks fired
-//! on the worker). The Windows CI build is MinGW, like nrsc5's own
-//! `msys2-build`; MSVC cannot compile this C at all.
+//! Opened on a pipe, the library runs no thread of its own: all of its work and
+//! every callback happen inside the call that pipes samples in, which is why
+//! `src/worker.rs` makes that call from a thread of its own. The Windows CI
+//! build is MinGW, like nrsc5's own `msys2-build`; MSVC cannot compile this C
+//! at all.
 
 use std::env;
 use std::fs;
@@ -66,13 +69,24 @@ const CONFIG_H: &str = r#"#pragma once
 #define HAVE_CMPLXF 1
 #define HAVE_COMPLEX_I 1
 
-/* Log levels run TRACE(0) .. FATAL(5); a macro fires when its level is at or
- * below this. `4` surfaces warnings and errors on stderr while the receive
- * path is exercised, without the per-symbol chatter. */
+/* `log_debug` fires at 1 and below, `log_info` at 2, `log_warn` at 3 and
+ * `log_error` at 4 (`src/defines.h`). `4` keeps only the errors on stderr: a
+ * weak station makes the decoder warn about every packet it cannot decode,
+ * and the panel already shows that as CBER and the AUDIO light. */
 #define LIBRARY_DEBUG_LEVEL 4
 "#;
 
 fn main() {
+    // A build script runs on the host, so the target comes from the environment.
+    let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    if target_env == "msvc" {
+        panic!(
+            "nrsc5 is C99 with complex arithmetic, which MSVC cannot compile; build sdroxide \
+             for the x86_64-pc-windows-gnu target (MinGW), as the Windows release does"
+        );
+    }
+
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
 
@@ -91,7 +105,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/fftwf_compat.c");
     println!("cargo:rerun-if-changed=src/rtlsdr_stubs.c");
     println!("cargo:rerun-if-changed=src/layout_check.c");
-    println!("cargo:rerun-if-changed=include/fftw3.h");
+    println!("cargo:rerun-if-changed=include");
     println!("cargo:rerun-if-changed={}", nrsc5.join("src").display());
     println!("cargo:rerun-if-changed={}", nrsc5.join("include").display());
 
@@ -109,18 +123,14 @@ fn main() {
         .opt_level(2)
         .warnings(false);
 
-    let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    let env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
-    if env != "msvc" {
-        // nrsc5's CMake also forces this; MSVC is out of scope (MinGW only).
-        build.flag("-std=gnu11");
-    }
+    // nrsc5's CMake forces this too.
+    build.flag("-std=gnu11");
 
     for src in NRS_LIBRARY_SOURCES {
         build.file(nrsc5.join("src").join(src));
     }
-    // nrsc5.c calls librtlsdr unconditionally; these weak stubs stand in for
-    // it on the pipe-only path (see the file's comment).
+    // nrsc5.c calls librtlsdr unconditionally; these stubs stand in for it on
+    // the pipe-only path (see the file's comment).
     build.file(manifest.join("src/rtlsdr_stubs.c"));
     build.file(manifest.join("src/fftwf_compat.c"));
     // Compile-time only: fails the build if `nrsc5_event_t` no longer matches
@@ -128,7 +138,7 @@ fn main() {
     build.file(manifest.join("src/layout_check.c"));
     build.compile("sdroxide_nrsc5");
 
-    // The receive path spans a worker thread and rtltcp's sockets.
+    // nrsc5 is built with pthread (its device-path worker) and rtltcp's sockets.
     match os.as_str() {
         "linux" | "macos" | "freebsd" => {
             println!("cargo:rustc-link-lib=dylib=pthread");
@@ -139,5 +149,4 @@ fn main() {
         }
         _ => {}
     }
-    let _ = env;
 }
