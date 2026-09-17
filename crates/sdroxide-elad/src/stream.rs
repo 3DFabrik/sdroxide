@@ -236,10 +236,11 @@ fn pump(
             deconstruct.set_scale(dev.scale());
         }
 
-        // 1b. Ask the radio where it is, on a timer. Only an FDM-DUO answers,
-        //     and only its own front panel can make the answer differ from what
-        //     we last commanded.
-        if last_tune_poll.elapsed() >= TUNE_POLL {
+        // 1b. Ask the radio where it is, on a timer — when the owner wants it
+        //     (`EladHandle::follow_radio_dial`). Only an FDM-DUO answers, and
+        //     only its own front panel can make the answer differ from what we
+        //     last commanded.
+        if shared.read_dial.load(Ordering::Relaxed) && last_tune_poll.elapsed() >= TUNE_POLL {
             last_tune_poll = Instant::now();
             match dev.read_tuned() {
                 Ok(Some(t)) => {

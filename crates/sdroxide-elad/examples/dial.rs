@@ -20,6 +20,7 @@ fn main() {
         .init();
     let cfg = EladConfig { sample_rate_hz: 192_000, ..EladConfig::default() };
     let mut handle = EladHandle::open(&cfg, 940_000.0).expect("open the ELAD");
+    handle.follow_radio_dial(true);
     println!("opened {}", handle.label);
     let mut buf = vec![0f32; 8192];
     for i in 0..40 {

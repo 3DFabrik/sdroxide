@@ -379,6 +379,14 @@ pub(crate) struct Shared {
     /// assumed — see `Device::read_tuned`. Whole Hz because the radio reports
     /// whole Hz, which also makes an atomic the whole of the plumbing.
     pub duo_tuned_hz: AtomicU64,
+    /// Whether the stream thread asks the radio for its dial at all.
+    ///
+    /// Off until the owner turns it on, because only one owner needs it: a
+    /// DUO driven through its USB gateway, which has no other way to see the
+    /// knob. With a CAT serial port the dial already comes back over serial,
+    /// and four control transfers a second on the streaming interface would
+    /// buy nothing but a chance to stall it.
+    pub read_dial: AtomicBool,
 }
 
 impl Shared {
@@ -388,6 +396,7 @@ impl Shared {
             last_rx_ms: AtomicU64::new(0),
             rx_paused: AtomicBool::new(false),
             duo_tuned_hz: AtomicU64::new(0),
+            read_dial: AtomicBool::new(false),
         }
     }
 }
@@ -499,11 +508,21 @@ impl EladHandle {
     /// front-panel knob moves it and this is how that becomes visible without a
     /// CAT serial port. `None` until the first read comes back, and on every
     /// model that has no VFO to turn.
+    ///
+    /// Nothing is asked until [`Self::follow_radio_dial`] turns the read on.
     pub fn tuned_hz(&self) -> Option<f64> {
         match self.shared.duo_tuned_hz.load(Ordering::Relaxed) {
             0 => None,
             hz => Some(hz as f64),
         }
+    }
+
+    /// Have the stream thread read the radio's own dial back (see
+    /// [`Self::tuned_hz`]), or stop it. For a DUO with no CAT serial port,
+    /// which has no other way to see its knob turned; everywhere else the read
+    /// is traffic on the streaming interface that nothing uses.
+    pub fn follow_radio_dial(&self, on: bool) {
+        self.shared.read_dial.store(on, Ordering::Relaxed);
     }
 
     pub fn set_center_hz(&self, hz: f64) {

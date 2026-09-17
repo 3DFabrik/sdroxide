@@ -365,6 +365,10 @@ impl EladSource {
         // `Protocol::clear_offsets`; this is the gateway's copy of it.
         if matches!(src.control, Control::Gateway) {
             src.handle.send_cat(sdroxide_cat::elad::vfo_frame(Vfo::A));
+            // And its dial is read back, which is the only way this path sees
+            // the knob turned. Not on the serial path, where the CAT poll
+            // already reports it.
+            src.handle.follow_radio_dial(true);
         }
         // Put the transceiver's VFO on the window centre before the first
         // sample is looked at. On a DUO that is where the window *is*, so the
