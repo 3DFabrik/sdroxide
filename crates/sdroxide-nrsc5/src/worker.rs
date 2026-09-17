@@ -198,8 +198,14 @@ fn run(
             }
             receiver = None;
             feed = Feed::new(channel_rate);
-            shared.audio().frames.clear();
-            *shared.status() = HdRadioStatus::default();
+            // The programme was put back to HD-1 by whoever asked for the
+            // restart, and may have been changed again since; keep what it is.
+            let program = {
+                let mut audio = shared.audio();
+                audio.frames.clear();
+                audio.selected
+            };
+            *shared.status() = HdRadioStatus { program, ..HdRadioStatus::default() };
             shared.status_dirty.store(true, Ordering::Relaxed);
             match HdReceiver::open(Mode::Fm) {
                 Ok(r) => receiver = Some(r),

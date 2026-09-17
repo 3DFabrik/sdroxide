@@ -99,17 +99,39 @@ impl HdDemod {
 
     /// Re-acquire from scratch. The demod cannot see a retune — the DDC ahead of
     /// it absorbs that — so the engine says.
+    ///
+    /// The programme goes back to HD-1. The one selected belonged to the station
+    /// tuned away from: kept, it would leave a single-programme station silent
+    /// behind lights that stay off, and a click on HD-2 would then do nothing
+    /// because HD-2 was already "selected". Reset here rather than on the
+    /// decoder thread, so a programme picked straight after the retune is not
+    /// undone when the thread gets round to restarting.
     pub fn restart(&mut self) {
         self.frame_debt = 0.0;
-        if let Some(w) = self.worker.as_ref() {
-            w.restart();
+        let Some(w) = self.worker.as_ref() else { return };
+        {
+            let mut audio = w.shared.audio();
+            audio.selected = 0;
+            audio.frames.clear();
         }
+        w.shared.status().program = 0;
+        w.shared.status_dirty.store(true, Ordering::Relaxed);
+        w.restart();
     }
 
     /// Listen to a different programme of the multiplex, 0-based. Audio for the
     /// previous one is dropped rather than mixed in.
+    ///
+    /// A programme the multiplex has not announced is ignored rather than
+    /// clamped (see `Command::SetHdProgram`): a stale click from a client that
+    /// has not seen the multiplex change should do nothing rather than land
+    /// somewhere else. HD-1 is always there.
     pub fn select_program(&mut self, program: u8) {
         let Some(w) = self.worker.as_ref() else { return };
+        if !program_announced(&w.shared.status(), program) {
+            debug!(program, "ignored a programme the HD Radio multiplex does not carry");
+            return;
+        }
         {
             let mut audio = w.shared.audio();
             if program == audio.selected {
@@ -131,6 +153,12 @@ impl HdDemod {
     pub fn backlog_drops(&self) -> u64 {
         self.drops
     }
+}
+
+/// Whether `program` is one the multiplex carries: HD-1, or a programme its
+/// station information has announced.
+fn program_announced(status: &HdRadioStatus, program: u8) -> bool {
+    program == 0 || status.audio_services.iter().any(|s| s.program == program)
 }
 
 /// Move `want` audio frames from the interleaved stereo queue into `out` (as
@@ -275,6 +303,22 @@ mod tests {
         assert!(out[1].abs() < 1e-6);
         assert!((side[1] - 0.5).abs() < 1e-6, "side is (L-R)/2: {}", side[1]);
         assert!(audio.is_empty(), "both frames consumed, four values");
+    }
+
+    /// HD-1 is always selectable; anything else only once the station has
+    /// announced it.
+    #[test]
+    fn only_an_announced_programme_is_selectable() {
+        let mut status = HdRadioStatus::default();
+        assert!(program_announced(&status, 0));
+        assert!(!program_announced(&status, 1), "nothing announced yet");
+        status.audio_services.push(sdroxide_types::HdAudioService {
+            program: 1,
+            access: 0,
+            codec_mode: 0,
+        });
+        assert!(program_announced(&status, 1));
+        assert!(!program_announced(&status, 2), "HD-3 was never announced");
     }
 
     /// A block is always as long as real time says, whether or not the decoder
