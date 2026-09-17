@@ -478,4 +478,29 @@ Location,Name,Frequency,Duplex,Offset,Tone,rToneFreq,cToneFreq,DtcsCode,DtcsPola
             assert_eq!(a.repeater, b.repeater, "{}", a.name);
         }
     }
+
+    /// The parser has to survive whatever file it is handed, not merely report
+    /// it: the native import catches a panic and costs only the import, but in
+    /// the browser a panic aborts the whole page, so there the parser itself is
+    /// the only guard. Every prefix of a real export — a line cut anywhere,
+    /// inside a quote or a number — and a handful of files that are not CHIRP
+    /// at all.
+    #[test]
+    fn a_damaged_file_never_panics() {
+        for end in 0..=SAMPLE.len() {
+            if SAMPLE.is_char_boundary(end) {
+                let _ = chirp_csv_to_memories(&SAMPLE[..end]);
+            }
+        }
+        for junk in [
+            "Name,Frequency\n\"unterminated,145.5\n",
+            "Name,Frequency,Duplex,Offset\nX,1e308,+,1e308\n",
+            "Name,Frequency,Duplex,Offset\nX,-145.5,-,-99999999999\n",
+            "Name,Frequency,Tone,rToneFreq,DtcsCode\nX,145.5,DTCS,NaN,99999999999999999999\n",
+            "Frequency\n,,,,,,,,,,,,\n\"\"\"\n",
+            "\u{feff}Name,Frequency\nÄ€\u{0},145.5\n",
+        ] {
+            let _ = chirp_csv_to_memories(junk);
+        }
+    }
 }

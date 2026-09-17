@@ -3327,6 +3327,23 @@ mod tests {
     }
 
     #[test]
+    fn adif_import_survives_tags_that_are_not_tags() {
+        // In the browser a parser panic aborts the page rather than the import,
+        // so malformed tags have to be survived here, not caught upstream.
+        for junk in [
+            "<call:99999999999999999999999>W1AW<eor>",
+            "<call:-1>W1AW<eor>",
+            "<:5>W1AW<eor>",
+            "<call:5:x>W1AW <eor",
+            "<qso_date:8>9999999<time_on:6>99 <eor>",
+            "<eoh><eoh><eor><eor><<<>>>",
+            "<call:3>Ä€ <freq:4>NaN <band:0> <eor>",
+        ] {
+            let _ = adif_to_qso_log(junk);
+        }
+    }
+
+    #[test]
     fn time_round_trips() {
         for &t in &[0i64, 1_609_459_260, 1_753_050_960, 2_000_000_000] {
             let (y, mo, d, h, mi, s) = utc_ymd_hms(t);
