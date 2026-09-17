@@ -454,7 +454,7 @@ const NORD: Palette = Palette {
     text_strong: c(0xeceff4),
     cyan: c(0x88c0d0),
     cyan_dim: c(0x81a1c1),
-    pink: c(0xb48ead),
+    pink: c(0xb793b0),
     yellow: c(0xebcb8b),
     green: c(0xa3be8c),
     ink_on_cyan: c(0x16202b),
@@ -472,7 +472,7 @@ const NORD: Palette = Palette {
     faint_bg: c(0x2b3240),
     // Nord's own red is a muted rose (g=0x61) — too close to the edge of "is
     // this red?" to be an alarm. A hotter red of the same family stands in.
-    alert: c(0xd44755),
+    alert: c(0xdd4b5c),
     hazard: c(0xebcb8b),
     hazard_dark: c(0x232112),
 };
@@ -531,7 +531,7 @@ const GRUVBOX: Palette = Palette {
     text: c(0xebdbb2),
     text_strong: c(0xfbf1c7),
     cyan: c(0x83a598),
-    cyan_dim: c(0x627c72),
+    cyan_dim: c(0x80958d),
     pink: c(0xfe8019),
     yellow: c(0xfabd2f),
     green: c(0xb8bb26),
@@ -569,7 +569,7 @@ const EVERFOREST: Palette = Palette {
     text: c(0xd3c6aa),
     text_strong: c(0xf4e8cf),
     cyan: c(0x7fbbb3),
-    cyan_dim: c(0x5e8c86),
+    cyan_dim: c(0x68938d),
     pink: c(0xd699b6),
     yellow: c(0xdbbc7f),
     green: c(0xa7c080),
@@ -595,6 +595,11 @@ const EVERFOREST: Palette = Palette {
 
 /// Ethan Schoonover's Solarized: teal, blue and magenta accents on the deep
 /// blue-grey base03/base02 grounds.
+///
+/// Solarized's own accents are pitched for base03 and sit under 4.5:1 on
+/// base02, which is the panel here — magenta at under 3:1 — so each is taken
+/// just far enough toward white to clear it, and the red just far enough to
+/// clear 3:1 while staying red (see `every_dark_theme_keeps_its_accents_readable`).
 const SOLARIZED_DARK: Palette = Palette {
     light: false,
     no_dim: false,
@@ -608,11 +613,11 @@ const SOLARIZED_DARK: Palette = Palette {
     line_lit: c(0x586e75),
     text: c(0x93a1a1),
     text_strong: c(0xeee8d5),
-    cyan: c(0x2aa198),
-    cyan_dim: c(0x268bd2),
-    pink: c(0xd33682),
-    yellow: c(0xb58900),
-    green: c(0x859900),
+    cyan: c(0x3faaa2),
+    cyan_dim: c(0x4fa1db),
+    pink: c(0xe278ab),
+    yellow: c(0xbc951a),
+    green: c(0x91a31a),
     ink_on_cyan: c(0x0a2a24),
     ink_on_bright: Color32::BLACK,
     red_deep: c(0x642322),
@@ -626,7 +631,7 @@ const SOLARIZED_DARK: Palette = Palette {
     scroll_handle_hover: c(0x2aa198),
     scroll_handle_drag: c(0xd33682),
     faint_bg: c(0x052831),
-    alert: c(0xdc322f),
+    alert: c(0xe53c41),
     hazard: c(0xb58900),
     hazard_dark: c(0x171407),
 };
@@ -2511,6 +2516,37 @@ mod tests {
                 let r = contrast(ink, p.panel);
                 assert!(r >= 4.5, "palette {i} {name} is {r:.2}:1 on the panel — needs 4.5:1");
             }
+        }
+    }
+
+    /// The dark themes keep their accents readable as ink too: a section label
+    /// in `cyan_dim` is 9.5 pt text, and a heading, a report or a warning line
+    /// in any of the others is read, not just seen. Every dark theme predating
+    /// the Solarized/Gruvbox/Everforest set already cleared 4.5:1 on its panel,
+    /// and this keeps a new one from quietly arriving under it.
+    ///
+    /// The alert role is held to 3:1 instead. It has to stay a real red
+    /// ([`every_theme_keeps_alerts_red`]), and on a mid-grey ground like
+    /// Nord's no red that bright exists — but a TX or SWR indication that
+    /// cannot even be *seen* is worse than one that is merely hard to read.
+    #[test]
+    fn every_dark_theme_keeps_its_accents_readable() {
+        for (i, p) in PALETTES.iter().enumerate() {
+            if p.light {
+                continue;
+            }
+            for (ink, name) in [
+                (p.cyan, "cyan"),
+                (p.cyan_dim, "cyan_dim"),
+                (p.pink, "pink"),
+                (p.yellow, "yellow"),
+                (p.green, "green"),
+            ] {
+                let r = contrast(ink, p.panel);
+                assert!(r >= 4.5, "palette {i} {name} is {r:.2}:1 on the panel — needs 4.5:1");
+            }
+            let r = contrast(p.alert, p.panel);
+            assert!(r >= 3.0, "palette {i} alert is {r:.2}:1 on the panel — needs 3:1");
         }
     }
 
