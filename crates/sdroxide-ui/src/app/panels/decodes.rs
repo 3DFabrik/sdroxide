@@ -64,9 +64,7 @@ impl SdroxideApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let n = self.digi_decodes.len();
                     ui.label(
-                        RichText::new(format!("{n} rx"))
-                            .size(10.0)
-                            .color(crate::theme::gray(120)),
+                        RichText::new(format!("{n} rx")).size(10.0).color(crate::theme::gray(120)),
                     );
                     // The SWL's export (issue #433): the decode list as received
                     // reports. The ADIF/TXT buttons elsewhere save the logbook,
@@ -75,13 +73,13 @@ impl SdroxideApp {
                     if ui
                         .add_enabled(n > 0, egui::Button::new("ADIF"))
                         .on_hover_text(format!(
-                            "Save the {n} decoded stations as ADIF — received reports, not contacts"
+                            "Save the {n} decodes in the list as ADIF — received reports, not \
+                             contacts. Decodes that name no sender are left out."
                         ))
                         .clicked()
                     {
                         let adif = sdroxide_types::digi_decodes_to_adif(
-                            &self.digi_decodes,
-                            self.state.rx_freq_hz(),
+                            self.digi_decodes.iter().zip(self.digi_decode_dials.iter().copied()),
                             self.state.rx[0].mode,
                         );
                         crate::download::save("sdroxide-decodes.adi", adif.as_bytes());
@@ -89,13 +87,12 @@ impl SdroxideApp {
                     if ui
                         .add_enabled(n > 0, egui::Button::new("CSV"))
                         .on_hover_text(format!(
-                            "Save the {n} decoded stations as CSV, one row each"
+                            "Save the {n} decodes in the list as CSV, one row each"
                         ))
                         .clicked()
                     {
                         let csv = sdroxide_types::digi_decodes_to_csv(
-                            &self.digi_decodes,
-                            self.state.rx_freq_hz(),
+                            self.digi_decodes.iter().zip(self.digi_decode_dials.iter().copied()),
                             self.state.rx[0].mode,
                         );
                         crate::download::save("sdroxide-decodes.csv", csv.as_bytes());

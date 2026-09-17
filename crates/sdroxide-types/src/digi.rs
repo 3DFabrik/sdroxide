@@ -2671,12 +2671,17 @@ fn decode_utc(dec: &Decode) -> String {
 ///
 /// This is the short-wave listener's export. Nothing in the decode list is a
 /// contact, so there is no [`QsoRecord`] to write and the logbook's own ADIF and
-/// text exports have nothing to say about it (issue #433). `dial_hz` and `mode`
-/// come from the receiver: a [`Decode`] carries the audio offset, not the
-/// absolute frequency, so the signal is the dial plus `audio_hz`.
-pub fn digi_decodes_to_csv(decodes: &[Decode], dial_hz: f64, mode: Mode) -> String {
+/// text exports have nothing to say about it (issue #433). Each decode comes
+/// with the receive dial it was heard on: a [`Decode`] carries the audio offset,
+/// not the absolute frequency, so the signal is that dial plus `audio_hz` — and
+/// the list survives a QSY inside the band, so the dial *now* is not the one an
+/// older decode was heard on. `mode` is the receiver's.
+pub fn digi_decodes_to_csv<'a>(
+    decodes: impl IntoIterator<Item = (&'a Decode, f64)>,
+    mode: Mode,
+) -> String {
     let mut out = String::from("utc,snr_db,dt,freq_mhz,band,mode,call,to,grid,cq,message\r\n");
-    for d in decodes {
+    for (d, dial_hz) in decodes {
         let freq = dial_hz + d.audio_hz as f64;
         out.push_str(&format!(
             "{},{},{:.2},{:.6},{},{},{},{},{},{},{}\r\n",
@@ -2735,14 +2740,20 @@ pub fn digi_decode_to_adif_record(d: &Decode, dial_hz: f64, mode: Mode) -> Optio
     Some(out)
 }
 
-/// The whole decode list as an ADIF file, skipping the decodes that name no
-/// sender (see [`digi_decode_to_adif_record`]).
-pub fn digi_decodes_to_adif(decodes: &[Decode], dial_hz: f64, mode: Mode) -> String {
+/// The whole decode list as an ADIF file, each decode with the dial it was heard
+/// on (see [`digi_decodes_to_csv`]), skipping the decodes that name no sender
+/// (see [`digi_decode_to_adif_record`]).
+pub fn digi_decodes_to_adif<'a>(
+    decodes: impl IntoIterator<Item = (&'a Decode, f64)>,
+    mode: Mode,
+) -> String {
     let mut out = String::from(
         "ADIF export from sdroxide — received reports (SWL)\r\n\
          <ADIF_VER:5>3.1.4\r\n<PROGRAMID:8>sdroxide\r\n<EOH>\r\n",
     );
-    for record in decodes.iter().filter_map(|d| digi_decode_to_adif_record(d, dial_hz, mode)) {
+    for record in
+        decodes.into_iter().filter_map(|(d, dial_hz)| digi_decode_to_adif_record(d, dial_hz, mode))
+    {
         out.push_str(&record);
         out.push_str("\r\n");
     }
@@ -2772,7 +2783,7 @@ mod tests {
             free_text: false,
             rr73_to: None,
         };
-        let csv = digi_decodes_to_csv(std::slice::from_ref(&d), 27_265_000.0, Mode::Ft8);
+        let csv = digi_decodes_to_csv([(&d, 27_265_000.0)], Mode::Ft8);
         assert!(
             csv.starts_with("utc,snr_db,dt,freq_mhz,band,mode,call,to,grid,cq,message"),
             "{csv}"
@@ -2785,7 +2796,7 @@ mod tests {
         // A message with a comma is quoted; a spreadsheet is one cell per column.
         let mut comma = d.clone();
         comma.message = "CQ, TEST".into();
-        let csv = digi_decodes_to_csv(&[comma], 27_265_000.0, Mode::Ft8);
+        let csv = digi_decodes_to_csv([(&comma, 27_265_000.0)], Mode::Ft8);
         assert!(csv.contains("\"CQ, TEST\""), "a comma must be quoted: {csv}");
 
         // Free text names nobody, so it has no record to be.
@@ -2797,7 +2808,13 @@ mod tests {
             free_text: true,
             ..d.clone()
         };
-        let adif = digi_decodes_to_adif(&[d, free], 27_265_000.0, Mode::Ft8);
+        // Each decode is placed on the dial it was heard on, not the one the
+        // receiver has moved to since.
+        let later = Decode { slot_utc: d.slot_utc + 15, ..d.clone() };
+        let csv = digi_decodes_to_csv([(&later, 27_275_000.0), (&d, 27_265_000.0)], Mode::Ft8);
+        assert!(csv.contains("27.276500") && csv.contains("27.266500"), "per decode: {csv}");
+
+        let adif = digi_decodes_to_adif([(&d, 27_265_000.0), (&free, 27_265_000.0)], Mode::Ft8);
         assert!(adif.contains("<CALL:7>19AT250"), "the heard call: {adif}");
         assert_eq!(adif.matches("<EOR>").count(), 1, "only the decode with a sender: {adif}");
         assert!(adif.contains("<SWL:1>Y"), "a logger must not read it as a contact: {adif}");

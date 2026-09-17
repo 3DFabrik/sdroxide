@@ -541,6 +541,7 @@ impl SdroxideApp {
     /// purpose.
     pub(in crate::app) fn clear_digi_band_rx(&mut self) {
         self.digi_decodes.clear();
+        self.digi_decode_dials.clear();
         self.digi_stations = Default::default();
         self.digi_preview = None;
         // The Hell raster is a continuous strip with no frame boundary, so

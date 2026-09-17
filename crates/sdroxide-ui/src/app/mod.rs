@@ -463,6 +463,11 @@ pub struct SdroxideApp {
     skimmer_active_at: std::collections::HashMap<u64, f64>,
     // FT8/FT4 digital-mode state.
     digi_decodes: Vec<Decode>,
+    /// The receive dial each entry of `digi_decodes` arrived on, index for
+    /// index. A decode carries only its audio offset, and the list is kept
+    /// across a QSY inside the band, so the dial at export time is not the one
+    /// an older decode was heard on.
+    digi_decode_dials: Vec<f64>,
     digi_status: Option<DigiStatus>,
     /// PSK/RTTY outgoing text buffer (UI-owned; streamed to the engine, which
     /// reports back how many characters have been sent so we colour them green).
@@ -1311,6 +1316,7 @@ impl SdroxideApp {
             skimmer_spots: Vec::new(),
             skimmer_active_at: std::collections::HashMap::new(),
             digi_decodes: Vec::new(),
+            digi_decode_dials: Vec::new(),
             digi_status: None,
             text_tx: String::new(),
             qso_log: load_qso_log(storage),
