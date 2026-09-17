@@ -9960,7 +9960,9 @@ A/B button are all on the dial you are working, and each VFO keeps its own mode
 at both ends. What it cannot see is that button being pressed *at the radio* —
 the read-back reports a frequency, not which VFO produced it, so sdroxide reads
 a press of A/B as the dial having moved and follows it onto the VFO it already
-thinks you are on. With a CAT serial port set instead, the radio is kept on its
+thinks you are on. To put the two back in step, click sdroxide's **A** or **B**
+for the VFO you want, even the one already lit: that selects it at the radio
+too. With a CAT serial port set instead, the radio is kept on its
 VFO A and sdroxide drives that one dial, because the dial is read there by
 asking `FA;`, which answers VFO A whichever VFO is selected.
 

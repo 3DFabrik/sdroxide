@@ -732,17 +732,18 @@ impl IqSource for EladSource {
     /// Never while keyed: see [`Self::pending_vfo`]. The frequency needs no
     /// holding with it — the engine re-centres through `set_center_hz`, which
     /// records the centre that [`Self::tx_end`] puts the radio back on.
+    ///
+    /// Sent even when it names the VFO this end already believes the radio is
+    /// on. A press of A/B at the radio cannot be seen from here (the read-back
+    /// reports a frequency, not a VFO), and after one every command goes to the
+    /// VFO the radio is no longer on; re-selecting the VFO in sdroxide is the
+    /// way back into step, and it would do nothing if a no-change were skipped.
     fn select_vfo(&mut self, vfo: Vfo, hz: f64) {
         if !matches!(self.control, Control::Gateway) {
             return;
         }
-        // Checked before the no-change test: A and back to A inside one over
-        // has to cancel the B it was holding, not leave it to be selected.
         if self.keyed {
-            self.pending_vfo = (vfo != self.rig_vfo).then_some(vfo);
-            return;
-        }
-        if self.rig_vfo == vfo {
+            self.pending_vfo = Some(vfo);
             return;
         }
         self.rig_vfo = vfo;
