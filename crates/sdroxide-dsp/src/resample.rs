@@ -160,7 +160,7 @@ mod tests {
 
         let mut split = ComplexResampler::new(1_000_000.0, 744_187.5).unwrap();
         let mut pieces = Vec::new();
-        for block in input.chunks(333).chain(std::iter::empty()) {
+        for block in input.chunks(333) {
             split.push(block, &mut pieces);
         }
         assert!(!once.is_empty());
