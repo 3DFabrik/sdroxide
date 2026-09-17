@@ -4273,9 +4273,9 @@ and the report alone does not say which of them was being answered. The heard
 list summarises the same way. A message still arriving is shown greyed with a
 frame count, because a half-received sentence should not read like a complete
 one.
-**CLEAR RX**, beside the query buttons, empties the conversation. The heard list
-is left alone — it is a separate pane, and it is what `HEARING?` is answered
-from.
+**CLEAR RX**, at the end of the button row, empties the conversation, and is
+greyed while there is nothing in it. The heard list is left alone — it is a
+separate pane, and it is what `HEARING?` is answered from.
 
 **Replying.** Clicking a message — or a station's **REPLY** button — aims the
 composer at that station and drafts the reply the exchange expects. A heartbeat
@@ -4288,14 +4288,25 @@ evening from Vienna". Free text drafts nothing and only selects the station.
 Clicking a row rather than its REPLY button selects without touching what you
 have already typed.
 
-**Sending.** Type in the box and press Enter. Beside the send button is an
-estimate — `3f · 45s` — of how many frames the message needs and how long it
-will be on the air. Watch that number before you press send; it is the thing
-newcomers to JS8 find most surprising. With a station selected, the query buttons
-ask it directly: **SNR?** for a signal report, **GRID?**, **HEARING?** for what
-it is copying, **STATUS?** for its status message, **HW CPY?** for "how do you
-copy me", and **RR** / **73** to acknowledge and sign off. **CQ** calls
-generally, **HB** sends a single heartbeat.
+**Sending.** Nothing goes on the air until you press **SEND** or Enter. The
+buttons under the conversation only fill the text box, so what is about to be
+transmitted is always on screen first, and you can still change it. Beside the
+send button is an estimate — `3f · 45s` — of how many frames the message needs
+and how long it will be on the air. Watch that number before you press send; it
+is the thing newcomers to JS8 find most surprising. The message goes to whoever
+the label in front of the box names: the selected station, or `@ALLCALL` when
+there is none.
+
+With a station selected, the query buttons draft a question for it: **SNR?**
+for a signal report, **GRID?**, **HEARING?** for what it is copying,
+**STATUS?** for its status message, **HW CPY?** for "how do you copy me", and
+**RR** / **73** to acknowledge and sign off. With nothing selected they are
+greyed. **CQ** drafts a general call and **HB** a single heartbeat, and both
+stay addressed to everyone even while a station is selected — selecting someone
+never turns a CQ into a message for them. Typing `CQ` or `HB` yourself does the
+same. **CLEAR TO**, past the rule at the end of the row, forgets the selected
+station and puts the composer back on `@ALLCALL`; it is greyed while nothing is
+selected.
 
 Anything addressed to a callsign — typed, drafted or from a button — goes out
 as a JS8 *directed* frame, so the station at the other end sees a message meant
