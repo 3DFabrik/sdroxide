@@ -250,6 +250,18 @@ pub enum Mode {
     /// decoded/encoded by `sdroxide-atchat`. Appended for the same reason as
     /// [`Mode::Hell`].
     AtChat,
+    /// HD Radio (NRSC-5) — the digital multiplex broadcast alongside an
+    /// analogue FM or AM carrier in North America: OFDM sidebands carrying
+    /// CD-quality audio (or several programmes) plus the station's name,
+    /// slogan and short text messages.
+    ///
+    /// A broadcast mode like [`Mode::Drm`], and receive only: it is something
+    /// to listen to, so it is a *demodulator* rather than one of the digital
+    /// modes above — no transmit, no QSO, no transcript. The analogue carrier
+    /// rides along inside the same channel, so the dial is the analogue
+    /// station's frequency and the digital sidebands sit either side of it.
+    /// Appended for the same reason as [`Mode::Hell`].
+    HdRadio,
 }
 
 /// The bands on which a mode that keeps phone practice rides the lower
@@ -270,7 +282,7 @@ const PHONE_LSB_BANDS: [(f64, f64); 3] =
 impl Mode {
     /// Every mode, in the order they cycle and appear in the picker — which is
     /// deliberately *not* the enum's declaration order (see [`Mode::Hell`]).
-    pub const ALL: [Mode; 39] = [
+    pub const ALL: [Mode; 40] = [
         Mode::Lsb,
         Mode::Usb,
         Mode::Cw,
@@ -279,6 +291,7 @@ impl Mode {
         Mode::Nfm,
         Mode::Wfm,
         Mode::Drm,
+        Mode::HdRadio,
         Mode::Adsb,
         Mode::Vdl2,
         Mode::Ais,
@@ -634,7 +647,16 @@ impl Mode {
         // ISB is receive-only by capability: transmitting it wants two
         // modulators driving one linear amplifier, and no radio sdroxide
         // drives is wired that way.
-        matches!(self, Mode::Wefax | Mode::Adsb | Mode::Navtex | Mode::Vdl2 | Mode::Isb | Mode::Ais)
+        matches!(
+            self,
+            Mode::Wefax
+                | Mode::Adsb
+                | Mode::Navtex
+                | Mode::Vdl2
+                | Mode::Isb
+                | Mode::Ais
+                | Mode::HdRadio
+        )
     }
 
     /// True for Hellschreiber. Forks the digi panel to the scrolling raster UI:
@@ -702,6 +724,7 @@ impl Mode {
             Mode::Js8 => "JS8",
             Mode::Wspr => "WSPR",
             Mode::Drm => "DRM",
+            Mode::HdRadio => "HD RADIO",
             Mode::Adsb => "ADS-B",
             Mode::Vdl2 => "VDL2",
             Mode::Isb => "ISB",
@@ -726,6 +749,12 @@ impl Mode {
             // it is and the decoder reads that — only what the
             // panadapter shades and what the S-meter measures.
             Mode::Drm => (-5000.0, 5000.0),
+            // Not a receive filter — the decoder reads the whole channel and
+            // the transmission says how wide its own sidebands are. This is
+            // the FM hybrid's full extent, drawn on the panadapter so an
+            // operator can see that both digital sidebands are being read
+            // rather than the analogue carrier alone.
+            Mode::HdRadio => (-200_000.0, 200_000.0),
             Mode::Nfm => (-8000.0, 8000.0),
             Mode::Wfm => (-96_000.0, 96_000.0),
             // Not a receive filter — nothing narrows this stream, and the
@@ -959,7 +988,7 @@ impl Mode {
             // ADS-B joins them for the same reason WFM does: no radio with an
             // I.F. output has this mode, so there is no separate offset for it
             // to have, and FM's is the one a wideband receiver already uses.
-            Mode::Nfm | Mode::Wfm | Mode::Adsb | Mode::Vdl2 | Mode::Ais => C::Fm,
+            Mode::Nfm | Mode::Wfm | Mode::Adsb | Mode::Vdl2 | Mode::Ais | Mode::HdRadio => C::Fm,
             // Everything a rig would be put into DATA (or DIGI) for, on either
             // sideband — including RIFP and VHF packet, which the rig carries
             // as FM data rather than SSB but still through its data input.
@@ -1003,7 +1032,10 @@ impl Mode {
         // ADS-B is here because it produces no audio at all — its receive
         // chain has no demodulator, so there is nothing for an AGC to be in
         // front of.
-        !matches!(self, Mode::Nfm | Mode::Wfm | Mode::Drm | Mode::Adsb | Mode::Vdl2 | Mode::Ais)
+        !matches!(
+            self,
+            Mode::Nfm | Mode::Wfm | Mode::Drm | Mode::Adsb | Mode::Vdl2 | Mode::Ais | Mode::HdRadio
+        )
     }
 
     /// Whether this mode offers binaural (pseudo-stereo) audio — the receive
@@ -1043,7 +1075,7 @@ impl Mode {
     /// took the audio away with the whistle (issue #434), and DRM's decoded
     /// audio is the same material.
     pub fn auto_notch_applies(self) -> bool {
-        !matches!(self, Mode::Am | Mode::Sam | Mode::Wfm | Mode::Drm)
+        !matches!(self, Mode::Am | Mode::Sam | Mode::Wfm | Mode::Drm | Mode::HdRadio)
     }
 
     /// Furthest a filter edge may be dragged from the carrier — bounded by
@@ -1065,6 +1097,11 @@ impl Mode {
             // same reason: the number does not narrow anything, it only says
             // what is being read.
             Mode::Ais => 60_000.0,
+            // Room to shade the whole FM hybrid — the analogue carrier with
+            // its two digital sidebands either side — for the same reason the
+            // others have one: the number does not narrow anything, it only
+            // says what the decoder is reading.
+            Mode::HdRadio => 250_000.0,
             _ => 24_000.0,
         }
     }
@@ -1103,6 +1140,7 @@ impl Mode {
                 | Mode::RttyFm
                 | Mode::Packet
                 | Mode::Aprs
+                | Mode::HdRadio
         )
     }
 
@@ -1198,7 +1236,8 @@ impl Mode {
             | Mode::Wefax
             | Mode::Navtex
             | Mode::PacketHf
-            | Mode::Rade => &[],
+            | Mode::Rade
+            | Mode::HdRadio => &[],
         }
     }
 }
@@ -1676,6 +1715,8 @@ mod tests {
             (Mode::Vdl2, 35),
             (Mode::Isb, 36),
             (Mode::Ais, 37),
+            (Mode::AtChat, 38),
+            (Mode::HdRadio, 39),
         ];
         for (mode, index) in pinned {
             assert_eq!(mode as u8, index, "{} moved", mode.label());
@@ -1722,7 +1763,7 @@ mod tests {
         // dropped and nothing listed twice.
         // The last variant *by discriminant*, which is the one appended most
         // recently — not the one that reads last in the picker.
-        let last = Mode::AtChat as u8;
+        let last = Mode::HdRadio as u8;
         for i in 0..=last {
             let present = Mode::ALL.iter().filter(|m| **m as u8 == i).count();
             assert_eq!(present, 1, "discriminant {i} appears {present} times in Mode::ALL");

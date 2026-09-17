@@ -896,6 +896,7 @@ impl eframe::App for SdroxideApp {
         self.vdl2_setup_window(&ctx, &mut cmds);
         self.rds_window(&ctx);
         self.drm_window(&ctx, &mut cmds);
+        self.hd_window(&ctx, &mut cmds);
         self.voice_window(&ctx, &mut cmds);
         self.settings_window(&ctx, &mut cmds);
         self.digi_settings_window(&ctx, &mut cmds);
@@ -1338,6 +1339,7 @@ impl SdroxideApp {
                 RadioEvent::WefaxStatus(s) => self.wefax.status = s,
                 RadioEvent::Rds(d) => self.on_rds(d),
                 RadioEvent::Drm(d) => self.on_drm(d),
+                RadioEvent::HdRadio(d) => self.on_hd(d),
                 // A whole-table snapshot, so it replaces rather than merges: the
                 // engine's table is authoritative and already carries the history
                 // — first heard, times heard — that a merge here would be

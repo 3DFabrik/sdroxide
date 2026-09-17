@@ -296,6 +296,11 @@ pub enum RadioEvent {
     /// A whole snapshot, emitted a few times a second while anything moves —
     /// the sync lights and the scrolling text both change on their own.
     Drm(crate::DrmStatus),
+    /// What the HD Radio decoder has made of the broadcast on the main
+    /// receiver. A whole snapshot, emitted a few times a second while anything
+    /// moves — the sync lights, the sideband MER and the station text all
+    /// change on their own.
+    HdRadio(crate::HdRadioStatus),
     /// Every aircraft the ADS-B decoder is still tracking, plus what the
     /// demodulator is seeing, re-sent whole a couple of times a second
     /// (issue #160).

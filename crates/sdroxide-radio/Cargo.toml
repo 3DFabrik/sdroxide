@@ -17,6 +17,10 @@ sdroxide-dsp.workspace = true
 # DRM reception. Links a vendored C++ receiver, so it is native-only — which
 # this crate already is.
 sdroxide-drm.workspace = true
+# HD Radio reception. Links the vendored nrsc5 C library and shares the one
+# faad2 archive `sdroxide-drm` builds, so the two belong together — see
+# `crates/sdroxide-nrsc5/Cargo.toml`.
+sdroxide-nrsc5.workspace = true
 num-complex.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

@@ -9,6 +9,11 @@ edition.workspace = true
 # is why xHE-AAC is decoded through a library looked up at run time and nothing
 # from `vendor/fdk-aac` (headers only) reaches the linker. See
 # `vendor/fdk-aac/PROVENANCE.md`.
+#
+# `vendor/faad2` is pinned to the two-commit fork `madmedicnl/faad2-hdc` (stock
+# 2.11.2 plus HDC support), so the single faad2 build also decodes HD Radio.
+# Re-point the submodule to `knik0/faad2` and drop `HDC_SUPPORT` from the build
+# script once upstream merges the HDC variant.
 license.workspace = true
 
 # Native-only: links a vendored C++ receiver and a vendored C codec. Must never

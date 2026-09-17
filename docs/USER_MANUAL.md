@@ -16,7 +16,8 @@ or connects to a remote sdroxide server.
 
 1. [Feature overview](#1-feature-overview)
 2. [Basic operation](#2-basic-operation)
-    - [2.21 QO-100 beacon plugin](#221-qo-100-beacon-plugin)
+    - [2.20 HD Radio (NRSC-5)](#220-hd-radio-nrsc-5)
+    - [2.22 QO-100 beacon plugin](#222-qo-100-beacon-plugin)
 3. [Digital modes (FT8, FT4, FT2, PSK31, RTTY, Olivia, THOR, FSQ, Hellschreiber, SSTV, RIFP, weather fax, JS8, RF Paint, WSPR, packet, APRS, ADS-B, NAVTEX, VDL2, AIS, AtCHAT NET)](#3-digital-modes)
     - [3.17 AtCHAT NET](#317-atchat-net)
 4. [Skimmers (CW, PSK, RTTY)](#4-skimmers)
@@ -44,7 +45,7 @@ or connects to a remote sdroxide server.
   selectable waterfall colour schemes (including an Icom-style palette).
 - **Dual VFO (A/B)** with split operation, VFO swap/copy, and an independently
   tunable sub-receiver with its own mode and filter.
-- **All the common modes:** LSB, USB, CW, AM, SAM, NFM, WFM, DRM, DIGU, DIGL, DSB,
+- **All the common modes:** LSB, USB, CW, AM, SAM, NFM, WFM, DRM, HD Radio, DIGU, DIGL, DSB,
   **ISB** (independent sideband — two services on one carrier, one in each ear), a
   spectrum-only mode (SPEC), the automatic digital modes **FT8**, **FT4** and
   **FT2**, the
@@ -130,7 +131,7 @@ or connects to a remote sdroxide server.
 - **QO-100 beacon plugin** — tracks the 10489.750 MHz narrowband beacon,
   measures how far your LNB is off, and (with AUTO) keeps correcting the
   converter offset as it drifts. In the **SAT** window's QO-100 tab; see
-  [§2.21](#221-qo-100-beacon-plugin).
+  [§2.22](#222-qo-100-beacon-plugin).
 - **Many radio backends:** SoapySDR devices, OpenHPSDR (Hermes/Metis) Ethernet
   SDRs, a TCI server (ExpertSDR3/Thetis), a SmartSDR radio (FlexRadio
   FLEX-6000/8000), RTL-SDR, RX-888, Airspy HF+ and SDRplay RSP receivers over
@@ -313,7 +314,7 @@ popup with three rows:
   [§2.15](#215-band-conditions). In a digital mode, the bands where that mode
   has a standard calling frequency carry a cyan underline; see
   [§3.1](#31-general-considerations).
-- **MODE:** `LSB USB CW AM SAM NFM WFM DRM DIGU DIGL DSB ISB SPEC`.
+- **MODE:** `LSB USB CW AM SAM NFM WFM DRM HD DIGU DIGL DSB ISB SPEC`.
 - **DIGITAL:** `FT8 FT4 PSK RTTY RTTY-FM OLIVIA THOR FSQ HELL SSTV SSTV-FM NAVTEX RIFP RFPAINT RADE` (see
   [Digital modes](#3-digital-modes)).
 
@@ -497,7 +498,7 @@ mode. What is in the box never changes; only where the two rows are cut does.
 - **MUTE** — mute the receiver (keyboard shortcut **M**).
 - **REC** — record what you hear and what you send, or the raw spectrum
   to an MP3 file, and choose whether it is written in two channels or one. See
-  [2.20](#220-recording-the-audio-and-the-spectrum).
+  [2.21](#221-recording-the-audio-and-the-spectrum).
 - **SQL** — squelch; below the open threshold it reads
   `off`.
 
@@ -682,6 +683,13 @@ mode. What is in the box never changes; only where the two rows are cut does.
   glance. Click it for the window, which is where to look when the answer is no:
   it shows how far up the chain the decode got. Full detail is in
   [2.19](#219-drm-digital-radio-mondiale).
+- **HD** (HD Radio only) — how the **HD Radio** (NRSC-5) decoder is getting on.
+  Like the DRM button it lights only when audio is actually being decoded, not
+  merely when the OFDM frame is locked, so it answers "is this station coming
+  through?" at a glance. Click it for the window, which is where to look when the
+  answer is no: it shows how far up the chain the decode got and the error ratios
+  of both digital sidebands. Full detail is in
+  [2.20](#220-hd-radio-nrsc-5).
 - **Tone** (NFM only) — the **CTCSS tone or DCS code** under the signal. Analog
   FM systems carry a sub-audible tone below the voice so a receiver can ignore
   traffic that is not theirs, and the button shows what is arriving: `88.5` for a
@@ -1945,7 +1953,7 @@ the correction keeps being applied whether or not the window is open.
 
 The window has two tabs. **SATELLITES** is the picker and the live lock
 described below. **QO-100** is the beacon calibration
-([2.21](#221-qo-100-beacon-plugin)) — a geostationary bird needs no
+([2.22](#222-qo-100-beacon-plugin)) — a geostationary bird needs no
 Doppler, but it does need its LNB offset measured, and that is the whole of
 working it. Either tab carries a dot while its own work is running, and the
 **SAT** button glows for both.
@@ -2548,7 +2556,74 @@ guide are carried by the standard but not shown. The CELP and HVXC speech
 codecs of the original standard were withdrawn from it and nothing transmits
 them.
 
-### 2.20 Recording the audio and the spectrum
+### 2.20 HD Radio (NRSC-5)
+
+**HD Radio** is the digital sidecar of an FM broadcast: a set of OFDM carriers
+placed in the spectrum on either side of the ordinary analog FM carrier, about
+20 dB below it in power. They carry HDC-coded audio together with the station's
+own name, a slogan and a short message. Most digital FM stations in the United
+States and Mexico transmit it, and a hybrid station sounds better on the digital
+side than on the analog one — provided it can be heard at all, because the
+sidebands are far weaker than the carrier they share.
+
+Select `HD Radio` on the **MODE** button and listen. It is a **broadcast** mode,
+like WFM and DRM: there is nothing to transmit and no transcript. The panel is
+receive-only.
+
+**Tuning.** Put the dial on the **analog carrier's centre**, the same number you
+would use for plain WFM. Unlike DRM, the digital carriers are not centred on
+that frequency but spread out around it — roughly 129 to 198 kHz either side —
+so the front end has to capture a span of at least about ±200 kHz to see them at
+all. **A complex sample rate of 1 Msps or more is ample**; at much narrower
+rates the decoder still runs but has one or both sidebands missing, and will not
+lock. The default passband is ±200 kHz, which is the channel the sidebands
+occupy, and there are no filter presets — the decoder reads the real channel out
+of the transmission.
+
+**It is not instant.** The decoder needs a few seconds on a clean signal to find
+the OFDM frame and get the audio stream running, and it holds a fraction of a
+second of delay after that. A station that is perfectly listenable in analog WFM
+can still be too noisy for the digital side: front-end overload and strong
+neighbours on the FM band are the usual reasons.
+
+**The HD Radio window** (the **HD** button, [2.7](#27-receiver-controls)) is what
+to read while tuning one in. Across the top are two indicators for the stages of
+the decode, in the order they lock:
+
+| Stage | What it means |
+| --- | --- |
+| **SYNC** | The OFDM frame is being read. |
+| **AUDIO** | Audio frames are decoding. |
+
+Sync without audio is a real state — the frame is locked but the programme's
+audio is not coming through, often because the signal is marginal — so the HD
+chip in the top bar lights only when audio is actually decoding.
+
+Below the indicators, once the signal is locked:
+
+- **MER L / MER U** — the modulation error ratio of the lower and upper digital
+  sidebands separately. These are the honest read on the signal: they fall well
+  before the audio does. The two being far apart means one side of the channel
+  is being lost — a selective fade, a tilted antenna, or a strong neighbour near
+  one edge — rather than the signal simply being weak.
+- **CBER** — the channel bit-error ratio after the inner code. Below about
+  `1e-3` the outer code can correct it; above that the audio starts to break up.
+- **OFFSET** — residual carrier frequency error. A large, steady figure means
+  your receiver's reference is off rather than anything being wrong with the
+  broadcast.
+- **PSMI** — which of the FM hybrid service modes the station is transmitting.
+
+Then the station's own text: its name, its slogan, and a message it is currently
+airing. If the multiplex carries more than one programme — HD-1 and an HD-2
+subchannel, say — a row of **HD-n** chips lets you pick which to hear.
+
+**What is not here.** Transmit: HD Radio is a broadcast system. This build
+decodes the FM hybrid only; **HD on the AM band** is not wired up yet. The album
+art and programme-service data (track titles) the multiplex can carry are not
+shown, and the receiver does not blend back to analog when the digital side
+drops — the mode decodes the digital side or is silent.
+
+### 2.21 Recording the audio and the spectrum
 
 **REC**, in the receiver box beside MUTE, opens a small picker with the two
 things that can be recorded — and they are different things, so either or both
@@ -2677,7 +2752,7 @@ This is the same data `--record-iq` ([12](#12-command-line-reference)) writes,
 in a container other programs can open — `--record-iq` writes the bare samples
 and starts with the program, which is what a headless capture wants.
 
-### 2.21 QO-100 beacon plugin
+### 2.22 QO-100 beacon plugin
 
 The QO-100 (Es'hail-2) narrowband transponder carries a beacon on its lower
 edge, at **10489.750 MHz**, transmitted as 400 baud Manchester BPSK. Every
@@ -13849,7 +13924,7 @@ remembered frequency is the first thing to check.
 
 Two things are kept outside the config directory, because they are things you
 will want to open in an ordinary file manager rather than program state:
-audio recordings go to `<Music>/sdroxide/` ([2.20](#220-recording-the-audio-and-the-spectrum)),
+audio recordings go to `<Music>/sdroxide/` ([2.21](#221-recording-the-audio-and-the-spectrum)),
 and received weather-fax charts to
 `<Pictures>/sdroxide/wefax/`. Where the platform exposes no such folder, both
 fall back to the config directory.

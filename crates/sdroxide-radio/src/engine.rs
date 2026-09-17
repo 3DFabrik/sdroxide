@@ -23,6 +23,7 @@ use sdroxide_digi::{
     WefaxController, WsprController,
 };
 use sdroxide_drm::DrmDemod;
+use sdroxide_nrsc5::HdDemod;
 use sdroxide_dsp::{
     AdcMeter, Agc, AutoNotch, Binaural, Cessb, DcBlock, Ddc, Decimator, DeepFilterNr, Demodulator,
     Duc, Modulator, MonoResampler, Nco, NeuralNr, NoiseBlanker, ParametricEq, SpecBleachNr,
@@ -453,6 +454,17 @@ const DRM_INTERVAL: Duration = Duration::from_millis(250);
 /// anything past a couple of kHz is a different transmission, not drift.
 const DRM_RETUNE_HZ: f64 = 2_000.0;
 
+/// How often the HD Radio status is polled. Faster than RDS, like DRM: the
+/// sync and the sideband MER are what an operator watches while tuning one in,
+/// and a half-second lag on those reads as a decoder that is not working.
+const HD_RADIO_INTERVAL: Duration = Duration::from_millis(250);
+
+/// How far the dial has to move before the HD Radio decoder is told to
+/// re-acquire. A commercial FM channel is 200 kHz wide and stations are spaced
+/// at least that far apart on the band, so half of one is comfortably inside
+/// "the same station" and anything past it is somebody else.
+const HD_RADIO_RETUNE_HZ: f64 = 100_000.0;
+
 /// How far the dial has to move before the RDS decoder is told to forget the
 /// station.
 ///
@@ -880,22 +892,26 @@ impl RxChain {
             self.ddc.set_offset_hz(self.offset_hz);
         }
         // Release the old demodulator before building the new one. For most
-        // modes that is housekeeping; for DRM it is the difference between one
-        // Dream receiver and two, because assigning over `self.demod` would
-        // construct the replacement first and only then drop what was there.
-        // Two of them briefly coexisting is a lot of vendored C++ running
-        // twice on two threads for no reason, and `set_rx_mode` does not
-        // early-return when the mode has not actually changed — so a rig
+        // modes that is housekeeping; for DRM and HD Radio it is the difference
+        // between one decoder and two, because assigning over `self.demod`
+        // would construct the replacement first and only then drop what was
+        // there. Two of either briefly coexisting is a lot of vendored C
+        // running twice on two threads for no reason, and `set_rx_mode` does
+        // not early-return when the mode has not actually changed — so a rig
         // reporting its mode back can trigger it at any moment.
         self.demod = None;
-        // Every mode but this one comes from `make_demod`. DRM's decoder links
-        // a vendored C++ receiver, which `sdroxide-dsp` cannot depend on and
-        // still build for the browser, so it is constructed here instead — see
-        // `Demodulator::take_drm`.
-        self.demod = if rx.mode == Mode::Drm {
-            Some(Box::new(DrmDemod::new(self.ddc.out_rate())) as Box<dyn Demodulator>)
-        } else {
-            make_demod(rx.mode, self.ddc.out_rate())
+        // Every mode but these two comes from `make_demod`. Their decoders link
+        // a vendored C library, which `sdroxide-dsp` cannot depend on and
+        // still build for the browser, so they are constructed here instead —
+        // see `Demodulator::take_drm` and `Demodulator::take_hd_radio`.
+        self.demod = match rx.mode {
+            Mode::Drm => {
+                Some(Box::new(DrmDemod::new(self.ddc.out_rate())) as Box<dyn Demodulator>)
+            }
+            Mode::HdRadio => {
+                Some(Box::new(HdDemod::new(self.ddc.out_rate())) as Box<dyn Demodulator>)
+            }
+            _ => make_demod(rx.mode, self.ddc.out_rate()),
         };
         if let Some(d) = self.demod.as_mut() {
             d.set_filter(rx.filter_lo, rx.filter_hi);
@@ -1247,6 +1263,26 @@ impl RxChain {
     fn set_drm_constellation(&mut self, channel: Option<sdroxide_types::DrmChannel>) {
         if let Some(d) = self.demod.as_mut() {
             d.set_drm_constellation(channel);
+        }
+    }
+
+    /// What the HD Radio decoder has made of the broadcast since the last poll,
+    /// or `None` when nothing has moved. Only HD Radio ever answers.
+    fn take_hd_radio(&mut self) -> Option<sdroxide_types::HdRadioStatus> {
+        self.demod.as_mut().and_then(|d| d.take_hd_radio())
+    }
+
+    /// Re-acquire, for the same reason as [`RxChain::reset_rds`].
+    fn reset_hd_radio(&mut self) {
+        if let Some(d) = self.demod.as_mut() {
+            d.reset_hd_radio();
+        }
+    }
+
+    /// Decode a different programme of the HD Radio multiplex, 0-based.
+    fn set_hd_program(&mut self, program: u8) {
+        if let Some(d) = self.demod.as_mut() {
+            d.set_hd_program(program);
         }
     }
 }
@@ -2693,6 +2729,8 @@ struct Engine {
     rds_dial_hz: f64,
     /// The same, for the DRM decoder — see [`DRM_RETUNE_HZ`].
     drm_dial_hz: f64,
+    /// The same, for the HD Radio decoder — see [`HD_RADIO_RETUNE_HZ`].
+    hd_dial_hz: f64,
     /// WSJT-X UDP broadcast: decodes, status and logged QSOs sent out for
     /// GridTracker, JTAlert, N1MM+ and Log4OM. Present while enabled.
     wsjtx: Option<sdroxide_wsjtx::WsjtxUdp>,
@@ -3922,6 +3960,7 @@ fn engine_thread(
         last_s_dbm: -127.0,
         rds_dial_hz: 0.0,
         drm_dial_hz: 0.0,
+        hd_dial_hz: 0.0,
         tci_srv: None,
         tci_cfg: TciServerConfig::default(),
         tci_srv_err: None,
@@ -4174,6 +4213,7 @@ fn engine_thread(
     let mut lane_sweeps: u64 = 0;
     let mut next_rds = Instant::now();
     let mut next_drm = Instant::now();
+    let mut next_hd = Instant::now();
     let mut next_session = Instant::now() + SESSION_SAVE_INTERVAL;
 
     // The band-dependent gain ranges, once, before anything is published: the
@@ -4685,6 +4725,12 @@ fn engine_thread(
             // the one whose label and text belong on the panel.
             if let Some(drm) = engine.main.as_mut().and_then(|c| c.take_drm()) {
                 let _ = engine.event_tx.send(RadioEvent::Drm(drm));
+            }
+        }
+        if now >= next_hd {
+            next_hd = now + HD_RADIO_INTERVAL;
+            if let Some(hd) = engine.main.as_mut().and_then(|c| c.take_hd_radio()) {
+                let _ = engine.event_tx.send(RadioEvent::HdRadio(hd));
             }
         }
         if now >= next_session {
@@ -7775,6 +7821,11 @@ impl Engine {
             SetDrmConstellation { channel } => {
                 if let Some(c) = self.main.as_mut() {
                     c.set_drm_constellation(channel);
+                }
+            }
+            SetHdProgram { program } => {
+                if let Some(c) = self.main.as_mut() {
+                    c.set_hd_program(program);
                 }
             }
             SetToneSquelch { rx, tone } => self.state.rx[rx.index()].tone_sql = tone,
@@ -14273,6 +14324,12 @@ impl Engine {
                 c.reset_drm();
             }
         }
+        if (dial - self.hd_dial_hz).abs() > HD_RADIO_RETUNE_HZ {
+            self.hd_dial_hz = dial;
+            if let Some(c) = self.main.as_mut() {
+                c.reset_hd_radio();
+            }
+        }
         if let Some(c) = self.main.as_mut() {
             c.set_offset_hz(main_offset);
         }
@@ -16146,7 +16203,8 @@ fn rig_mode_class(m: Mode) -> u8 {
         // operator having left the mode.
         | Mode::Adsb
         | Mode::Vdl2
-        | Mode::Ais => 5,
+        | Mode::Ais
+        | Mode::HdRadio => 5,
     }
 }
 
