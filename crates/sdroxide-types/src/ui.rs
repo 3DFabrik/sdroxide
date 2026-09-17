@@ -240,8 +240,6 @@ impl FontSize {
 /// control strip wrapped over three rows.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LayoutMode {
-    #[default]
-    Auto,
     Desktop,
     Tablet,
     Phone,
@@ -254,6 +252,18 @@ pub enum LayoutMode {
     /// serialised into `config.toml` and inserting a variant would rename
     /// everyone else's.
     Small,
+    /// Picks one from the viewport size — the default, and where serde sends a
+    /// value this build has never heard of.
+    ///
+    /// Declared last for the same reason as [`FontSize::Medium`]: the catch-all
+    /// must be final. Without `#[serde(other)]` a `config.toml` written by a
+    /// build with a later layout — `Small` was the last one added — fails the
+    /// **whole** file, and `Settings::load` quarantines it: the radio, audio,
+    /// speech and alerts settings go with the one unknown value. Degrading to
+    /// `Auto` costs a layout, not a configuration.
+    #[default]
+    #[serde(other)]
+    Auto,
 }
 
 impl LayoutMode {
@@ -858,5 +868,30 @@ mod tune_step_tests {
             ui.tune_step_hz = hz;
             assert_eq!(ui.tune_step_label(), want);
         }
+    }
+}
+
+#[cfg(test)]
+mod serde_tests {
+    use super::*;
+
+    /// A layout value this build has never heard of costs that field, not the
+    /// whole `config.toml`. `Settings::load` quarantines the entire file on a
+    /// parse error, so before `#[serde(other)]` a config written by a build
+    /// that knew a later `LayoutMode` took the radio, audio and speech settings
+    /// down with the one unknown value (issue #469).
+    #[test]
+    fn an_unknown_layout_degrades_to_auto() {
+        let m: LayoutMode = serde_json::from_str("\"Holographic\"").unwrap();
+        assert_eq!(m, LayoutMode::Auto);
+        // The known ones still name themselves.
+        let d: LayoutMode = serde_json::from_str("\"Desktop\"").unwrap();
+        assert_eq!(d, LayoutMode::Desktop);
+        let s: LayoutMode = serde_json::from_str("\"Small\"").unwrap();
+        assert_eq!(s, LayoutMode::Small);
+        // And `ALL` — the picker's list — is unaffected by the declaration
+        // order: it is written out, not derived.
+        assert!(LayoutMode::ALL.contains(&LayoutMode::Auto));
+        assert_eq!(LayoutMode::ALL.len(), 5);
     }
 }
