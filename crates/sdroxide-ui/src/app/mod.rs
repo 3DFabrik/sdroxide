@@ -530,6 +530,7 @@ pub struct SdroxideApp {
     grid_lookup_at: f64,
     /// JS8: the last message we transmitted. What `AGN?` — "say again" — is
     /// asking for, and the one reply the operator cannot retype from memory.
+    /// Held unaddressed; the composer adds the callsign when it is sent.
     js8_last_sent: String,
     /// FSQ contacts (address book), native-persisted in `contacts.json`.
     fsq_contacts: Vec<sdroxide_types::FsqContact>,

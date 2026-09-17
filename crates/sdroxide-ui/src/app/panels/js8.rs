@@ -29,6 +29,21 @@ fn js8_frame_estimate(text: &str) -> u8 {
     (n.div_ceil(PER_FRAME).max(1)).min(255) as u8
 }
 
+/// What goes on the air for `body` typed with `target` selected ("" is
+/// `@ALLCALL`).
+///
+/// CQ and HB are addressed to everyone, whichever station is selected:
+/// prefixing them with a callsign would turn "CQ" into a directed free-text
+/// message and "HB" into the wrong frame. Everything else goes to the target
+/// when there is one.
+fn js8_addressed(target: &str, body: &str) -> String {
+    let broadcast = matches!(
+        body.to_ascii_uppercase().as_str(),
+        "CQ" | "HB" | "HEARTBEAT" | "@ALLCALL CQ" | "@ALLCALL HB" | "@ALLCALL HEARTBEAT"
+    );
+    if target.is_empty() || broadcast { body.to_string() } else { format!("{target} {body}") }
+}
+
 /// How long a JS8 station stays lit on the maps after it was last heard.
 ///
 /// The mode's own convention is a heartbeat every ten or fifteen minutes, so
@@ -51,7 +66,8 @@ struct Js8Me {
     status: String,
     /// Callsigns heard recently, most recent first — the answer to `HEARING?`.
     hearing: Vec<String>,
-    /// The last thing we transmitted, which is what `AGN?` is asking for.
+    /// The last thing we transmitted, which is what `AGN?` is asking for — as
+    /// typed, without the callsign it was addressed to.
     last_sent: String,
 }
 
@@ -1145,26 +1161,12 @@ impl SdroxideApp {
             });
             if send && !self.text_tx.trim().is_empty() {
                 let body = self.text_tx.trim().to_string();
-                // CQ and HB are addressed to everyone, whichever station is
-                // selected: prefixing them with a callsign would turn "CQ" into
-                // a directed free-text message and "HB" into the wrong frame.
-                // Everything else goes to the target when there is one.
-                let broadcast = matches!(
-                    body.to_ascii_uppercase().as_str(),
-                    "CQ" | "HB"
-                        | "HEARTBEAT"
-                        | "@ALLCALL CQ"
-                        | "@ALLCALL HB"
-                        | "@ALLCALL HEARTBEAT"
-                );
-                let full = if has_target && !broadcast {
-                    format!("{} {body}", self.js8_target)
-                } else {
-                    body
-                };
+                cmds.push(Command::DigiSendText(js8_addressed(&self.js8_target, &body)));
                 // Kept so `AGN?` — "say again" — has something to draft from.
-                self.js8_last_sent = full.clone();
-                cmds.push(Command::DigiSendText(full));
+                // The words as typed, not as addressed: the draft lands in this
+                // composer aimed at whoever asked, and SEND addresses it again,
+                // so keeping the callsign sent "KN4CRD KN4CRD …".
+                self.js8_last_sent = body;
                 self.text_tx.clear();
             }
         });
@@ -1173,7 +1175,7 @@ impl SdroxideApp {
 
 #[cfg(test)]
 mod js8_panel_tests {
-    use super::js8_frame_estimate;
+    use super::{js8_addressed, js8_frame_estimate};
 
     #[test]
     fn short_messages_take_one_frame() {
@@ -1206,7 +1208,7 @@ mod js8_panel_tests {
             grid: "FN42".into(),
             status: "PORTABLE".into(),
             hearing: vec!["KN4CRD".into(), "VK3ABC".into()],
-            last_sent: "KN4CRD HELLO FROM THE HILLS".into(),
+            last_sent: "HELLO FROM THE HILLS".into(),
         }
     }
 
@@ -1251,7 +1253,7 @@ mod js8_panel_tests {
             ("STATUS?", "STATUS PORTABLE"),
             ("HEARING?", "HEARING KN4CRD VK3ABC"),
             // "Say again" wants the same words back, not a new sentence.
-            ("AGN?", "KN4CRD HELLO FROM THE HILLS"),
+            ("AGN?", "HELLO FROM THE HILLS"),
         ] {
             assert_eq!(
                 js8_reply_for(&msg(Some(cmd), "N0JDS"), &me()).as_deref(),
@@ -1259,6 +1261,24 @@ mod js8_panel_tests {
                 "{cmd}"
             );
         }
+    }
+
+    /// A repeat is addressed once. The draft lands in the composer aimed at
+    /// whoever asked, and SEND addresses it; when the words were kept with their
+    /// callsign that made "KN4CRD KN4CRD HELLO FROM THE HILLS".
+    #[test]
+    fn a_say_again_is_addressed_once() {
+        let draft = js8_reply_for(&msg(Some("AGN?"), "N0JDS"), &me()).unwrap();
+        assert_eq!(js8_addressed("KN4CRD", &draft), "KN4CRD HELLO FROM THE HILLS");
+    }
+
+    #[test]
+    fn announcements_stay_broadcast_whoever_is_selected() {
+        for body in ["CQ", "hb", "HEARTBEAT", "@ALLCALL CQ", "@ALLCALL HB"] {
+            assert_eq!(js8_addressed("KN4CRD", body), body);
+        }
+        assert_eq!(js8_addressed("KN4CRD", "SNR?"), "KN4CRD SNR?");
+        assert_eq!(js8_addressed("", "HELLO ALL"), "HELLO ALL");
     }
 
     #[test]
