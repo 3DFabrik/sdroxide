@@ -11,7 +11,11 @@
 //!   commands it. Handing over the bare dial puts such a rig one pitch low, and
 //!   on a rig whose dial is read back and believed the error compounds: the
 //!   frequency walks down by one pitch on every switch. That was measured on an
-//!   FDM-DUO before this test existed — 1200.0, then 1199.3, then 1198.6 kHz.
+//!   FDM-DUO before this test existed — 1200.0, then 1199.3, then 1198.6 kHz;
+//! * the rig hears which VFO *before* anything else about the switch. Taking
+//!   up a VFO left in another mode retunes for that mode, and a retune sent
+//!   ahead of the selection lands on the VFO being left — overwriting the
+//!   radio's other dial with this one's.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -28,6 +32,8 @@ const PITCH: f64 = 700.0;
 struct RigWithTwoVfos {
     center: f64,
     told: Arc<Mutex<Vec<(Vfo, f64)>>>,
+    /// Every selection and every retune, in the order the rig was given them.
+    log: Arc<Mutex<Vec<String>>>,
 }
 
 impl IqSource for RigWithTwoVfos {
@@ -39,6 +45,7 @@ impl IqSource for RigWithTwoVfos {
     }
     fn set_center_hz(&mut self, hz: f64) -> Result<()> {
         self.center = hz;
+        self.log.lock().unwrap().push(format!("tune {hz:.0}"));
         Ok(())
     }
     fn center_is_dial(&self) -> bool {
@@ -49,6 +56,7 @@ impl IqSource for RigWithTwoVfos {
     }
     fn select_vfo(&mut self, vfo: Vfo, hz: f64) {
         self.told.lock().unwrap().push((vfo, hz));
+        self.log.lock().unwrap().push(format!("select {vfo:?}"));
     }
     fn read(&mut self, buf: &mut [Complex32]) -> Result<usize> {
         std::thread::sleep(Duration::from_millis(5));
@@ -84,10 +92,21 @@ fn caps() -> DeviceCaps {
 
 /// Run `cmds` and report every `select_vfo` the source was given.
 fn told_after(cmds: &[Command]) -> Vec<(Vfo, f64)> {
+    run(cmds).0
+}
+
+/// Run `cmds` and report every `select_vfo` the source was given, and the log
+/// of selections and retunes together.
+fn run(cmds: &[Command]) -> (Vec<(Vfo, f64)>, Vec<String>) {
     isolate_config();
     let told = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::new(Mutex::new(Vec::new()));
     let mut h = start_engine(
-        Box::new(RigWithTwoVfos { center: 940_000.0, told: Arc::clone(&told) }),
+        Box::new(RigWithTwoVfos {
+            center: 940_000.0,
+            told: Arc::clone(&told),
+            log: Arc::clone(&log),
+        }),
         caps(),
         EngineConfig { tx_ham_only: false, ..Default::default() },
     );
@@ -102,7 +121,7 @@ fn told_after(cmds: &[Command]) -> Vec<(Vfo, f64)> {
     if let Some(t) = thread {
         let _ = t.join();
     }
-    let out = told.lock().unwrap().clone();
+    let out = (told.lock().unwrap().clone(), log.lock().unwrap().clone());
     out
 }
 
@@ -147,4 +166,38 @@ fn a_cw_vfo_is_handed_the_frequency_the_rig_must_sit_on() {
     let (vfo, hz) = told[told.len() - 2];
     assert_eq!(vfo, Vfo::A);
     assert!((hz - 940_000.0).abs() < 1.0, "an AM VFO takes no sidetone step, got {hz}");
+}
+
+/// Switching between VFOs in different modes retunes for the mode being taken
+/// up — here CW, a sidetone above the dial — and that retune has to reach the
+/// rig *after* the selection. Sent before it, it goes to the VFO being left and
+/// overwrites the radio's other dial with this one's number.
+#[test]
+fn the_rig_is_told_which_vfo_before_it_is_retuned_for_it() {
+    let (told, log) = run(&[
+        Command::SetVfo { vfo: Vfo::A, hz: 940_000.0 },
+        Command::SetMode { rx: RxId::Main, mode: Mode::Am },
+        Command::SelectVfo(Vfo::B),
+        Command::SetVfo { vfo: Vfo::B, hz: 1_200_000.0 },
+        Command::SetMode { rx: RxId::Main, mode: Mode::Cw },
+        Command::SelectVfo(Vfo::A),
+        Command::SelectVfo(Vfo::B),
+    ]);
+    let (vfo, hz) = *told.last().expect("a switch onto the CW VFO");
+    assert_eq!(vfo, Vfo::B);
+    assert!((hz - (1_200_000.0 + PITCH)).abs() < 1.0, "the CW VFO's rig frequency, got {hz}");
+    // Between the last switch onto A and the switch back to B, nothing may put
+    // the rig on B's number — that retune belongs after B is selected. And once
+    // B is selected, nothing puts it back on A's.
+    let a = log.iter().rposition(|e| e == "select A").expect("a switch to A");
+    let b = log.iter().rposition(|e| e == "select B").expect("a switch back to B");
+    assert!(b > a, "{log:?}");
+    assert!(
+        !log[a + 1..b].iter().any(|e| e == "tune 1200700"),
+        "B's retune reached the rig before B was selected, so it landed on A: {log:?}"
+    );
+    assert!(
+        !log[b + 1..].iter().any(|e| e == "tune 940000"),
+        "A's dial reached the rig after B was selected: {log:?}"
+    );
 }

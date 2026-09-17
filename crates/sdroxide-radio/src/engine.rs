@@ -6525,8 +6525,15 @@ impl Engine {
     /// sideband and keyed sidetone lands a pitch above the VFO exactly as it
     /// does on an SDR.
     fn rig_cw_offset_hz(&self) -> f64 {
+        self.rig_cw_offset_hz_in(self.state.rx[0].mode)
+    }
+
+    /// [`Self::rig_cw_offset_hz`] for a receiver in `mode` — for the moment a
+    /// VFO switch needs the offset of the mode it is about to put the receiver
+    /// in, before it has.
+    fn rig_cw_offset_hz_in(&self, mode: Mode) -> f64 {
         if self.audio_mode
-            || self.state.rx[0].mode != Mode::Cw
+            || mode != Mode::Cw
             || !self.source.center_is_dial()
             || !self.source.cw_iq_on_vfo()
             || self.source.cw_audio_keyed()
@@ -7575,26 +7582,30 @@ impl Engine {
                 // (issues #286 and #404).
                 self.shelve_vfo_state();
                 self.state.active_vfo = v;
-                self.recall_vfo_mode();
-                self.recall_vfo_antenna();
-                self.state.band = Band::containing(self.state.active_freq_hz());
                 // A rig with its own pair of VFOs is told which one is being
                 // worked, so its display and its A/B button agree with ours.
-                // Sent before the tuning below, not after: a rig that selects a
-                // VFO holding a stale number puts its receiver there until the
-                // dial lands, and the two travel together to keep that to the
-                // width of one command. A no-op on every front end without a
-                // second VFO, which is nearly all of them.
+                // Sent before anything else about the switch: recalling a VFO
+                // left in another mode commands the mode and retunes for it,
+                // and every one of those sent ahead of the selection lands on
+                // the VFO being left — overwriting the radio's other dial with
+                // this one's. The frequency travels with the selection because
+                // a rig that selects a VFO holding a stale number puts its
+                // receiver there until the dial lands. A no-op on every front
+                // end without a second VFO, which is nearly all of them.
                 //
                 // The *rig's* number, not the dial: in CW a radio that keys its
                 // own transmitter sits a sidetone above it, exactly as
                 // `follow_dial` sends it. Passing the bare dial here puts the
                 // radio one pitch low, and since the reply is read back and
                 // believed, the dial then walks down by one pitch on every
-                // switch. `recall_vfo_mode` above has already put the receiver
-                // into this VFO's mode, so the offset asked for is this VFO's.
-                let rig_hz = self.state.active_freq_hz() + self.rig_cw_offset_hz();
+                // switch. The receiver is not in this VFO's mode yet, so the
+                // offset is taken for the mode it is about to be put in.
+                let mode = self.vfo_memory[v.index()].mode;
+                let rig_hz = self.state.active_freq_hz() + self.rig_cw_offset_hz_in(mode);
                 self.source.select_vfo(v, rig_hz);
+                self.recall_vfo_mode();
+                self.recall_vfo_antenna();
+                self.state.band = Band::containing(self.state.active_freq_hz());
                 self.follow_dial();
                 self.update_tuning();
             }
