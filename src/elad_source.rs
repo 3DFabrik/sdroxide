@@ -239,12 +239,16 @@ impl EladSource {
         } else if cat.serial.path.trim().is_empty() {
             status.push(
                 "no CAT serial port is set, so the FDM-DUO is being driven through its \
-                 USB interface — it can be tuned and keyed, but its S-meter, SWR and \
-                 front-panel knob cannot be read. Set the port under Settings → Radio."
+                 USB interface — it can be tuned and keyed, and its own dial is followed, \
+                 but its S-meter and SWR cannot be read. Set the port under Settings → \
+                 Radio."
                     .to_string(),
             );
-            // Write-only, but it is the interface the samples are arriving on,
-            // so there is no question of whether it is there.
+            // Not quite write-only: commands go out through the gateway, and
+            // the radio's own dial comes back from it (`EladHandle::tuned_hz`),
+            // which is what the VFO being reachable means here. It is also the
+            // interface the samples are arriving on, so there is no question of
+            // whether it is there.
             dial_reachable = true;
             Control::Gateway
         } else {
@@ -369,6 +373,61 @@ impl EladSource {
     /// Whether the control link can answer questions as well as ask them.
     pub fn reads_rig(&self) -> bool {
         matches!(self.control, Control::Serial(_))
+    }
+
+    /// What to make of a frequency the radio has just reported — over its CAT
+    /// port, or read back off the streaming interface.
+    ///
+    /// Not simply believed, because three different things arrive here looking
+    /// the same, and only the last of them is the operator's hand:
+    ///
+    /// * nothing the rig says about its frequency means anything while we are
+    ///   keying it. The VFO is the transmit frequency for the length of the
+    ///   over, and reading that as the window having moved would slide the
+    ///   panadapter sideways on every key-down. [`Self::tx_end`] puts it back,
+    ///   and the report that follows is the honest one;
+    /// * the rig arriving where we sent it is not news. Retire the expectation
+    ///   and say nothing: the centre is already the number we commanded;
+    /// * anything else with a command of ours still in flight is the rig on its
+    ///   way, or an answer that crossed our command on the wire. See
+    ///   [`FREQ_SETTLE`].
+    ///
+    /// What is left is the knob. On this radio the VFO carries the window and
+    /// the dial together, so that is both: the centre moves here (the engine
+    /// reads it straight back out of `center_hz` when it takes the `Freq`, and
+    /// the axis has to be relabelled against the same number the samples are
+    /// now arriving on), and the dial goes up as `Freq` so the readout follows
+    /// the radio instead of sitting where it was left.
+    ///
+    /// Nothing goes back at the VFO: the only write here is the DDC's own
+    /// tuning word, which keeps the device's record of the centre in step with
+    /// ours. So the operator's hand and this end cannot fight over the knob —
+    /// which matters most on the gateway path, where this runs four times a
+    /// second against a dial that may still be turning.
+    fn adopt_dial(&mut self, hz: f64) -> Option<ControlUpdate> {
+        if self.keyed {
+            return None;
+        }
+        match self.expect_freq {
+            Some((want, _)) if (want - hz).abs() < 1.0 => {
+                self.expect_freq = None;
+                None
+            }
+            Some((_, at)) if at.elapsed() < FREQ_SETTLE => None,
+            // A report of where we already are is not a move. Worth its own
+            // line on the gateway path, which re-reads the same number four
+            // times a second and would otherwise announce every one of them.
+            _ if (self.center - hz).abs() < 1.0 => {
+                self.expect_freq = None;
+                None
+            }
+            _ => {
+                self.expect_freq = None;
+                self.center = hz;
+                self.handle.set_center_hz(hz);
+                Some(ControlUpdate::Freq(hz))
+            }
+        }
     }
 
     /// Put the rig's own VFO on `hz`, by whichever path is available.
@@ -593,8 +652,21 @@ impl IqSource for EladSource {
     // ── Rig control ──────────────────────────────────────────────────────────
 
     fn poll_control(&mut self) -> Vec<ControlUpdate> {
-        let Control::Serial(cat) = &self.control else {
-            return Vec::new();
+        let cat = match &self.control {
+            Control::Serial(cat) => cat,
+            // No serial port, but the radio is still answering on the cable the
+            // samples arrive on, and its own dial can be read there.
+            Control::Gateway => {
+                let Some(hz) = self.handle.tuned_hz() else { return Vec::new() };
+                let out = self.adopt_dial(hz);
+                // Only the moves, not the four answers a second that say the
+                // radio is where it was.
+                if out.is_some() {
+                    tracing::debug!(hz, "the FDM-DUO's own dial moved");
+                }
+                return out.into_iter().collect();
+            }
+            Control::None => return Vec::new(),
         };
         let updates = cat.poll();
         // A radio that has said anything at all is a radio whose VFO this end
@@ -604,47 +676,7 @@ impl IqSource for EladSource {
         let mut out = Vec::new();
         for u in updates {
             match u {
-                sdroxide_cat::CatUpdate::Freq(hz) => {
-                    // Nothing the rig says about its frequency means anything
-                    // while we are keying it: the VFO is the transmit frequency
-                    // for the length of the over, and reading that as the
-                    // window having moved would slide the panadapter sideways
-                    // on every key-down. `tx_end` puts it back, and the report
-                    // that follows is the honest one.
-                    if self.keyed {
-                        continue;
-                    }
-                    match self.expect_freq {
-                        // The rig arriving where we sent it. Retire the
-                        // expectation and say nothing: the centre is already
-                        // the number we commanded.
-                        Some((want, _)) if (want - hz).abs() < 1.0 => self.expect_freq = None,
-                        // Something else, with a command of ours still in
-                        // flight — the rig on its way, or an answer that
-                        // crossed our command on the wire. See `FREQ_SETTLE`.
-                        Some((_, at)) if at.elapsed() < FREQ_SETTLE => {}
-                        // The operator's knob, turned by hand. On this radio
-                        // the VFO carries the window and the dial together, so
-                        // this is both: the centre moves here (the engine reads
-                        // it straight back out of `center_hz` when it takes the
-                        // `Freq`, and the axis has to be relabelled against the
-                        // same number the samples are now arriving on), and the
-                        // dial goes up as `Freq` so the readout follows the
-                        // radio instead of sitting where it was left.
-                        //
-                        // Nothing goes back at the VFO over the control link:
-                        // the only write here is the DDC's own tuning word,
-                        // which keeps the device's record of the centre in step
-                        // with ours. So the operator's hand and this end cannot
-                        // fight over the knob.
-                        _ => {
-                            self.expect_freq = None;
-                            self.center = hz;
-                            self.handle.set_center_hz(hz);
-                            out.push(ControlUpdate::Freq(hz));
-                        }
-                    }
-                }
+                sdroxide_cat::CatUpdate::Freq(hz) => out.extend(self.adopt_dial(hz)),
                 sdroxide_cat::CatUpdate::Mode(m) => out.push(ControlUpdate::Mode(m)),
                 // Which socket the rig came up on, read once as the port
                 // opened. Adopted rather than overridden: it is the operator's
