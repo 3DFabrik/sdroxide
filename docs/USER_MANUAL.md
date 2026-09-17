@@ -4060,7 +4060,10 @@ STOP, which is what an operator recording a continuous transmission wants.
 - **PHASE** ◀ ▶ shifts the picture sideways in 10- or 100-pixel steps. A chart
   begins with about thirty seconds of phasing signal that tells sdroxide where a
   line starts; if you tuned in after that went by, the chart arrives cut
-  vertically and wrapped, and this is what puts it back together.
+  vertically and wrapped, and this is what puts it back together. The shift
+  applies to the part of the chart already received as well as the lines still
+  to come, so the whole picture moves at once and the saved image is corrected
+  with it (issue #439).
 - **SLANT** trims the sample clock in parts per million. If the chart leans to
   the left, increase it; to the right, decrease it. A sound card a hundred ppm
   off — well within tolerance — walks a fifteen-minute chart most of a line
