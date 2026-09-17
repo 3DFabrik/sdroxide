@@ -3493,7 +3493,10 @@ manual entries. You can:
   de-duplicated against the log (same call + band within two minutes are skipped).
   Field lengths are read as the byte counts ADIF specifies, but exporters that
   count characters instead (QRZ's logbook among them) are handled too, so
-  accented names and QTHs survive the import intact.
+  accented names and QTHs survive the import intact. Records marked `SWL` are
+  received reports, not contacts — the DECODES panel's ADIF export writes them
+  — and are left out; the network log line at the end of the import says how
+  many.
 
   A file need not be Unicode. Plenty of Windows loggers write their national
   code page instead, and a Cyrillic or accented name in one used to stop the
