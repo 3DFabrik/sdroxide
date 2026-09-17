@@ -1378,10 +1378,13 @@ impl IqSource for ConvertedSource {
     }
 
     /// Forwarded: which VFO is in use is a fact about the rig, and a converter
-    /// in front of it does not change which one that is. The frequency is the
-    /// one at the *rig*, so it goes down through the conversion.
+    /// in front of it does not change which one that is. The frequency arrives
+    /// as the operator's and the rig wants its own, so it takes the offset the
+    /// way [`Self::set_center_hz`] gives it — `dial + rx_offset`, through the
+    /// step the dial falls in. [`Self::down`] is the other direction, and sent a
+    /// transverter's VFO B to a frequency below DC.
     fn select_vfo(&mut self, vfo: Vfo, hz: f64) {
-        self.inner.select_vfo(vfo, self.down(hz));
+        self.inner.select_vfo(vfo, hz + self.plan.step_for(hz).rx_offset_hz);
     }
 
     fn read(&mut self, buf: &mut [Complex32]) -> Result<usize> {
