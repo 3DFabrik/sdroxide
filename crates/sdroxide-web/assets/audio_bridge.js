@@ -109,6 +109,13 @@
                 while (micChunks.length > 400) micChunks.shift();
             };
             src.connect(capture);
+            // A Web Audio node is only rendered if it has a path through to the
+            // destination, and MicCapture is driven entirely by `process()` —
+            // so with no onward connection it was never scheduled, its
+            // `postMessage` never fired, and the mic fed nothing while logging
+            // "mic ready". The processor writes no output, so this path carries
+            // silence and cannot feed back.
+            capture.connect(ctx.destination);
             micReady = true;
             console.log("sdroxide audio: mic ready");
         } catch (e) {
