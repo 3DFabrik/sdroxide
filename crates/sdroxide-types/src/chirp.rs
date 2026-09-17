@@ -59,7 +59,9 @@ const COLUMNS: &[&str] = &[
 /// *modulation*, not the traffic.
 fn mode_name(m: Mode) -> &'static str {
     match m {
-        Mode::Wfm => "WFM",
+        // HD Radio is the digital sidecar of a broadcast FM station, and a
+        // handheld with the channel stored hears that station in WFM.
+        Mode::Wfm | Mode::HdRadio => "WFM",
         Mode::Am | Mode::Sam => "AM",
         Mode::Lsb | Mode::Digl => "LSB",
         Mode::Cw => "CW",
@@ -467,6 +469,12 @@ Location,Name,Frequency,Duplex,Offset,Tone,rToneFreq,cToneFreq,DtcsCode,DtcsPola
 
     /// What sdroxide writes, CHIRP's reader — and this one — must be able to
     /// read back unchanged.
+    /// HD Radio is stored as the FM broadcast it rides on, not as a sideband.
+    #[test]
+    fn an_hd_radio_channel_exports_as_broadcast_fm() {
+        assert_eq!(mode_name(Mode::HdRadio), "WFM");
+    }
+
     #[test]
     fn the_writer_and_the_reader_agree() {
         let (before, _) = chirp_csv_to_memories(SAMPLE);

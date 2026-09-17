@@ -12,7 +12,7 @@
 //!   two are rate-matched here rather than assumed equal;
 //! * the decoder is a vendored C library, and on a pipe it does all of its work
 //!   inside the call that hands it samples. So it runs on a thread of its own
-//!   (see [`crate::worker`]): this side queues channel I/Q for it and plays
+//!   (see `src/worker.rs`): this side queues channel I/Q for it and plays
 //!   back what it has decoded, and nothing heavier than a copy happens on the
 //!   receive chain's thread.
 //!

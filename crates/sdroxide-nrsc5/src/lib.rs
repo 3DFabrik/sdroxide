@@ -3,16 +3,19 @@
 //! The crate is the decoder for the HD Radio band: it takes raw I/Q samples
 //! (via `HdReceiver::pipe_*`, at nrsc5's native sample rate — see the
 //! `NRSC5_SAMPLE_RATE_*` definitions upstream) and turns them into decoded
-//! audio and the SIS/ID3 metadata roadcasters send.
+//! audio and the SIS/ID3 metadata broadcasters send.
 //!
-//! It is a thin binding on purpose. The receive path is a worker thread owned
-//! by the C library; the caller pipes samples in from its own thread and
-//! collects `Event`s on this side through a plain channel. `HdReceiver` is
-//! therefore `Send` (move it to the sampler thread) but not `Sync`: the pipe
-//! functions and the close must not run concurrently.
+//! [`HdReceiver`] is a thin binding on purpose. Opened on a pipe, the C library
+//! runs no thread of its own: each `pipe_*` call does the decoding and fires
+//! the callbacks before it returns, and they reach this side as `Event`s
+//! through a plain channel. `HdReceiver` is therefore `Send` (move it to the
+//! thread that will feed it) but not `Sync`: the pipe functions and the close
+//! must not run concurrently. [`HdDemod`] is the receive-chain demodulator
+//! built on it, and keeps that work off the chain's thread.
 //!
-//! Audio reaches the caller as `Event::Audio` in signed 16-bit mono PCM at
-//! 44.1 kHz, exactly as nrsc5 emits it. Metadata arrives as the station / SIS
+//! Audio reaches the caller as `Event::Audio` in signed 16-bit interleaved
+//! stereo PCM at 44.1 kHz, exactly as nrsc5 emits it. Metadata arrives as the
+//! station / SIS
 //! events; the finer data services (LOT files, HERE images, ID3 tags, the SIG
 //! table) are decoded inside the library but not yet surfaced here.
 //!
@@ -92,11 +95,11 @@ pub enum Event {
         /// Audio codec mode, per SY_IDD_1017s Table 5-2.
         codec_mode: u8,
     },
-    /// The roadcaster's station name, e.g. "Q107".
+    /// The broadcaster's station name, e.g. "Q107".
     StationName(String),
     /// The station slogan, e.g. "You're Listening to Q".
     StationSlogan(String),
-    /// A short text the roadcaster is currently airing.
+    /// A short text the broadcaster is currently airing.
     StationMessage(String),
 }
 
