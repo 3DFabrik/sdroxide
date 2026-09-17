@@ -696,10 +696,34 @@ impl SdroxideApp {
     /// box's CLEAR — one throws away what was received, the other stops what is
     /// being sent, and confusing the two mid-over is expensive.
     pub(in crate::app) fn clear_rx_chip(&self, ui: &mut egui::Ui, cmds: &mut Vec<Command>) {
-        if crate::chrome::chip(ui, false, RichText::new(" CLEAR RX ").size(10.5))
-            .on_hover_text("Empty the receive window. Nothing that is on the air stops.")
-            .clicked()
-        {
+        self.clear_rx_chip_enabled(ui, cmds, true);
+    }
+
+    /// [`Self::clear_rx_chip`], but greyed out when there is nothing to clear.
+    ///
+    /// JS8's composer disables it on an empty conversation (issue #473); the
+    /// other panels have no cheap "is there anything" test and keep it live.
+    pub(in crate::app) fn clear_rx_chip_enabled(
+        &self,
+        ui: &mut egui::Ui,
+        cmds: &mut Vec<Command>,
+        enabled: bool,
+    ) {
+        let resp = crate::chrome::chip_accent_enabled(
+            ui,
+            enabled,
+            false,
+            " CLEAR RX ",
+            Some(10.5),
+            crate::theme::CYAN(),
+            crate::theme::INK_ON_CYAN(),
+        );
+        let resp = if enabled {
+            resp.on_hover_text("Empty the receive window. Nothing that is on the air stops.")
+        } else {
+            resp.on_disabled_hover_text("Nothing received to clear")
+        };
+        if resp.clicked() {
             cmds.push(Command::DigiClearRx);
         }
     }

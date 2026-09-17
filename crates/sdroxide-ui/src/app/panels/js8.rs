@@ -1021,9 +1021,11 @@ impl SdroxideApp {
         js8: &sdroxide_types::Js8Status,
     ) {
         let has_target = !self.js8_target.is_empty();
-        // Every chip in this row puts a frame on the air, so a receiver greys
-        // the lot of them — the CLEAR TO chip below only forgets a selection
-        // and stays live.
+        // No chip in this row transmits any more: the template chips write the
+        // message into the compose box and SEND is the one thing that puts it
+        // on the air, so what is about to go out is always on screen first
+        // (issue #472). A receive-only radio still greys the ones that would
+        // lead to a transmission.
         let tx_ok = self.tx_capable();
 
         // Actions — the lower of the two rows. Wrapped, because the right
@@ -1034,11 +1036,11 @@ impl SdroxideApp {
             // wraps, and a child `Ui` in a wrapping row does not.
             if rx_only_hint(crate::chrome::chip_enabled(ui, tx_ok, false, " CQ "), tx_ok).clicked()
             {
-                cmds.push(Command::DigiCallCq);
+                self.text_tx = "CQ".to_string();
             }
             if rx_only_hint(crate::chrome::chip_enabled(ui, tx_ok, false, " HB "), tx_ok).clicked()
             {
-                cmds.push(Command::DigiSendText("@ALLCALL HB".into()));
+                self.text_tx = "HB".to_string();
             }
             // The queries address whichever station is selected. Shown greyed
             // rather than hidden when there is none: a row that changes shape
@@ -1047,9 +1049,7 @@ impl SdroxideApp {
             ui.add_enabled_ui(has_target && tx_ok, |ui| {
                 for q in ["SNR?", "GRID?", "HEARING?", "STATUS?", "HW CPY?"] {
                     if rx_only_hint(crate::chrome::chip(ui, false, q), tx_ok).clicked() {
-                        let full = format!("{} {q}", self.js8_target);
-                        self.js8_last_sent = full.clone();
-                        cmds.push(Command::DigiSendText(full));
+                        self.text_tx = q.to_string();
                     }
                 }
                 // The two that close a contact. Worth a button of their own:
@@ -1057,18 +1057,38 @@ impl SdroxideApp {
                 // is the one moment an operator is not watching the panel.
                 for q in ["RR", "73"] {
                     if rx_only_hint(crate::chrome::chip(ui, false, q), tx_ok).clicked() {
-                        let full = format!("{} {q}", self.js8_target);
-                        self.js8_last_sent = full.clone();
-                        cmds.push(Command::DigiSendText(full));
+                        self.text_tx = q.to_string();
                     }
                 }
             });
-            if has_target && crate::chrome::chip(ui, false, " CLEAR TO ").clicked() {
+            // The clears are a different kind of thing from the templates
+            // beside them — those fill the box, these empty a window — so they
+            // get a rule between them (issue #473).
+            ui.separator();
+            // Always present: greys at @ALLCALL, where there is nothing to
+            // forget. A chip that comes and goes is a chip nobody aims at.
+            let clear_to = crate::chrome::chip_accent_enabled(
+                ui,
+                has_target,
+                false,
+                " CLEAR TO ",
+                Some(10.5),
+                crate::theme::CYAN(),
+                crate::theme::INK_ON_CYAN(),
+            );
+            let clear_to = if has_target {
+                clear_to.on_hover_text(
+                    "Forget the selected station — the composer goes back to @ALLCALL",
+                )
+            } else {
+                clear_to.on_disabled_hover_text("Already addressing @ALLCALL")
+            };
+            if clear_to.clicked() {
                 self.js8_target.clear();
             }
-            // Empties the conversation above, not the selection — which is what
-            // the chip beside it does, hence the different words for it.
-            self.clear_rx_chip(ui, cmds);
+            // Empties the conversation above, not the selection, and is dead
+            // while there is nothing in it.
+            self.clear_rx_chip_enabled(ui, cmds, !js8.messages.is_empty());
         });
 
         // The gap between the two rows. In a bottom-up layout this space sits
@@ -1124,11 +1144,23 @@ impl SdroxideApp {
                 send |= tx_ok && resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             });
             if send && !self.text_tx.trim().is_empty() {
-                let body = self.text_tx.trim();
-                let full = if has_target {
+                let body = self.text_tx.trim().to_string();
+                // CQ and HB are addressed to everyone, whichever station is
+                // selected: prefixing them with a callsign would turn "CQ" into
+                // a directed free-text message and "HB" into the wrong frame.
+                // Everything else goes to the target when there is one.
+                let broadcast = matches!(
+                    body.to_ascii_uppercase().as_str(),
+                    "CQ" | "HB"
+                        | "HEARTBEAT"
+                        | "@ALLCALL CQ"
+                        | "@ALLCALL HB"
+                        | "@ALLCALL HEARTBEAT"
+                );
+                let full = if has_target && !broadcast {
                     format!("{} {body}", self.js8_target)
                 } else {
-                    body.to_string()
+                    body
                 };
                 // Kept so `AGN?` — "say again" — has something to draft from.
                 self.js8_last_sent = full.clone();
