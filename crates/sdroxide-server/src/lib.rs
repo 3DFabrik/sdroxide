@@ -1243,8 +1243,17 @@ fn handle_event(shared: &Shared, ev: RadioEvent) {
     }
     if let Some(msg) = msg {
         if let Some(s) = shared.session.lock().unwrap().as_ref() {
-            if s.reliable.try_send(msg).is_err() {
-                warn!("reliable lane full; dropping message");
+            if let Err(e) = s.reliable.try_send(msg) {
+                // Name what was dropped. A client that falls behind sheds a
+                // burst of these in well under a second, and the consequence
+                // is not the same for every kind: a state or meter update is
+                // re-sent on the next tick and the client catches up by
+                // itself, while a notice, a decoded line or a spot exists
+                // once and is simply gone. Without the discriminant in the
+                // log there is no way to tell those two apart afterwards
+                // (issue #443).
+                let dropped = e.into_inner();
+                warn!("reliable lane full; dropping {}", msg_kind(&dropped));
             }
         }
     }
@@ -1254,6 +1263,36 @@ fn handle_event(shared: &Shared, ev: RadioEvent) {
     if renamed && let Some(station) = shared.station.upgrade() {
         station.announce_roster();
     }
+}
+
+/// The variant name of a [`ServerMsg`], for a log line that has to say what was
+/// lost. `Debug` already spells it and everything up to the first `{`, `(` or
+/// space is the discriminant, so nothing here can drift from the enum.
+///
+/// Formatted into a sink that gives up at that first delimiter rather than
+/// into a `String`: some of these messages are a whole `RadioState` or a
+/// spectrum frame, and rendering kilobytes of it to read the first word would
+/// make the drop path expensive exactly when the process is already behind.
+fn msg_kind(msg: &ServerMsg) -> String {
+    use std::fmt::Write as _;
+    struct FirstWord(String);
+    impl std::fmt::Write for FirstWord {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            match s.find([' ', '{', '(']) {
+                Some(i) => {
+                    self.0.push_str(&s[..i]);
+                    Err(std::fmt::Error) // stop formatting: the name is complete
+                }
+                None => {
+                    self.0.push_str(s);
+                    Ok(())
+                }
+            }
+        }
+    }
+    let mut w = FirstWord(String::new());
+    let _ = write!(w, "{msg:?}");
+    if w.0.is_empty() { "message".to_string() } else { w.0 }
 }
 
 /// What a radio's *interface* contributes to its name — empty when it has not

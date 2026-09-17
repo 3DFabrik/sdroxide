@@ -43,7 +43,7 @@ use sdroxide_types::{
 };
 use sdroxide_vdl2::{Vdl2Action, Vdl2Controller};
 
-use crate::recorder::{Recorder, RecordingChannels};
+use crate::recorder::{Recorder, RecorderFault, RecordingChannels};
 use crate::voice::VoiceKeyer;
 use crate::{Complex32, ControlUpdate, IqSource};
 
@@ -4515,6 +4515,11 @@ fn engine_thread(
         }
         if now >= next_meters {
             next_meters = now + METER_INTERVAL;
+            // A recording that has stopped writing, or stumbled and carried
+            // on. Nothing else in the program fails this quietly — the audio
+            // plays on, the button stays lit, and the only evidence is a file
+            // that ends early (issue #443).
+            engine.report_recorder_faults();
             // How much of the disk the I/Q capture has taken, for the readout
             // beside the button. At 2.4 Msps this climbs by 19 MB a second and
             // an operator wants to see that before the disk fills.
@@ -9462,6 +9467,32 @@ impl Engine {
         self.state.iq_recording = false;
         self.state.iq_recording_file = None;
         self.state.iq_recording_mb = 0;
+    }
+
+    /// Tell the operator when the MP3 encoder has stumbled, and take the
+    /// recording down when it cannot be brought back.
+    ///
+    /// A dead recorder leaves `state.recording` lit and the mixer feeding a
+    /// ring nobody drains, so the button would go on claiming a recording that
+    /// stopped minutes ago. It is torn down here for the same reason the
+    /// operator is told: the honest state is "not recording".
+    fn report_recorder_faults(&mut self) {
+        let Some(fault) = self.recorder.as_ref().and_then(|r| r.failure()) else { return };
+        match fault {
+            RecorderFault::Glitch => {
+                let _ = self.event_tx.send(RadioEvent::Notice(Some(
+                    "Recording: the MP3 encoder hiccuped — there is a short gap in the file".into(),
+                )));
+            }
+            RecorderFault::Dead => {
+                let file = self.state.recording_file.clone().unwrap_or_default();
+                self.stop_recording();
+                let _ = self.event_tx.send(RadioEvent::Notice(Some(format!(
+                    "Recording stopped: the MP3 encoder failed. {file} holds what was captured \
+                     up to that point."
+                ))));
+            }
+        }
     }
 
     /// Stop and finalize any active recording.
