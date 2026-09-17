@@ -311,6 +311,14 @@ impl DigiEngine for WefaxController {
 
     fn wefax_nudge(&mut self, pixels: i32) {
         self.rx.nudge_phase(pixels);
+        // Correct what has already arrived as well, so the chart the operator
+        // is looking at — and the PNG it becomes — moves as one picture rather
+        // than only from the nudge onwards (issue #439).
+        let w = self.width as usize;
+        if w > 0 {
+            let h = self.image.len() / w;
+            sdroxide_types::shift_rows(&mut self.image, w, h, pixels);
+        }
         self.status_dirty = true;
     }
 }
