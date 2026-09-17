@@ -115,9 +115,11 @@ pub enum NrsError {
 
 /// A handle to an HD Radio receive session.
 ///
-/// Opening starts the library's worker thread; audio and metadata callbacks
-/// are marshalled into a channel and drained with `poll`/`wait`. Dropping the
-/// receiver detaches the callback before the worker is joined, so no callback
+/// Opened on a pipe, the library starts no thread: every `pipe_*` call does the
+/// decoding itself and fires the audio and metadata callbacks before it
+/// returns. They are marshalled into a channel and drained with `poll` or
+/// `drain`, which never block — there is no one else to send. Dropping the
+/// receiver detaches the callback before the library is closed, so no callback
 /// can outlive it.
 pub struct HdReceiver {
     st: *mut NrsCtx,
@@ -161,12 +163,15 @@ impl HdReceiver {
         Ok(())
     }
 
-    /// Pipes raw signed 16-bit I/Q samples (4 bytes per complex sample).
+    /// Pipes signed 16-bit I/Q, interleaved: two values per complex sample.
     ///
-    /// `samples.len()` is in bytes. Feed at `NRSC5_SAMPLE_RATE_CU8`.
+    /// The length nrsc5 takes is a count of `int16_t` values — the slice's own
+    /// length — and a trailing odd value is buffered by the library across
+    /// calls. Handing it twice that, as a byte count, had the library read as
+    /// far again past the end of the slice. Feed at the native FM (744,187.5 S/s)
+    /// or AM (46,511.71875 S/s) rate, like [`Self::pipe_cf32`].
     pub fn pipe_cs16(&self, samples: &[i16]) -> Result<(), NrsError> {
-        let count = samples.len() * 2;
-        let len = c_uint::try_from(count).map_err(|_| NrsError::Pipe)?;
+        let len = c_uint::try_from(samples.len()).map_err(|_| NrsError::Pipe)?;
         if unsafe { nrsc5_pipe_samples_cs16(self.st, samples.as_ptr(), len) } != 0 {
             return Err(NrsError::Pipe);
         }
@@ -188,11 +193,6 @@ impl HdReceiver {
     /// Returns the next queued event without waiting.
     pub fn poll(&self) -> Option<Event> {
         self.rx.try_recv().ok()
-    }
-
-    /// Blocks until the next event arrives (or the receiver is closed).
-    pub fn wait(&self) -> Option<Event> {
-        self.rx.recv().ok()
     }
 
     /// A non-blocking iterator over whatever is queued right now.
