@@ -125,8 +125,7 @@ const RF_AM_HZ: &[u32] = &[2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000];
 /// its receive cable plugged in still be tuned and keyed. Two copies of the
 /// framing would be one copy too many.
 pub fn freq_frame(hz: f64) -> String {
-    let hz = hz.round().clamp(0.0, 99_999_999_999.0) as u64;
-    format!("FA{hz:0FREQ_DIGITS$};")
+    freq_frame_on(Vfo::A, hz)
 }
 
 /// Which of the radio's own VFOs to receive on, as `FR0;` or `FR1;`.
@@ -150,10 +149,11 @@ pub fn vfo_frame(vfo: Vfo) -> String {
 /// with `FA;`, which answers VFO A's frequency whichever VFO is selected.
 pub fn freq_frame_on(vfo: Vfo, hz: f64) -> String {
     let hz = hz.round().clamp(0.0, 99_999_999_999.0) as u64;
-    match vfo {
-        Vfo::A => format!("FA{hz:0FREQ_DIGITS$};"),
-        Vfo::B => format!("FB{hz:0FREQ_DIGITS$};"),
-    }
+    let which = match vfo {
+        Vfo::A => 'A',
+        Vfo::B => 'B',
+    };
+    format!("F{which}{hz:0FREQ_DIGITS$};")
 }
 
 /// The `MD` frame for an app mode.
