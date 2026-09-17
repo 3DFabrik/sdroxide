@@ -381,7 +381,9 @@ impl Device {
         if self.model != Model::Duo {
             return Ok(None);
         }
-        let reply = self.usb.control_in(
+        // Polled, so only a failure is traced — see `UsbDev::control_in_polled`.
+        // The stream thread notes the first answer itself.
+        let reply = self.usb.control_in_polled(
             Request::DuoGateway,
             "read tune",
             0,
