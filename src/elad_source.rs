@@ -62,15 +62,21 @@
 //! [issue #146]: https://github.com/dividebysandwich/sdroxide/issues/146
 //! [issue #170]: https://github.com/dividebysandwich/sdroxide/issues/170
 //!
-//! # Not verified against hardware
+//! # What has met hardware
 //!
-//! Almost nothing here has been run against a radio. One of the two assumptions
-//! this file was written on has now been settled the hard way, by an operator
-//! with an FDM-DUO: the DDC feeding this USB interface is emphatically *not*
-//! independent of the receiver the transceiver tunes for its own audio. The
-//! other still wants checking — whether the stream survives a transmit cycle.
-//! It is assumed *not* to (the interface is declared half duplex), which is the
-//! safe way to be wrong.
+//! Receiving over the USB interface, driven through the gateway with no serial
+//! cable, has been run on an FDM-DUO (hardware 2.9, firmware 4.9) at 192 kHz:
+//! the I/Q order, the tuning word with the EEPROM clock correction applied, the
+//! dial read-back that follows the radio's own knob, and the radio's VFO A/B
+//! (PRs #462 and #467). Before that, one of the two assumptions this file was
+//! written on had been settled the hard way by an operator: the DDC feeding
+//! this USB interface is emphatically *not* independent of the receiver the
+//! transceiver tunes for its own audio.
+//!
+//! Transmit has not been run, nor has the serial path on a bench, any rate above
+//! 192 kHz, or an FDM-S1/S2. The open question on transmit is whether the
+//! stream survives a transmit cycle. It is assumed *not* to (the interface is
+//! declared half duplex), which is the safe way to be wrong.
 
 use std::time::Duration;
 
@@ -107,17 +113,19 @@ const FREQ_SETTLE: Duration = Duration::from_millis(1200);
 /// Three cases and they are genuinely different, which is why this is an enum
 /// rather than an `Option`. The serial port is the full link — it reads as well
 /// as writes, so the meters, the mode and the operator's own knob all come
-/// back. The USB gateway writes only. Nothing at all is an FDM-S.
+/// back. The USB gateway writes commands and reads back only the dial. Nothing
+/// at all is an FDM-S.
 enum Control {
     /// The rig's CAT serial port.
     Serial(Box<sdroxide_cat::CatHandle>),
     /// The FDM-DUO's CAT gateway on the streaming USB interface.
     ///
-    /// A write-only path, and the reason it exists is worth stating: it works
-    /// with **no serial cable plugged in**. A DUO on one USB lead can still be
-    /// tuned, put in a mode and keyed. What is given up is everything that
-    /// needs an answer — the S-meter, the SWR, the transmit power, and any
-    /// notice that the operator has touched the front panel.
+    /// The reason it exists is worth stating: it works with **no serial cable
+    /// plugged in**. A DUO on one USB lead can still be tuned, put in a mode
+    /// and keyed, and the radio's own dial is read back on the same interface
+    /// (`EladHandle::tuned_hz`), so a turn of its knob is followed. What is
+    /// given up is every other answer — the S-meter, the SWR, the transmit
+    /// power, and a mode or a VFO changed on the front panel.
     Gateway,
     /// An FDM-S1 or FDM-S2: a receiver, with nothing to control.
     None,
@@ -398,7 +406,7 @@ impl EladSource {
     /// What to make of a frequency the radio has just reported — over its CAT
     /// port, or read back off the streaming interface.
     ///
-    /// Not simply believed, because three different things arrive here looking
+    /// Not simply believed, because four different things arrive here looking
     /// the same, and only the last of them is the operator's hand:
     ///
     /// * nothing the rig says about its frequency means anything while we are
@@ -410,7 +418,9 @@ impl EladSource {
     ///   and say nothing: the centre is already the number we commanded;
     /// * anything else with a command of ours still in flight is the rig on its
     ///   way, or an answer that crossed our command on the wire. See
-    ///   [`FREQ_SETTLE`].
+    ///   [`FREQ_SETTLE`];
+    /// * a report of the frequency we are already on is not a move either —
+    ///   the gateway re-reads the same number four times a second.
     ///
     /// What is left is the knob. On this radio the VFO carries the window and
     /// the dial together, so that is both: the centre moves here (the engine
@@ -977,8 +987,9 @@ impl IqSource for EladSource {
         let mut parts = self.status.clone();
         parts.extend(late.iter().cloned());
         parts.push(
-            "ELAD support is new and has not been verified against real hardware. \
-             If it misbehaves, Settings → Radio has a Copy diagnostic report button."
+            "ELAD support is new, and only receiving on an FDM-DUO has been run on a \
+             real radio. If it misbehaves, Settings → Radio has a Copy diagnostic \
+             report button."
                 .to_string(),
         );
         Some(parts.join(" — "))

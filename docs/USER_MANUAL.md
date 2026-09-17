@@ -10013,11 +10013,14 @@ worked frequency on this side too, so the two displays then agree. Nothing on
 the waterfall moves. Without it the paddle answered every station a whole
 sidetone low and nobody came back.
 
-> **Not verified against hardware.** The whole of this backend — the USB
-> protocol, the tuning arithmetic, the calibration map and the CAT dialect — is
-> written from ELAD's own [gr-elad](https://github.com/ELADIT/gr-elad) GNU Radio
-> module and from the FDM-DUO manual's CAT chapter. Nobody has run it against a
-> radio. If it misbehaves, **Copy diagnostic report** on the Radio tab puts
+> **Mostly not verified against hardware.** This backend — the USB protocol,
+> the tuning arithmetic, the calibration map and the CAT dialect — is written
+> from ELAD's own [gr-elad](https://github.com/ELADIT/gr-elad) GNU Radio module
+> and from the FDM-DUO manual's CAT chapter. Receiving on an FDM-DUO over the
+> USB interface alone has since been run on one (hardware 2.9, firmware 4.9, at
+> 192 kHz): the I/Q order, the tuning word, following the radio's own dial and
+> its VFO A/B all checked out. Transmit, the serial CAT port on a bench, the
+> higher sample rates and the FDM-S1/S2 have not been. If it misbehaves, **Copy diagnostic report** on the Radio tab puts
 > every command exchanged with the device on the clipboard; `cargo run -p
 > sdroxide-elad --example probe` does the same from a terminal and also settles
 > what rate the device is really in.

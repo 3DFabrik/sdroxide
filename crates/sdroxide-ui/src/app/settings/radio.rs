@@ -4882,8 +4882,8 @@ pub(in crate::app) fn settings_elad_tab(
     ui.add_space(4.0);
     ui.label(
         RichText::new(
-            "ELAD support has not been verified against real hardware. If it \
-             misbehaves, please attach the diagnostic report to a bug report.",
+            "Only receiving on an FDM-DUO has been run on real hardware so far. If \
+             anything misbehaves, please attach the diagnostic report to a bug report.",
         )
         .color(crate::theme::YELLOW()),
     );
