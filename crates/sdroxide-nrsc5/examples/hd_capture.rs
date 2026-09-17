@@ -7,7 +7,15 @@
 //! The capture rate defaults to 2,976,750 S/s — four times the decoder's own
 //! rate, which is what an `sdroxide --record-iq` file of an FM band usually is.
 //! Pass 744187.5 for a clip already cut to one channel at the decoder's rate,
-//! and the shift and decimation fall away.
+//! and the shift and decimation fall away. Any other rate works: the
+//! decimation stays whole and the decoder is told the rate that produces, so
+//! its own resampler closes the remaining fraction.
+//!
+//! The capture centre is the *front end's* centre, which is not the dial
+//! frequency when the device tunes with an LO offset — `--record-iq` writes
+//! what the device produced. sdroxide's "source ready" line reports the offset
+//! in force; an RSPdx at 2 Msps offsets by a quarter of the rate, so a station
+//! on a 99.5 MHz dial sits in a capture centred on 100.0 MHz.
 //!
 //! Prints what the decoder reports so a real station can be checked without a
 //! GUI: lock, per-sideband MER, CBER, the station's identity, the stereo side
@@ -43,22 +51,32 @@ fn main() {
     let (path, centre, chan) = (&a[0], a[1].parse::<f64>().unwrap(), a[2].parse::<f64>().unwrap());
     // The capture rate is not fixed: `--record-iq` files come at whatever the
     // front end was running, and a clip cut for the test is already at the
-    // decoder's own rate. Whole multiples only — that is what a capture made
-    // for this is, and a fractional one belongs in the engine's resampler
-    // rather than in a bench tool.
+    // decoder's own rate. The decimation stays whole — a bench tool has no
+    // business carrying its own fractional resampler when `HdDemod` already
+    // has the engine's, and hands it whatever the whole step leaves.
     let cap_rate = a.get(3).and_then(|s| s.parse::<f64>().ok()).unwrap_or(4.0 * FM_RATE_HZ);
     let decim = (cap_rate / FM_RATE_HZ).round().max(1.0) as u64;
+    // What that whole decimation actually produces, and so the rate the
+    // decoder has to be told: only a capture at an exact multiple of the
+    // native rate lands on it by decimating. A 2 Msps one — sdroxide's own
+    // default for an RSPdx — decimates by 3 to 666,666.7 S/s, and a decoder
+    // told it was getting 744,187.5 never locks on it.
+    let chan_rate = cap_rate / decim as f64;
     let program: u8 = a.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
 
     // The programme is selected once the station has announced it: the demod
     // ignores a programme the multiplex has not listed, and before the first
     // station information arrives it has listed none but HD-1.
-    let mut demod = HdDemod::new(FM_RATE_HZ);
+    let mut demod = HdDemod::new(chan_rate);
 
-    // Windowed-sinc low-pass, flat to 200 kHz, down by the 372 kHz where the
-    // decimated band folds.
+    // Windowed-sinc low-pass, flat to the 200 kHz the digital sidebands reach,
+    // down by `chan_rate / 2` where the decimated band folds, with the cutoff
+    // between the two. That is the 286 kHz a capture at four times the native
+    // rate has always used, and less than that only where a narrower one folds
+    // sooner — at the decoder's 400 kHz floor the fold is at 200 kHz, and a
+    // fixed 286 kHz would drop the band above 114 kHz onto the upper sideband.
     let mut h = [0f32; TAPS];
-    let (mut sum, fc) = (0f64, 286e3 / cap_rate);
+    let (mut sum, fc) = (0f64, (0.5 * (200e3 + 0.5 * chan_rate)).min(286e3) / cap_rate);
     for (i, t) in h.iter_mut().enumerate() {
         let k = i as f64 - (TAPS / 2) as f64;
         let sinc = if k == 0.0 {
@@ -156,6 +174,10 @@ fn main() {
     }
 
     println!("\n{:.1} MHz, programme HD{}", chan / 1e6, program + 1);
+    // Says what the capture was actually reduced to, so a rate the decoder
+    // then has to resample is visible rather than showing up only as a lock
+    // that never comes.
+    println!("  channel rate {:.1} S/s, decimated by {} from {:.1}", chan_rate, decim, cap_rate);
     match best {
         None => println!("  never locked"),
         Some(s) => {
