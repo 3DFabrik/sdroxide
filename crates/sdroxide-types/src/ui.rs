@@ -379,18 +379,6 @@ impl UiTheme {
             UiTheme::ModernMinimalist => "Modern minimalist",
         }
     }
-
-    /// True where the chrome sits on a bright ground, so anything that has to
-    /// pick an ink or a shade by hand knows which way round the world is.
-    pub fn is_light(self) -> bool {
-        matches!(
-            self,
-            UiTheme::Light
-                | UiTheme::Solarized
-                | UiTheme::CatppuccinLatte
-                | UiTheme::ModernMinimalist
-        )
-    }
 }
 
 /// The shape a piece of chrome wears — one list serves both the buttons and
