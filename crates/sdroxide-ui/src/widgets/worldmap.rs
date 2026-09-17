@@ -107,7 +107,7 @@ impl MapView {
     /// Zoom by `factor` (below 1 zooms *in*) about a point given as a fraction
     /// of the map rect — (0,0) top-left, (1,1) bottom-right — keeping whatever
     /// is under that point in place.
-    fn zoom_about(&mut self, factor: f64, fx: f64, fy: f64, aspect: f64) {
+    pub(crate) fn zoom_about(&mut self, factor: f64, fx: f64, fy: f64, aspect: f64) {
         // Where the anchor sits relative to the centre, in view fractions, and
         // the place it is currently over.
         let (ax, ay) = (fx - 0.5, 0.5 - fy);
