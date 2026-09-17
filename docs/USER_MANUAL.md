@@ -12921,6 +12921,13 @@ there is no hovering pointer to hold them open.
 tapping the step itself takes the next one — 10 Hz, 100 Hz, 500 Hz, 1, 2.5, 5,
 9, 10 and 25 kHz, then round again. It is remembered between sessions.
 
+**Settings → UI → First press snaps to the step** (off by default) tidies a dial
+left anywhere: a press goes to the next multiple of the step *in the direction
+pressed* — from 7 074 300 at a 1 kHz step, **+** goes to 7 075 000 and **−** to
+7 074 000 — and every press after that moves by exactly the step. At a 9 kHz
+step that is the medium-wave channel raster; at 1 kHz, the zeroes on a printed
+channel list (issue #422).
+
 This is the one thing a touched screen had no way to do (issue #380). A desktop
 tunes three ways and a phone has none of them: there is no wheel, so scrolling a
 digit on the readout is unreachable; tapping the panadapter lands where you
