@@ -7824,6 +7824,16 @@ involved:
 
   Both presets follow the transmit frequency while keyed and the receive
   frequency otherwise, and this takes effect on **Apply / reconnect**.
+
+  These seven pins are *external* switching. A Protocol 2 board that has an
+  **internal** Alex filter chain (an ANAN-100/200, an ANAN-7000/8000, an
+  ANAN-G2) has that switched for it as well, and there is nothing to set: the
+  transmit/receive relay, the band filters and the ANT1 jack follow the radio's
+  own frequency automatically. Note *the radio's own* — with a transverter in
+  front, the internal filters are set for the I.F. the board actually works on,
+  while the open-collector outputs above follow your dial, which is the band on
+  the air. Before 1.6.9 none of this was sent, so an internal Alex chain sat
+  with every relay released.
 - **Open-collector outputs by band** — the table **Custom** opens: one control
   word per band, written in hexadecimal the way your hardware's documentation
   states it, with **bit 0 = output 1** and **bit 6 = output 7**. It is there for

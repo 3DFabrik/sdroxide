@@ -16,11 +16,32 @@ use crate::discovery;
 use crate::{protocol1, protocol2};
 use sdroxide_types::{HpsdrIoRxInput, HpsdrOcPlan};
 
-/// Host→radio TX I/Q rate. **Both** protocols transmit at 48 kHz: Protocol 2
-/// feeds the DUC directly, and Protocol 1's EP2 stream (speaker audio + TX I/Q)
-/// is fixed at 48 kHz by the spec regardless of the RX/DDC rate — the radio
-/// drains it at 48 ksps no matter how fast EP6 comes back.
+/// Host→radio TX I/Q rate on **Protocol 1**. The EP2 stream (speaker audio +
+/// TX I/Q) is fixed at 48 kHz by the spec regardless of the RX/DDC rate — the
+/// radio drains it at 48 ksps no matter how fast EP6 comes back.
 pub const TX_RATE_HZ: u32 = 48_000;
+
+/// Host→radio TX I/Q rate on **Protocol 2**. The DUC is fed at 192 kHz, four
+/// times Protocol 1's rate, and the board drains the transmit FIFO at exactly
+/// that: piHPSDR's `new_protocol_txiq_thread` ships one 240-sample datagram
+/// every 1250 µs (240 / 0.00125 s = 192000), its simulator empties the modelled
+/// FIFO at `192000.0` samples a second, and rustyHPSDR — the reference these
+/// offsets came from — sets `output_rate = 192000` for protocol 2 against
+/// 48000 for protocol 1.
+///
+/// sdroxide fed the DUC at 48 kHz on both protocols until issue #440. The
+/// packets were well-formed and the board accepted them, so nothing reported an
+/// error; it simply ran the transmit FIFO dry three samples in four. A carrier
+/// survives that — a tune is one sample value repeated, so starving it changes
+/// nothing, which is why TUNE was always clean — but speech came out chopped
+/// and unintelligible. That is the shape of the bug to recognise: **clean tune,
+/// garbled voice, on transmit only**.
+pub const TX_RATE_HZ_P2: u32 = 192_000;
+
+/// The TX I/Q rate `protocol` drains its transmit stream at.
+pub fn tx_rate_for_protocol(protocol: u8) -> u32 {
+    if protocol == 2 { TX_RATE_HZ_P2 } else { TX_RATE_HZ }
+}
 /// Resend keep-alive/high-priority state at least this often so the radio's
 /// watchdog does not stop the stream.
 pub(crate) const WATCHDOG: Duration = Duration::from_millis(50);
@@ -53,6 +74,24 @@ pub fn board_is_hermes_lite(board: &str) -> bool {
 /// settings, so we must not write it there.
 pub fn board_has_lna_gain(board: &str) -> bool {
     board_is_hermes_lite(board)
+}
+
+/// Whether a board is an ANAN-7000/8000 (Orion 2) or ANAN-G2 (Saturn).
+///
+/// These two are the boards with **two** ADCs and two Alex filter chains, and
+/// their filter chain is laid out differently from every other board's: band-
+/// pass filters on receive instead of high-pass ones, and a receive path that
+/// does not run through the transmit low-pass filters. Both facts change what
+/// goes into the Protocol 2 packets, so they are one question asked in one
+/// place.
+///
+/// Matched by substring, because the name this crate carries is the *display*
+/// name discovery built — "Orion 2 (ANAN-7000/8000)", "Saturn (ANAN-G2)" — and
+/// the equality test that used to stand in for this (`"Saturn" | "Orion2"`)
+/// could never be true of either of them. That is why every Saturn and ANAN-7000
+/// was told in its General packet that it had one Alex chain rather than two.
+pub fn board_is_orion2_class(board: &str) -> bool {
+    board.starts_with("Orion 2") || board.starts_with("Saturn")
 }
 
 /// Clamp a dB value to the LNA range and encode it as the 6-bit wire value.
@@ -755,10 +794,10 @@ impl HpsdrBoard {
                  rate {rate:.0} Hz"
             );
         }
-        // Both protocols take TX I/Q at 48 kHz: Protocol 2 through the DUC, and
-        // Protocol 1 through the EP2 frames, whose sample rate is fixed at
-        // 48 kHz regardless of the RX rate.
-        let tx_rate = TX_RATE_HZ as f64;
+        // The two protocols take TX I/Q at different rates, and neither of them
+        // is the RX rate: Protocol 1's EP2 frames are fixed at 48 kHz, and
+        // Protocol 2's DUC is fed at 192 kHz (issue #440).
+        let tx_rate = tx_rate_for_protocol(protocol) as f64;
         let lna_gain_db = lna_gain_db.clamp(LNA_GAIN_MIN_DB, LNA_GAIN_MAX_DB);
         if board_has_lna_gain(&board) {
             tracing::info!("HPSDR: initial {LNA_GAIN_ELEMENT} gain {lna_gain_db:+.0} dB");
@@ -920,6 +959,14 @@ impl HpsdrBoard {
         self.inner.sample_rate_hz
     }
 
+    /// The rate this board drains transmit I/Q at — 48 kHz on Protocol 1,
+    /// 192 kHz on Protocol 2 (see [`TX_RATE_HZ_P2`]). Not the receive rate, and
+    /// not the same on the two protocols, so anything that has to line the two
+    /// streams up asks rather than assuming.
+    pub fn tx_rate_hz(&self) -> f64 {
+        self.inner.tx_rate_hz
+    }
+
     /// How many DDCs this connection can serve: the Protocol 2 framing's
     /// eight, or Protocol 1's one (its frame layout carries a single receiver
     /// here).
@@ -1039,6 +1086,11 @@ impl HpsdrRx {
 
     pub fn sample_rate_hz(&self) -> f64 {
         self.dev.sample_rate_hz
+    }
+
+    /// See [`HpsdrBoard::tx_rate_hz`].
+    pub fn tx_rate_hz(&self) -> f64 {
+        self.dev.tx_rate_hz
     }
 
     pub fn board(&self) -> &str {
@@ -1523,10 +1575,30 @@ mod tests {
         assert_eq!(recall_probe("192.0.2.54".parse().unwrap()), None);
     }
 
+    /// The two-ADC boards, matched on the *display* name discovery builds.
+    /// The equality test this replaced (`"Saturn" | "Orion2"`) matched neither
+    /// of them, so every ANAN-7000 and ANAN-G2 was told it had one Alex chain.
     #[test]
-    fn tx_rate_is_48k_for_both_protocols() {
-        // Protocol 1's EP2 stream is 48 kHz regardless of the DDC rate, so the
-        // modulator must never be told to produce at the RX rate.
+    fn the_two_adc_boards_are_recognised_by_the_name_discovery_gives_them() {
+        assert!(board_is_orion2_class("Saturn (ANAN-G2)"));
+        assert!(board_is_orion2_class("Orion 2 (ANAN-7000/8000)"));
+        // Not the single-ADC Orion.
+        assert!(!board_is_orion2_class("Orion (ANAN-200D)"));
+        assert!(!board_is_orion2_class("Hermes (ANAN-10/10E/100/100B)"));
+        assert!(!board_is_orion2_class("Hermes-Lite 2"));
+        assert!(!board_is_orion2_class("HPSDR"));
+    }
+
+    /// Neither protocol transmits at the receive rate, and the two do not
+    /// transmit at the same rate as each other (issue #440): Protocol 1's EP2
+    /// stream is 48 kHz whatever the DDC is doing, and Protocol 2's DUC is fed
+    /// at 192 kHz. Feeding a Protocol 2 board 48 kHz starves its transmit FIFO
+    /// three samples in four — a clean carrier, unintelligible speech.
+    #[test]
+    fn each_protocol_transmits_at_its_own_rate() {
         assert_eq!(TX_RATE_HZ, 48_000);
+        assert_eq!(TX_RATE_HZ_P2, 192_000);
+        assert_eq!(tx_rate_for_protocol(1), 48_000);
+        assert_eq!(tx_rate_for_protocol(2), 192_000);
     }
 }
