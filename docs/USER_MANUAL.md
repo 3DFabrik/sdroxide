@@ -10718,7 +10718,15 @@ spoken announcements below them under `[speech]`:
   and near-black text, for a bright shack or a screen read in daylight),
   **High contrast** (white on black, at the widest separation the screen can
   give), **Green phosphor** and **Amber phosphor** (monochrome CRT looks),
-  **Teal / orange**, or **Rainbow** (the accents spread across the spectrum).
+  **Teal / orange**, **Rainbow** (the accents spread across the spectrum), or
+  one of ten schemes after the editor palettes of the same names: **Nord**,
+  **Nord dark**, **Gruvbox**, **Everforest**, **Solarized dark**, **Dracula** and
+  **Catppuccin mocha** on dark grounds, and **Solarized**, **Catppuccin latte**
+  and **Modern minimalist** on bright ones. Where a palette's own accent would be
+  too faint to read on its panel it is lightened (or, on a bright ground,
+  darkened) just far enough to be, so a scheme can differ a shade from the
+  editor theme it is named after. The meters, scopes and maps take their
+  colours from the same scheme.
   Applied the moment it is picked, no restart. Every theme keeps transmit, SWR
   and error indications red on purpose — whether RF is leaving the antenna is
   never left to a shade of green. Content colours (the waterfall palette below,
