@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::{Complex32, Result};
-use sdroxide_types::Mode;
+use sdroxide_types::{Mode, Vfo};
 
 /// Corner frequency of the front-end DC blocker. Low enough to be invisible at
 /// any device rate (10 ppm of a 2 Msps span), high enough to settle in ~8 ms.
@@ -618,6 +618,24 @@ pub trait IqSource: Send {
     fn cw_iq_on_vfo(&self) -> bool {
         false
     }
+
+    /// The operator has taken up the other VFO, which now sits on `hz`.
+    ///
+    /// For a rig with its own pair, so that the one on its front panel is the
+    /// one being worked: an FDM-DUO's window rides on whichever of its VFOs is
+    /// selected, so mirroring the choice puts the radio's own display, its
+    /// knob and its A/B button on the same dial as sdroxide's.
+    ///
+    /// The frequency comes along because the two are one decision at the
+    /// radio's end — selecting a VFO that is holding a stale number moves the
+    /// receiver there until the dial arrives, and the pair sent together is
+    /// what avoids that.
+    ///
+    /// Default: nothing. Most front ends have no second VFO to select, and a
+    /// rig kept deliberately on one of them (see the ELAD source, where the
+    /// dial is *read* with a command that always answers VFO A) must stay
+    /// there — which is why this is opt-in rather than a rule.
+    fn select_vfo(&mut self, _vfo: Vfo, _hz: f64) {}
 
     /// Drain any out-of-band changes the rig reported (dial/mode moved on the
     /// radio). Default: none.
@@ -1357,6 +1375,13 @@ impl IqSource for ConvertedSource {
     /// radio, and a converter ahead of it moves both numbers together.
     fn cw_iq_on_vfo(&self) -> bool {
         self.inner.cw_iq_on_vfo()
+    }
+
+    /// Forwarded: which VFO is in use is a fact about the rig, and a converter
+    /// in front of it does not change which one that is. The frequency is the
+    /// one at the *rig*, so it goes down through the conversion.
+    fn select_vfo(&mut self, vfo: Vfo, hz: f64) {
+        self.inner.select_vfo(vfo, self.down(hz));
     }
 
     fn read(&mut self, buf: &mut [Complex32]) -> Result<usize> {

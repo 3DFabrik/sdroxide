@@ -76,7 +76,7 @@ use std::time::Duration;
 
 use sdroxide_elad::{EladHandle, Model};
 use sdroxide_radio::{Complex32, ControlUpdate, IqSource, Result};
-use sdroxide_types::{CatConfig, CatFamily, EladAntenna, EladConfig, Mode, TxTelemetry};
+use sdroxide_types::{CatConfig, CatFamily, EladAntenna, EladConfig, Mode, TxTelemetry, Vfo};
 
 /// How long the device may deliver nothing before the connection counts as
 /// dead. Same three seconds as the other native USB backends: this is a local
@@ -166,6 +166,12 @@ pub struct EladSource {
     /// on its way there — leaves genuine front-panel movements getting through,
     /// which is the whole point of reading the rig at all.
     expect_freq: Option<(f64, std::time::Instant)>,
+    /// Which of the radio's own VFOs sdroxide is driving.
+    ///
+    /// Only ever anything but [`Vfo::A`] on the gateway path — see
+    /// [`IqSource::select_vfo`] on this type for why the serial path stays on
+    /// VFO A.
+    rig_vfo: Vfo,
     /// Whether the transceiver's VFO is something this end can move at all,
     /// and so whether the window centre is the dial ([`IqSource::center_is_dial`]).
     ///
@@ -342,6 +348,7 @@ impl EladSource {
             preselector: cfg.preselector,
             antenna: EladAntenna::default(),
             expect_freq: None,
+            rig_vfo: Vfo::A,
             dial_reachable,
             keyed: false,
             last_telem: None,
@@ -350,6 +357,15 @@ impl EladSource {
             status,
             late: std::sync::Mutex::new(Vec::new()),
         };
+        // Which of the radio's own VFOs this session is driving, asserted
+        // rather than assumed: a DUO left on VFO B by the last session — or by
+        // its own A/B button — would otherwise receive on B while every command
+        // from here went to A, and the frequency axis would be wrong by
+        // whatever B happens to hold. The serial path sends this already, in
+        // `Protocol::clear_offsets`; this is the gateway's copy of it.
+        if matches!(src.control, Control::Gateway) {
+            src.handle.send_cat(sdroxide_cat::elad::vfo_frame(Vfo::A));
+        }
         // Put the transceiver's VFO on the window centre before the first
         // sample is looked at. On a DUO that is where the window *is*, so the
         // two agreeing is what makes the frequency axis true; the device was
@@ -433,8 +449,13 @@ impl EladSource {
     /// Put the rig's own VFO on `hz`, by whichever path is available.
     fn command_freq(&mut self, hz: f64) {
         match &self.control {
+            // Always VFO A here: the dial is read back with `FA;`, which
+            // answers VFO A whichever one the radio is on, so this path keeps
+            // the radio there. See `select_vfo`.
             Control::Serial(cat) => cat.set_freq(hz),
-            Control::Gateway => self.handle.send_cat(sdroxide_cat::elad::freq_frame(hz)),
+            Control::Gateway => {
+                self.handle.send_cat(sdroxide_cat::elad::freq_frame_on(self.rig_vfo, hz))
+            }
             Control::None => return,
         }
         self.expect_freq = Some((hz, std::time::Instant::now()));
@@ -650,6 +671,34 @@ impl IqSource for EladSource {
     }
 
     // ── Rig control ──────────────────────────────────────────────────────────
+
+    /// Take up the radio's own VFO B when the operator takes up sdroxide's,
+    /// so the radio's display, its knob and its A/B button are on the same
+    /// dial as the panadapter.
+    ///
+    /// The window rides on whichever VFO is selected, measured on an FDM-DUO:
+    /// `FR1` moves the I/Q stream to VFO B's frequency, `FR0` brings it back,
+    /// and writing `FB` while on A moves nothing. So the pair is sent together
+    /// — select, then the dial on the VFO now selected — which keeps the radio
+    /// on a stale number for one command rather than until the next retune.
+    ///
+    /// **Only on the gateway path.** With a CAT serial port the dial is read
+    /// back by polling `FA;`, and that answers VFO A's frequency whichever VFO
+    /// the radio is on: mirroring there would report the wrong dial for
+    /// everything sdroxide does with B. The USB read-back has no such problem
+    /// — it reports the frequency the receiver is actually on — so the two
+    /// paths differ, and the serial one keeps the radio on VFO A as it always
+    /// has. Lifting that means teaching the CAT layer to ask for the dial it
+    /// is actually on, which is a change in another crate and needs a serial
+    /// cable to test.
+    fn select_vfo(&mut self, vfo: Vfo, hz: f64) {
+        if !matches!(self.control, Control::Gateway) || self.rig_vfo == vfo {
+            return;
+        }
+        self.rig_vfo = vfo;
+        self.handle.send_cat(sdroxide_cat::elad::vfo_frame(vfo));
+        self.command_freq(hz);
+    }
 
     fn poll_control(&mut self) -> Vec<ControlUpdate> {
         let cat = match &self.control {
