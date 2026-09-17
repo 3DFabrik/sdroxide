@@ -6042,18 +6042,22 @@ fn band_chip_dial(mode: Mode, band: Band, std_hz: Option<f64>) -> Option<f64> {
 /// The dial after one press of the step row.
 ///
 /// Normally exactly `step` from where the dial is — the buttons move by the
-/// step they claim, never to a multiple of it. With `round_first` (issue #422)
-/// a dial left off a whole kilohertz is tidied to the nearest one *instead* of
-/// stepping; the press after that finds it already on a whole kilohertz and
-/// steps as usual, so the tidy costs one press and then never interferes again.
-fn stepped_hz(cur: f64, step: f64, round_first: bool) -> f64 {
-    if round_first {
-        let rounded = (cur / 1000.0).round() * 1000.0;
-        if (cur - rounded).abs() >= 0.5 {
-            return rounded.max(0.0);
-        }
-    }
-    (cur + step).max(0.0)
+/// step they claim, never to a multiple of it. With `snap` (issue #422) the
+/// press lands on the step's own grid instead: a dial left between two grid
+/// points goes to the next one *in the direction pressed*, and from there every
+/// press moves by exactly the step, so the tidy costs one press and never
+/// interferes again. That is the rule the wheel and the keyboard already follow
+/// ([`crate::input::step_on_grid`], issue #431).
+///
+/// The grid is the step, not a fixed kilohertz. Rounding every press to the
+/// nearest kilohertz undid any step smaller than one — at 100 Hz a press up
+/// went to 7 074 100 and the next rounded it straight back to 7 074 000 — and
+/// rounding to the *nearest* moved the dial against the button whenever it sat
+/// past the half-way point.
+fn stepped_hz(cur: f64, step: f64, snap: bool) -> f64 {
+    let hz =
+        if snap { crate::input::step_on_grid(cur, step.signum(), step.abs()) } else { cur + step };
+    hz.max(0.0)
 }
 
 /// The band + mode + digital chip rows: the body of the band/mode popup.
@@ -7758,17 +7762,48 @@ mod tests {
     }
 
     #[test]
-    fn the_step_rounds_only_when_asked_and_only_once() {
+    fn the_step_snaps_only_when_asked_and_only_once() {
         // Off: exactly the step, from anywhere.
         assert_eq!(stepped_hz(27_265_436.0, 1000.0, false), 27_266_436.0);
-        // On: the first press tidies to the nearest kilohertz...
-        assert_eq!(stepped_hz(27_265_436.0, 1000.0, true), 27_265_000.0);
-        assert_eq!(stepped_hz(27_265_600.0, -1000.0, true), 27_266_000.0);
-        // ...and once the dial is on one, the step applies.
-        assert_eq!(stepped_hz(27_265_000.0, 1000.0, true), 27_266_000.0);
-        // Never below zero, rounding or stepping.
-        assert_eq!(stepped_hz(400.0, -1000.0, false), 0.0);
         assert_eq!(stepped_hz(27_265_600.0, -2000.0, false), 27_263_600.0);
+        // On: the first press lands on the grid, in the direction pressed —
+        // never against it, however close the other grid point is...
+        assert_eq!(stepped_hz(27_265_436.0, 1000.0, true), 27_266_000.0);
+        assert_eq!(stepped_hz(27_265_600.0, -1000.0, true), 27_265_000.0);
+        assert_eq!(stepped_hz(7_074_300.0, 1000.0, true), 7_075_000.0);
+        // ...and once the dial is on it, the step applies.
+        assert_eq!(stepped_hz(27_265_000.0, 1000.0, true), 27_266_000.0);
+        assert_eq!(stepped_hz(27_265_000.0, -1000.0, true), 27_264_000.0);
+        // Never below zero, snapping or stepping.
+        assert_eq!(stepped_hz(400.0, -1000.0, false), 0.0);
+        assert_eq!(stepped_hz(400.0, -1000.0, true), 0.0);
+    }
+
+    /// Every step on the row walks the dial steadily in the direction pressed,
+    /// with snapping on: a press never undoes the last one, and never moves the
+    /// dial the wrong way. Rounding to the nearest kilohertz on every press
+    /// broke both at the steps under a kilohertz and at 2.5 kHz.
+    #[test]
+    fn snapping_walks_every_step_monotonically() {
+        for step in [10.0, 100.0, 500.0, 1000.0, 2500.0, 5000.0, 9000.0, 10_000.0, 25_000.0] {
+            for dir in [1.0, -1.0] {
+                let mut hz = 7_074_321.0;
+                for press in 0..6 {
+                    let next = stepped_hz(hz, dir * step, true);
+                    assert!(
+                        (next - hz) * dir > 0.0,
+                        "{step} Hz step, press {press} from {hz} went to {next}"
+                    );
+                    if press > 0 {
+                        assert_eq!((next - hz).abs(), step, "{step} Hz step, press {press}");
+                    }
+                    hz = next;
+                }
+            }
+        }
+        // The two cases that used to loop.
+        assert_eq!(stepped_hz(7_074_100.0, 100.0, true), 7_074_200.0);
+        assert_eq!(stepped_hz(7_073_500.0, -500.0, true), 7_073_000.0);
     }
 
     /// Issue #260: in APRS the band buttons stopped being band buttons.

@@ -111,12 +111,13 @@ pub(in crate::app) fn settings_ui_tab(
             crate::chrome::checkbox(
                 ui,
                 &mut cfg.tune_step_round_first,
-                "First press rounds to 000",
+                "First press snaps to the step",
             )
             .on_hover_text(
-                "A dial left off a whole kilohertz is rounded to the nearest one by the first \
-                 press of step-down or step-up; after that the buttons move by the step as \
-                 usual. Off, every press moves by exactly the step.",
+                "A dial left between two multiples of the step goes to the next one in the \
+                 direction pressed — 7 074 300 goes up to 7 075 000 at a 1 kHz step, down to \
+                 7 074 000. After that the buttons move by the step as usual. Off, every press \
+                 moves by exactly the step.",
             );
             ui.end_row();
         }

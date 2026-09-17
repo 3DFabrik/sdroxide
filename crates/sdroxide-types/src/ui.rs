@@ -528,15 +528,16 @@ pub struct UiSettings {
     /// between sessions: an operator working one band works one channel
     /// spacing.
     pub tune_step_hz: f64,
-    /// Make the first press of the step row round the dial to a whole
-    /// kilohertz instead of moving it by the step; presses after that move it
-    /// normally.
+    /// Make a press of the step row land on the step's own grid — the next
+    /// multiple of the step in the direction pressed — instead of moving the
+    /// dial by exactly the step. A dial already on the grid moves by the step,
+    /// so only the first press from an untidy frequency differs.
     ///
     /// Off by default, and deliberately so: the step buttons move by exactly
-    /// the step, and a silent jump to the nearest kilohertz is a second,
-    /// invisible edit — see `tune_step_row`. On, it is the touch-screen habit of
-    /// tidying a dial left anywhere before working down a band (issue #422).
-    /// Only meaningful with [`Self::tune_step_buttons`].
+    /// the step, and a press that lands somewhere else is a second, invisible
+    /// edit — see `tune_step_row`. On, it is the touch-screen habit of tidying a
+    /// dial left anywhere before working down a band (issue #422). Only
+    /// meaningful with [`Self::tune_step_buttons`].
     pub tune_step_round_first: bool,
     /// Whether the waterfall's history is drawn through a smoothing filter.
     ///
