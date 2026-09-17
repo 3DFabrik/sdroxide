@@ -2517,13 +2517,36 @@ fn adif_visit(adif: &str, mut visit: impl FnMut(&[(String, String)])) {
 /// (ignored) and of a missing/short header. Used both for importing external
 /// logs and for ingesting downloaded QSL confirmations. The inverse of
 /// [`qso_log_to_adif`] for the fields sdroxide round-trips.
+///
+/// Records marked `SWL` are left out — see [`adif_to_qso_log_counting_swl`].
 pub fn adif_to_qso_log(adif: &str) -> Vec<QsoRecord> {
+    adif_to_qso_log_counting_swl(adif).0
+}
+
+/// [`adif_to_qso_log`], also saying how many records were left out for being
+/// marked `SWL`.
+///
+/// A record with `SWL` set is a received report — a station heard, not worked —
+/// which is what [`digi_decodes_to_adif`] writes for a listener. The logbook is
+/// contacts: it feeds the worked/new badges, awards and the QSL uploads, so a
+/// report read in as a contact would turn every station an SWL heard into one
+/// the log claims was worked. The count is for the import to say so, rather
+/// than report a file of reports as nothing added.
+pub fn adif_to_qso_log_counting_swl(adif: &str) -> (Vec<QsoRecord>, usize) {
     let mut records = Vec::new();
+    let mut swl = 0usize;
     // Each record is converted as it is tokenized: importing somebody's
     // fifty-thousand-QSO log should cost one `QsoRecord` per contact, not that
     // plus every field of every contact still held as a pair of `String`s.
-    adif_visit(adif, |fields| records.push(record_from_fields(fields)));
-    records
+    adif_visit(adif, |fields| {
+        let is_swl = fields.iter().any(|(k, v)| k == "SWL" && v.trim().eq_ignore_ascii_case("Y"));
+        if is_swl {
+            swl += 1;
+        } else {
+            records.push(record_from_fields(fields));
+        }
+    });
+    (records, swl)
 }
 
 fn record_from_fields(fields: &[(String, String)]) -> QsoRecord {
@@ -2815,6 +2838,8 @@ mod tests {
         assert!(csv.contains("27.276500") && csv.contains("27.266500"), "per decode: {csv}");
 
         let adif = digi_decodes_to_adif([(&d, 27_265_000.0), (&free, 27_265_000.0)], Mode::Ft8);
+        // Read back by the logbook's own import, a report is not a contact.
+        assert_eq!(adif_to_qso_log_counting_swl(&adif), (Vec::new(), 1), "{adif}");
         assert!(adif.contains("<CALL:7>19AT250"), "the heard call: {adif}");
         assert_eq!(adif.matches("<EOR>").count(), 1, "only the decode with a sender: {adif}");
         assert!(adif.contains("<SWL:1>Y"), "a logger must not read it as a contact: {adif}");

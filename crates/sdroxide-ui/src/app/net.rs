@@ -243,8 +243,9 @@ impl SdroxideApp {
             }
         };
         let text = loaded.text;
-        let parsed = catch_unwind(AssertUnwindSafe(|| sdroxide_types::adif_to_qso_log(&text)));
-        let Ok(records) = parsed else {
+        let parsed =
+            catch_unwind(AssertUnwindSafe(|| sdroxide_types::adif_to_qso_log_counting_swl(&text)));
+        let Ok((records, swl)) = parsed else {
             self.push_net_log("ADIF import failed: the file could not be parsed".to_string());
             return;
         };
@@ -288,8 +289,14 @@ impl SdroxideApp {
             Some(enc) => format!(" (not Unicode; read as {enc})"),
             None => String::new(),
         };
+        // A file of received reports — the decode list's own ADIF export —
+        // adds nothing, and saying why beats reporting an empty import.
+        let reports = match swl {
+            0 => String::new(),
+            n => format!(", {n} received reports (SWL) left out"),
+        };
         self.push_net_log(format!(
-            "ADIF import: {added} added, {skipped} duplicates skipped{assumed}"
+            "ADIF import: {added} added, {skipped} duplicates skipped{reports}{assumed}"
         ));
     }
 
