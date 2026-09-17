@@ -429,8 +429,23 @@ impl EladSource {
             return None;
         }
         match self.expect_freq {
-            Some((want, _)) if (want - hz).abs() < 1.0 => {
-                self.expect_freq = None;
+            // The rig arriving where we sent it. Over serial that retires the
+            // expectation at once: the CAT thread reports a frequency only when
+            // it changes, so this is the one report there will be.
+            //
+            // The gateway re-reads four times a second, and there a match can
+            // be *stale* — the radio still on the number a tune started from.
+            // Wheel up a channel and straight back and the first read matches
+            // the channel returned to before the radio has even left it; retire
+            // the expectation on that and the next read, catching the radio on
+            // its way through the channel in between, is taken for the knob.
+            // So there the expectation stands out its settle time, and the
+            // answers after it are judged on their own; the same number keeps
+            // arriving, so waiting loses nothing.
+            Some((want, at)) if (want - hz).abs() < 1.0 => {
+                if !matches!(self.control, Control::Gateway) || at.elapsed() >= FREQ_SETTLE {
+                    self.expect_freq = None;
+                }
                 None
             }
             Some((_, at)) if at.elapsed() < FREQ_SETTLE => None,
