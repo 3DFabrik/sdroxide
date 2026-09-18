@@ -739,11 +739,14 @@ impl DigiEngine for CwController {
         self.last_sent = 0;
         self.idle_samples = 0;
         self.over_had_text = false;
-        // An abort also hands the frequency back from a key that was
-        // mid-character: the operator is stopping, not pausing between dits.
+        // An abort also lifts a key that was mid-character: the operator is
+        // stopping, not pausing between dits. The *mode* stays engaged. The
+        // panel's KEY chip is the only switch for it and cannot see in here,
+        // and the engine aborts on its own when it refuses a key-down (out of
+        // band, another radio on the air) — leaving the mode there left the
+        // chip lit, the transmit box locked, and a Space bar that did nothing.
         if self.straight {
-            self.tx.set_manual(false);
-            self.straight = false;
+            self.tx.set_held(false);
             self.straight_held_samples = 0;
             self.tx_watchdog = false;
         }
@@ -1139,6 +1142,26 @@ mod tests {
         c.key_down(true);
         c.key_down(false);
         assert!(!c.status().tx_watchdog, "the flag outlived the next press");
+    }
+
+    /// A refused or aborted over lifts the key and leaves the mode engaged: the
+    /// panel's chip is still lit, so the next press has to key again rather
+    /// than land on a keyer that quietly left the mode (issue #322).
+    #[test]
+    fn an_abort_lifts_the_key_and_keeps_the_mode() {
+        let mut c = CwController::new(cfg(), 48_000.0, None);
+        c.set_straight(true);
+        c.key_down(true);
+        assert!(c.tx.held() && c.tx_active);
+
+        c.abort_tx();
+        assert!(!c.tx.held(), "the key stayed down through the abort");
+        assert!(!c.tx_active, "transmit stayed on through the abort");
+        assert!(c.straight, "the abort took the straight key away from the chip");
+
+        c.key_down(true);
+        assert!(c.tx.held(), "the next press was ignored");
+        assert!(c.tx_active, "the next press did not ask for transmit");
     }
 
     /// Transmit must not decode itself. The tap carries our own sidetone while
