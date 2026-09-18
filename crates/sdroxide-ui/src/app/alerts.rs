@@ -14,9 +14,12 @@ use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
 
 use sdroxide_types::{AlertEvent, AlertSettings, AlertSound, Decode, LogIndex};
+
+use crate::time::now_unix_f64;
 
 /// How the alarm sounds right now.
 ///
@@ -53,8 +56,12 @@ impl AlertStatus {
 /// logged, and a new entity calling CQ all evening would otherwise wail all
 /// evening.
 struct Cooldown {
-    /// (callsign, event) → when it last alarmed.
-    at: HashMap<(String, AlertEvent), Instant>,
+    /// (callsign, event) → Unix seconds when it last alarmed.
+    ///
+    /// Wall-clock seconds rather than `Instant`: `Instant::now()` panics on
+    /// `wasm32-unknown-unknown`, and the browser client runs this same code.
+    /// Cooldowns are minutes long, so a clock that steps does not matter here.
+    at: HashMap<(String, AlertEvent), f64>,
 }
 
 impl Cooldown {
@@ -66,16 +73,17 @@ impl Cooldown {
     fn eligible(&self, call: &str, event: AlertEvent) -> bool {
         match self.at.get(&(call.to_string(), event)) {
             None => true,
-            Some(&when) => when.elapsed().as_secs() >= event.cooldown_s(),
+            Some(&when) => now_unix_f64() - when >= event.cooldown_s() as f64,
         }
     }
 
     fn mark(&mut self, call: &str, event: AlertEvent) {
-        self.at.insert((call.to_string(), event), Instant::now());
+        let now = now_unix_f64();
+        self.at.insert((call.to_string(), event), now);
         // A wall of decoded stations could grow this forever, so once it gets
         // big, drop everything that has gone cold.
         if self.at.len() > 256 {
-            self.at.retain(|_, when| when.elapsed() < Duration::from_secs(600));
+            self.at.retain(|_, when| now - *when < 600.0);
         }
     }
 }
@@ -101,14 +109,23 @@ pub struct AlertRuntime {
 /// the cpal stream is closed tidily and never outlives its ring.
 #[cfg(not(target_arch = "wasm32"))]
 struct AlertSink {
-    tx: SyncSender<Job>,
+    /// `Option` so [`Drop`] can let go of the sending end before joining: the
+    /// worker's failure path drains until the channel *closes*, and it can
+    /// never close while this still holds a sender.
+    tx: Option<SyncSender<Job>>,
     thread: Option<JoinHandle<()>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Drop for AlertSink {
     fn drop(&mut self) {
-        let _ = self.tx.send(Job::Quit);
+        // Drop the sender first. The worker that failed to open a device waits
+        // for the channel to close rather than for a `Quit`, so holding the
+        // sender across the join deadlocked on quit or when alarms were turned
+        // off — the whole app froze.
+        if let Some(tx) = self.tx.take() {
+            let _ = tx.send(Job::Quit);
+        }
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
@@ -278,6 +295,13 @@ impl AlertRuntime {
         let device_changed = settings.device != self.settings.device;
         let enabled_changed = settings.enabled != self.settings.enabled;
         self.settings = settings;
+        // The worker owns the device it opened, so a different device means a
+        // different worker: drop the old one before reconciling, or the change
+        // did nothing at all. (No worker to drop on wasm.)
+        #[cfg(not(target_arch = "wasm32"))]
+        if device_changed {
+            self.sink = None;
+        }
         if enabled_changed || device_changed {
             self.sync_sink();
         }
@@ -322,6 +346,11 @@ impl AlertRuntime {
             }
             self.play(event.rule(&self.settings.events).sound);
             self.cooldowns.mark(from, event);
+            // One alarm per batch. A busy slot carries a dozen decodes and more
+            // than one of them can match — all sixteen ringing one after another
+            // says less than the first one does, and takes half a minute to say
+            // it.
+            break;
         }
     }
 
@@ -358,11 +387,13 @@ impl AlertSink {
             *status.lock().unwrap() =
                 AlertStatus::Failed("could not start the alert thread".into());
         }
-        AlertSink { tx, thread }
+        AlertSink { tx: Some(tx), thread }
     }
 
     fn play(&self, sound: AlertSound, volume: f32) {
-        let _ = self.tx.try_send(Job::Play { sound, volume });
+        if let Some(tx) = &self.tx {
+            let _ = tx.try_send(Job::Play { sound, volume });
+        }
     }
 }
 
@@ -383,8 +414,14 @@ fn worker(rx: Receiver<Job>, device: Option<String>, status: Arc<Mutex<AlertStat
         Ok(ok) => ok,
         Err(e) => {
             *status.lock().unwrap() = AlertStatus::Failed(e.to_string());
-            // Nothing can be played — drain and go.
-            while rx.recv().is_ok() {}
+            // Nothing can be played. Honour a quit, and otherwise wait for the
+            // sender to go — which it does before the join in `Drop`, so this
+            // cannot hold the app open.
+            while let Ok(job) = rx.recv() {
+                if matches!(job, Job::Quit) {
+                    break;
+                }
+            }
             return;
         }
     };
@@ -473,6 +510,29 @@ mod tests {
         settings.events.cq.enabled = true;
         let mut r = AlertRuntime::new(settings);
         r.on_ft8(&[dec(None, Some("OE3ABC"), true)], "dl1abc", "JO63", &log(), "");
+    }
+
+    /// A busy slot can carry a dozen decodes that all match; one alarm says it,
+    /// and a queue of them takes half a minute to stop saying it.
+    #[test]
+    fn only_one_alarm_is_raised_per_batch() {
+        let mut settings = AlertSettings { enabled: true, ..Default::default() };
+        settings.events.called.enabled = true;
+        let mut r = AlertRuntime::new(settings);
+        r.on_ft8(
+            &[
+                dec(Some("K1ABC"), Some("W1ABC"), false),
+                dec(Some("K1ABC"), Some("DL1ABC"), false),
+                dec(Some("K1ABC"), Some("F5ABC"), false),
+            ],
+            "k1abc",
+            "JO63",
+            &log(),
+            "",
+        );
+        assert!(r.cooldowns.at.contains_key(&("W1ABC".to_string(), AlertEvent::Called)));
+        assert!(!r.cooldowns.at.contains_key(&("DL1ABC".to_string(), AlertEvent::Called)));
+        assert!(!r.cooldowns.at.contains_key(&("F5ABC".to_string(), AlertEvent::Called)));
     }
 
     #[test]
