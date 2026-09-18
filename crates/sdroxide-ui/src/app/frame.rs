@@ -1728,8 +1728,18 @@ impl SdroxideApp {
             show_memories,
             show_voice,
             caps,
+            cw_key_down,
             ..
         } = self;
+        // The keyboard straight key is held by the operator's hand rather than
+        // by an input binding, so `release_all` knows nothing about it: without
+        // this, switching away from the tab with the key down left the carrier
+        // on until the operator came back (issue #322). The *mode* stays
+        // engaged — only the key goes up.
+        if *cw_key_down {
+            *cw_key_down = false;
+            cmds.push(Command::CwKey(false));
+        }
         let rig_squelch = caps.as_ref().is_some_and(|c| c.commands_squelch);
         let mut sink = crate::input::UiSink {
             view,

@@ -374,6 +374,19 @@ impl SdroxideApp {
                     self.cw_straight = true;
                 }
             }
+            // The straight key was dropped by the hold cap rather than let go
+            // of. Say so, or the carrier stopping on its own looks like a fault
+            // in the radio.
+            if status.as_ref().is_some_and(|s| s.tx_watchdog) {
+                ui.label(
+                    RichText::new("WATCHDOG").size(11.0).strong().color(crate::theme::YELLOW()),
+                )
+                .on_hover_text(
+                    "The straight key was held down too long — a lost key-up rather than a \
+                     hand — so the carrier was dropped and transmit switched off. Press the \
+                     key again to carry on.",
+                );
+            }
             let label = if tx_on { "  TX ON  " } else { "   TX   " };
             if tx_gated(ui, tx_ok, |ui| {
                 crate::chrome::chip_accent(

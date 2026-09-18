@@ -58,6 +58,14 @@ const TX_CHUNK: usize = 400;
 /// keyed on an empty buffer holds the frequency, and the operator who wandered
 /// off is exactly the one not watching for it.
 const TX_IDLE_S: f32 = 5.0;
+/// The longest a straight key may be held without a key-up (issue #322).
+///
+/// A hand does not hold a key for half a minute, so a key still down after
+/// this is a lost key-up — a stuck Space bar, a client that went away — and the
+/// carrier stops rather than staying on until somebody notices. The over is
+/// ended and the status carries `tx_watchdog`, the same flag the automatic
+/// modes set when they stand down on their own.
+const STRAIGHT_MAX_HOLD_S: f32 = 30.0;
 /// How long a part-typed word waits for the rest of itself before it is handed
 /// to the rig anyway.
 ///
@@ -237,6 +245,12 @@ pub struct CwController {
     /// way to hear a hand keyed into its sound card, and can only send the
     /// timed text a message commits to. Such a radio never enters the mode.
     straight: bool,
+    /// Output samples the straight key has been continuously down for, so a
+    /// lost key-up can be capped (see [`STRAIGHT_MAX_HOLD_S`]).
+    straight_held_samples: usize,
+    /// Set when the straight key was dropped by that cap rather than let go of,
+    /// so the panel can say why the carrier stopped.
+    tx_watchdog: bool,
     last_sent: usize,
     /// Something has actually been sent since transmit was switched on.
     ///
@@ -299,6 +313,8 @@ impl CwController {
             tx_active: false,
             keyed: false,
             straight: false,
+            straight_held_samples: 0,
+            tx_watchdog: false,
             last_sent: 0,
             over_had_text: false,
             idle_samples: 0,
@@ -506,7 +522,7 @@ impl CwController {
             audio_hz: self.cfg.cw_pitch_hz,
             tx_even: false,
             transmitting: self.on_air(now),
-            tx_watchdog: false,
+            tx_watchdog: self.tx_watchdog,
             transcript: Vec::<TranscriptLine>::new(),
             config: self.cfg.clone(),
             text_rx: self.rx_display(),
@@ -638,19 +654,40 @@ impl DigiEngine for CwController {
             self.idle_samples = 0;
             self.over_had_text = true;
         }
-        while self.tx48.len() < out.len() && self.producing() {
-            self.scratch.clear();
-            self.scratch.resize(TX_CHUNK, 0.0);
-            self.tx.next_block(&mut self.scratch);
-            self.scratch48.clear();
-            match &mut self.tx_rs {
-                Some(r) => r.push(&self.scratch, &mut self.scratch48),
-                None => self.scratch48.extend_from_slice(&self.scratch),
+        if self.straight {
+            // The operator's hand is the timing, so the sidetone is rendered
+            // straight at the output rate instead of in `TX_CHUNK` pieces of
+            // 8 kHz — a chunk is 50 ms, and reading the key once per chunk
+            // would quantise every element to it (issue #322).
+            if self.tx.held() {
+                self.straight_held_samples += out.len();
+                if self.straight_held_samples as f32 > STRAIGHT_MAX_HOLD_S * OUT_RATE as f32 {
+                    // A lost key-up, not a hand: drop the key and end the over,
+                    // and say so through the watchdog flag.
+                    self.tx.set_held(false);
+                    self.tx_active = false;
+                    self.tx_watchdog = true;
+                    self.status_dirty = true;
+                }
+            } else {
+                self.straight_held_samples = 0;
             }
-            self.tx48.extend(self.scratch48.iter().copied());
-        }
-        for s in out.iter_mut() {
-            *s = self.tx48.pop_front().unwrap_or(0.0);
+            self.tx.next_manual_block(out, OUT_RATE);
+        } else {
+            while self.tx48.len() < out.len() && self.producing() {
+                self.scratch.clear();
+                self.scratch.resize(TX_CHUNK, 0.0);
+                self.tx.next_block(&mut self.scratch);
+                self.scratch48.clear();
+                match &mut self.tx_rs {
+                    Some(r) => r.push(&self.scratch, &mut self.scratch48),
+                    None => self.scratch48.extend_from_slice(&self.scratch),
+                }
+                self.tx48.extend(self.scratch48.iter().copied());
+            }
+            for s in out.iter_mut() {
+                *s = self.tx48.pop_front().unwrap_or(0.0);
+            }
         }
         if self.tx.sent_chars() != self.last_sent {
             self.last_sent = self.tx.sent_chars();
@@ -669,6 +706,7 @@ impl DigiEngine for CwController {
     fn on_burst_done(&mut self) {
         self.keyed = false;
         self.idle_samples = 0;
+        self.straight_held_samples = 0;
         // The decoder heard nothing but our own sending for the length of that
         // over; its window is stale and its speed fit is ours, not theirs.
         self.rx.reset();
@@ -706,6 +744,8 @@ impl DigiEngine for CwController {
         if self.straight {
             self.tx.set_manual(false);
             self.straight = false;
+            self.straight_held_samples = 0;
+            self.tx_watchdog = false;
         }
         if let Some(cat) = self.cat.as_mut() {
             let sending = cat.sending_since.is_some();
@@ -820,6 +860,8 @@ impl DigiEngine for CwController {
             return;
         }
         self.straight = on;
+        self.straight_held_samples = 0;
+        self.tx_watchdog = false;
         self.tx.set_manual(on);
         self.tx.set_held(false);
         self.status_dirty = true;
@@ -838,6 +880,12 @@ impl DigiEngine for CwController {
         self.tx.set_held(down);
         if down {
             self.idle_samples = 0;
+            self.straight_held_samples = 0;
+            // A fresh press is the operator keying again, so the watchdog flag
+            // from a key that was dropped before goes with it.
+            self.tx_watchdog = false;
+        } else {
+            self.straight_held_samples = 0;
         }
         self.status_dirty = true;
     }
@@ -1037,6 +1085,60 @@ mod tests {
         // Roughly the idle timeout, and certainly not immediately after the dit.
         let held_s = blocks as f32 * 480.0 / OUT_RATE as f32;
         assert!((TX_IDLE_S..TX_IDLE_S + 1.0).contains(&held_s), "held the key for {held_s:.1} s");
+    }
+
+    /// The straight key is read at the engine's block, not once per 50 ms CW
+    /// chunk: a 15 ms element is a dit at 40 WPM, and quantising it to a chunk
+    /// would put 50 ms of carrier on the air instead (issue #322).
+    #[test]
+    fn a_short_element_is_not_rounded_up_to_a_cw_chunk() {
+        let mut c = CwController::new(cfg(), 48_000.0, None);
+        c.set_straight(true);
+        c.key_down(true);
+
+        // 15 ms down, handed over in 10 ms engine blocks, counting the samples
+        // that carry tone as they come (the drain below reuses the buffer).
+        let mut keyed = 0usize;
+        let mut blk = [0.0f32; 480];
+        let mut left = (0.015 * OUT_RATE) as usize;
+        while left > 0 {
+            let n = left.min(blk.len());
+            c.fill_tx_block(&mut blk[..n]);
+            keyed += blk[..n].iter().filter(|s| s.abs() > 1e-3).count();
+            left -= n;
+        }
+        c.key_down(false);
+
+        // …then the envelope's tail.
+        for _ in 0..20 {
+            c.fill_tx_block(&mut blk);
+            keyed += blk.iter().filter(|s| s.abs() > 1e-3).count();
+        }
+        let keyed_ms = keyed as f32 * 1000.0 / OUT_RATE as f32;
+        assert!((8.0..35.0).contains(&keyed_ms), "a 15 ms element lasted {keyed_ms:.0} ms");
+    }
+
+    /// A key held down for half a minute is a lost key-up, not a hand: the
+    /// carrier is dropped and the status says why (issue #322).
+    #[test]
+    fn a_key_held_past_the_cap_is_dropped_and_says_so() {
+        let mut c = CwController::new(cfg(), 48_000.0, None);
+        c.set_straight(true);
+        c.key_down(true);
+
+        let mut blk = [0.0f32; 480];
+        let blocks = (STRAIGHT_MAX_HOLD_S * OUT_RATE as f32 / blk.len() as f32) as usize + 3;
+        for _ in 0..blocks {
+            c.fill_tx_block(&mut blk);
+        }
+        assert!(!c.tx.held(), "the key was never let go of");
+        assert!(!c.tx_active, "transmit was left on after the cap");
+        assert!(c.status().tx_watchdog, "the drop was not reported");
+
+        // Keying again clears it.
+        c.key_down(true);
+        c.key_down(false);
+        assert!(!c.status().tx_watchdog, "the flag outlived the next press");
     }
 
     /// Transmit must not decode itself. The tap carries our own sidetone while

@@ -1323,7 +1323,11 @@ use sdroxide_types::{
 /// `ServerMsg::Hd` carrying `HdRadioStatus`, and `Command::SetHdProgram` for the
 /// HD-2 subchannels, all appended last so no surviving discriminant moved, but a
 /// v147 peer handed any of them fails to decode the message carrying it.
-pub const PROTO_VERSION: u16 = 148;
+///
+/// v149: the CW keyboard straight key (issue #322). `Command::CwStraight` and
+/// `Command::CwKey`, appended last so no surviving discriminant moved, but a
+/// v148 peer has no name for either and fails to decode the message carrying it.
+pub const PROTO_VERSION: u16 = 149;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]

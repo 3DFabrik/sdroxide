@@ -1367,6 +1367,33 @@ impl CwTx {
         self.held
     }
 
+    /// A block of straight-key sidetone, rendered straight at `out_rate`.
+    ///
+    /// The timed keyer runs at the CW rate in `TX_CHUNK`-sized pieces and is
+    /// resampled, so reading the key once per piece quantises every element to
+    /// that piece — 50 ms at 400 samples of 8 kHz, longer than a dit at any
+    /// speed worth sending. Manual keying has no queue to protect, so it
+    /// renders at the rate its caller asked for and reads the key once per
+    /// sample instead, leaving the resolution at the engine's own block.
+    pub fn next_manual_block(&mut self, out: &mut [f32], out_rate: f64) {
+        let inc = std::f64::consts::TAU * self.pitch / out_rate;
+        let step = 1.0 / (SHAPE_MS * 1e-3 * out_rate as f32).max(1.0);
+        for s in out.iter_mut() {
+            let target = if self.held { 1.0 } else { 0.0 };
+            self.shape = if self.shape < target {
+                (self.shape + step).min(target)
+            } else {
+                (self.shape - step).max(target)
+            };
+            let amp = 0.5 - 0.5 * (std::f32::consts::PI * self.shape).cos();
+            self.ph += inc;
+            if self.ph > std::f64::consts::TAU {
+                self.ph -= std::f64::consts::TAU;
+            }
+            *s = amp * self.ph.sin() as f32;
+        }
+    }
+
     /// Samples of keying still to go out, the element in progress included.
     pub fn queued_samples(&self) -> usize {
         self.q.iter().map(|k| k.samples).sum::<usize>() + self.cur_left
@@ -1400,27 +1427,15 @@ impl CwTx {
 
     /// Fill `out` with the next block of sidetone.
     pub fn next_block(&mut self, out: &mut [f32]) {
+        // Manual keying: the operator's hand is the timing, and nothing from
+        // the timed queue may surface between their elements. Rendered by the
+        // straight-key path, at this keyer's own rate.
+        if self.manual {
+            self.next_manual_block(out, self.rate);
+            return;
+        }
         let inc = std::f64::consts::TAU * self.pitch / self.rate;
         for s in out.iter_mut() {
-            // Manual keying: the operator's hand is the timing. The dialogue
-            // with the timed queue is deliberately skipped wholesale — nothing
-            // queued before the key went down may surface between the
-            // operator's elements.
-            if self.manual {
-                let target = if self.held { 1.0 } else { 0.0 };
-                self.shape = if self.shape < target {
-                    (self.shape + self.shape_step).min(target)
-                } else {
-                    (self.shape - self.shape_step).max(target)
-                };
-                let amp = 0.5 - 0.5 * (std::f32::consts::PI * self.shape).cos();
-                self.ph += inc;
-                if self.ph > std::f64::consts::TAU {
-                    self.ph -= std::f64::consts::TAU;
-                }
-                *s = amp * self.ph.sin() as f32;
-                continue;
-            }
             if self.cur_left == 0 {
                 if let Some(ci) = self.cur_done.take() {
                     self.sent_chars = ci + 1;
