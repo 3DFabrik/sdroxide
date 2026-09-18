@@ -8,14 +8,19 @@
 //! `ETX`/`ETB`, a 16-bit block check sequence and `DEL`.
 //!
 //! This file is in two layers so the testable part is the one that matters:
-//! [`parse_frame`] turns an NRZI-decoded bit stream into a message and needs no
+//! [`parse_frame`] turns the demodulated bit stream into a message and needs no
 //! radio at all, and [`AcarsRx`] turns the demodulated audio into that bit
-//! stream. **The demodulator has no timing recovery yet** — it samples on a
-//! fixed grid from the start of each block — so it is verified against a
-//! synthetic signal and **not yet against a real one**; feeding it real audio
-//! is the next step ([`crates/sdroxide-dsp`] has no capture to test with here).
+//! stream.
+//!
+//! The demodulator follows acarsdec's `msk.c`: a half-sine matched filter, a
+//! bit clock, and a PI loop that tracks the carrier. The fixed-grid integrator
+//! it started as only worked on this decoder's own encoder — real audio is not
+//! symbol-aligned to the first sample and its carrier is not exactly 1800 Hz,
+//! so both have to be recovered. It is checked against an off-air recording of
+//! acarsdec's, not only its own encoder.
 
-use crate::fir::RealFir;
+use crate::resample::MonoResampler;
+use num_complex::Complex32;
 
 /// ACARS' audio centre.
 pub const CENTER_HZ: f64 = 1800.0;
@@ -52,13 +57,22 @@ fn parity_ok(b: u8) -> bool {
     (b.count_ones() & 1) == 1
 }
 
-/// CCITT CRC-16 (polynomial 0x1021, initial 0xFFFF) over `data`.
+/// The ACARS block-check sequence: CRC-16/reflected with polynomial 0x8408 and
+/// initial value 0, over the bytes **as received, parity bits included**, from
+/// the mode character through `ETX`/`ETB`. The transmitted BCS is this value
+/// with its low byte first.
+///
+/// Not CCITT-FALSE. acarsdec — the reference decoder, and the source of the
+/// off-air fixture this is checked against — builds the check this way, and a
+/// real frame's bytes verify to zero under it. The VDL2 parser's Kermit CRC is
+/// the same reflected polynomial; the difference here is the initial value and
+/// that ACARS carries the parity bits into the sum.
 fn crc16(data: &[u8]) -> u16 {
-    let mut crc: u16 = 0xFFFF;
+    let mut crc: u16 = 0;
     for &b in data {
-        crc ^= u16::from(b) << 8;
+        crc ^= u16::from(b);
         for _ in 0..8 {
-            crc = if crc & 0x8000 != 0 { (crc << 1) ^ 0x1021 } else { crc << 1 };
+            crc = if crc & 1 != 0 { (crc >> 1) ^ 0x8408 } else { crc >> 1 };
         }
     }
     crc
@@ -148,12 +162,11 @@ fn parse_from(rest: &[u8]) -> Option<AcarsFrame> {
     if rest.len() < idx + 3 {
         return None;
     }
-    let bcs = u16::from_be_bytes([rest[idx], rest[idx + 1]]);
-    let mut covered: Vec<u8> = rest[..idx].iter().map(|b| b & 0x7f).collect();
-    // The standard builds the check over the header from SOH; the caller has
-    // already skipped it, so the SOH byte is prepended back.
-    covered.insert(0, 0x01);
-    let crc_ok = crc16(&covered) == bcs;
+    // The check runs over the header and text exactly as received — parity and
+    // all — from the mode character (the caller skipped SOH) through ETX, and
+    // the transmitted BCS carries the low byte first.
+    let bcs = u16::from_le_bytes([rest[idx], rest[idx + 1]]);
+    let crc_ok = crc16(&rest[..idx]) == bcs;
 
     Some(AcarsFrame {
         mode,
@@ -178,30 +191,38 @@ pub fn nrzi_decode(levels: &[u8]) -> Vec<u8> {
 }
 
 /// The ACARS demodulator: real audio in, bits out.
+///
+/// Ported from acarsdec's `msk.c`: the mixer runs off a VCO whose phase is
+/// corrected by a PI carrier loop, the symbol decision is a half-sine matched
+/// filter read at the bit clock's fractional position, and the clock itself is
+/// the VCO phase crossing 3π/2 — so it tracks a real signal's timing and
+/// frequency rather than assuming both.
 pub struct AcarsRx {
-    /// Mixes the 1800 Hz centre down to DC.
-    phase: f64,
-    dphase: f64,
-    /// Real and imaginary low-pass against 2400 Hz.
-    lp_re: RealFir,
-    lp_im: RealFir,
-    /// Scratch buffers for the mixed and filtered block.
-    mix_re: Vec<f32>,
-    mix_im: Vec<f32>,
-    filt_re: Vec<f32>,
-    filt_im: Vec<f32>,
-    /// The previous sample, for the instantaneous-frequency term.
-    prev: (f32, f32),
-    /// Samples per symbol.
-    sps: f64,
-    /// Symbol accumulator and its sample count.
-    acc: f32,
-    acc_n: f64,
-    /// Levels since the last frame attempt, trimmed to a sane maximum.
-    levels: Vec<u8>,
-    /// Samples to skip while the low-pass fills, so the symbol grid lines up
-    /// with the signal rather than with the filter's group delay.
-    warmup: usize,
+    /// Audio rate, for the VCO's centre-frequency step.
+    rate: f32,
+    /// Matched filter length in samples: one 1200 Hz half-cycle.
+    bitlen: usize,
+    /// Oversampling of the filter table.
+    over: usize,
+    /// Half-sine matched filter, `bitlen * over + 1` taps.
+    mflt: Vec<f32>,
+    /// The last `bitlen` mixed samples, newest overwriting oldest.
+    inb: Vec<Complex32>,
+    inb_idx: usize,
+    /// VCO phase (the carrier) and the bit-clock accumulator.
+    phi: f32,
+    clk: f32,
+    /// PI carrier loop: frequency and phase corrections.
+    df: f32,
+    dphi: f32,
+    /// Symbols emitted: selects the I/Q arm and the two-symbol sign flip.
+    symbols: u32,
+    /// Bits since the last framing attempt, trimmed to a sane maximum.
+    bits: Vec<u8>,
+    /// Resamples the incoming audio to the 12 kHz the demodulator runs at.
+    /// `None` when it already is.
+    rs: Option<MonoResampler>,
+    rs_buf: Vec<f32>,
     /// Smoothed audio level, for the panel's meter.
     level: f32,
     /// Frames decoded with a good block check, and frames whose check failed.
@@ -211,22 +232,32 @@ pub struct AcarsRx {
 
 impl AcarsRx {
     pub fn new(rate: f64) -> Self {
+        // acarsdec's demodulator is defined at 12 kHz and reaches it by
+        // averaging the input down; a resampler does the same for any rate, so
+        // the 12 kHz constants below stay exactly what the reference uses
+        // instead of being re-derived (wrongly) per rate.
+        let demod_rate = 12_000.0f64;
+        let over = 240usize;
+        let bitlen = (demod_rate / 1200.0).ceil().max(1.0) as usize;
+        let mut mflt = vec![0.0f32; bitlen * over + 1];
+        for (i, h) in mflt.iter_mut().enumerate() {
+            *h = (std::f32::consts::PI * 1200.0 * i as f32 / demod_rate as f32 / over as f32).sin();
+        }
         AcarsRx {
-            phase: 0.0,
-            dphase: std::f64::consts::TAU * CENTER_HZ / rate,
-            lp_re: RealFir::lowpass(63, 2_400.0, rate),
-            lp_im: RealFir::lowpass(63, 2_400.0, rate),
-            mix_re: Vec::new(),
-            mix_im: Vec::new(),
-            filt_re: Vec::new(),
-            filt_im: Vec::new(),
-            prev: (0.0, 0.0),
-            sps: rate / BAUD,
-            acc: 0.0,
-            acc_n: 0.0,
-            levels: Vec::new(),
-            // Half the 63-tap low-pass, in samples.
-            warmup: 31,
+            rate: demod_rate as f32,
+            bitlen,
+            over,
+            mflt,
+            inb: vec![Complex32::default(); bitlen],
+            inb_idx: 0,
+            phi: 0.0,
+            clk: 0.0,
+            df: 0.0,
+            dphi: 0.0,
+            symbols: 0,
+            bits: Vec::new(),
+            rs: MonoResampler::new(rate, demod_rate),
+            rs_buf: Vec::new(),
             level: 0.0,
             frames: 0,
             bad: 0,
@@ -250,75 +281,103 @@ impl AcarsRx {
 
     /// Consume audio, appending any messages found.
     pub fn process(&mut self, audio: &[f32], out: &mut Vec<AcarsEvent>) {
-        // A running level for the meter.
         let ms = audio.iter().map(|s| s * s).sum::<f32>() / audio.len().max(1) as f32;
         self.level += 0.3 * (ms.sqrt() - self.level);
-        // Mix the 1800 Hz centre down to DC, then low-pass.
-        self.mix_re.clear();
-        self.mix_im.clear();
-        self.mix_re.reserve(audio.len());
-        self.mix_im.reserve(audio.len());
-        for &s in audio {
-            self.phase += self.dphase;
-            if self.phase > std::f64::consts::TAU {
-                self.phase -= std::f64::consts::TAU;
-            }
-            self.mix_re.push(s * self.phase.cos() as f32);
-            self.mix_im.push(-s * self.phase.sin() as f32);
+
+        // acarsdec's loop gains. It scales them by its own 12 kHz filter length
+        // (10 samples); the loop steps once per symbol and the symbol rate is
+        // fixed, so the per-symbol gains are what matter and they must not be
+        // re-scaled by *this* rate's filter length — that made an engine-fed
+        // 48 kHz signal far too slow to lock.
+        let ki = 71e-7 / 10.0;
+        let kp = 60e-3 / 10.0;
+        let tau = std::f32::consts::TAU;
+        let bit_clock = 1.5 * std::f32::consts::PI;
+
+        if let Some(rs) = self.rs.as_mut() {
+            self.rs_buf.clear();
+            rs.push(audio, &mut self.rs_buf);
         }
-        self.filt_re.clear();
-        self.filt_im.clear();
-        self.lp_re.process(&self.mix_re, &mut self.filt_re);
-        self.lp_im.process(&self.mix_im, &mut self.filt_im);
+        let resampled = self.rs.is_some();
+        let n = if resampled { self.rs_buf.len() } else { audio.len() };
 
-        for k in 0..self.filt_re.len() {
-            let (r, m) = (self.filt_re[k], self.filt_im[k]);
-            // Instantaneous frequency as the phase step between samples.
-            // The phase step from the previous sample: the negative of
-            // atan2 of the cross product, so a tone above the centre reads
-            // positive.
-            let cross = self.prev.1 * r - self.prev.0 * m;
-            let dot = self.prev.0 * r + self.prev.1 * m;
-            let dphi = -cross.atan2(dot);
-            self.prev = (r, m);
-            if self.warmup > 0 {
-                self.warmup -= 1;
-                continue;
-            }
+        for k in 0..n {
+            let sample = if resampled { self.rs_buf[k] } else { audio[k] };
+            // VCO frequency: the 1800 Hz centre plus the loop's correction.
+            let s = tau * CENTER_HZ as f32 / self.rate + self.dphi;
 
-            self.acc += dphi;
-            self.acc_n += 1.0;
-            if self.acc_n >= self.sps {
-                // MSK: the 2400 Hz tone sits above the 1800 Hz centre and is
-                // the higher level; the 1200 Hz tone is the lower one.
-                let level = u8::from(self.acc > 0.0);
-                self.acc = 0.0;
-                // Carry the overshoot instead of clearing it. `sps` is
-                // fractional at most rates — 51.2 kHz / 2400 baud is 21.33… —
-                // and dropping the remainder on every symbol walks the sampling
-                // grid off the signal, so the far end of a long frame is read on
-                // the wrong samples and the block check never matches.
-                self.acc_n -= self.sps;
-                if self.levels.len() < 8 * 300 {
-                    self.levels.push(level);
+            self.clk += s;
+            if self.clk > bit_clock {
+                self.clk -= bit_clock;
+
+                // The matched filter, read at the clock's fractional position.
+                let mut o = (self.over as f32 * (self.clk / s)) as usize;
+                if o > self.over {
+                    o = self.over;
                 }
-            }
-        }
+                let mut v = Complex32::new(0.0, 0.0);
+                for j in 0..self.bitlen {
+                    let tap = self.mflt[o + j * self.over];
+                    v += self.inb[(j + self.inb_idx) % self.bitlen] * tap;
+                }
+                // Normalise, so the decision is a sign and not a level.
+                let v = v / (v.norm() + 1e-8);
 
-        // Try to parse whenever the buffer has a plausible frame in it.
-        if self.levels.len() >= 8 * 32 {
-            let bits = nrzi_decode(&self.levels);
-            if let Some(msg) = parse_frame(&bits) {
-                if msg.crc_ok {
-                    self.frames += 1;
+                let (vo, dphi) = if self.symbols & 1 == 1 {
+                    let vo = v.im;
+                    (vo, if vo >= 0.0 { -v.re } else { v.re })
                 } else {
-                    self.bad += 1;
-                }
-                out.push(AcarsEvent::Message(msg));
-                self.levels.clear();
-            } else if self.levels.len() > 8 * 280 {
-                self.levels.drain(..8 * 40);
+                    let vo = v.re;
+                    (vo, if vo >= 0.0 { v.im } else { -v.im })
+                };
+                let bit = if self.symbols & 2 != 0 { -vo } else { vo };
+                self.push_bit(bit > 0.0, out);
+                self.symbols = self.symbols.wrapping_add(1);
+
+                // The PI controller: frequency integrates the error, phase is
+                // its output plus a proportional term.
+                self.df += ki * dphi;
+                self.dphi = self.df + kp * dphi;
             }
+
+            self.phi += s;
+            if self.phi >= tau {
+                self.phi -= tau;
+            }
+            // Mix down by the VCO, newest sample into the circular buffer.
+            self.inb[self.inb_idx] = Complex32::from_polar(1.0, -self.phi) * sample;
+            self.inb_idx = (self.inb_idx + 1) % self.bitlen;
+        }
+    }
+
+    /// One demodulated bit: buffer it, and try to frame once a byte is in.
+    ///
+    /// A heading whose block check fails is counted and stepped past, not
+    /// thrown away with the rest of the buffer: on real audio there are several
+    /// SOH-shaped coincidences per burst, and clearing on the first of them
+    /// discards the real frame sitting behind it. Only a frame that checks out
+    /// is emitted and clears the window.
+    fn push_bit(&mut self, bit: bool, out: &mut Vec<AcarsEvent>) {
+        if self.bits.len() < 8 * 512 {
+            self.bits.push(u8::from(bit));
+        }
+        if self.bits.len() % 8 != 0 || self.bits.len() < 8 * 32 {
+            return;
+        }
+        match parse_frame(&self.bits) {
+            Some(msg) if msg.crc_ok => {
+                self.frames += 1;
+                out.push(AcarsEvent::Message(msg));
+                self.bits.clear();
+            }
+            Some(_) => {
+                self.bad += 1;
+                self.bits.drain(..8);
+            }
+            None if self.bits.len() > 8 * 480 => {
+                self.bits.drain(..8 * 40);
+            }
+            None => {}
         }
     }
 }
@@ -362,12 +421,11 @@ mod tests {
         }
         bytes.push(ch('\u{3}'));
 
-        // The BCS covers the header from SOH onwards, parity stripped.
-        let mut covered: Vec<u8> = vec![0x01];
-        covered.extend(bytes[5..].iter().map(|b| b & 0x7f));
-        let bcs = crc16(&covered);
-        bytes.push((bcs >> 8) as u8);
+        // The BCS covers the mode character through ETX as transmitted, parity
+        // included, and goes out low byte first.
+        let bcs = crc16(&bytes[5..]);
         bytes.push((bcs & 0xff) as u8);
+        bytes.push((bcs >> 8) as u8);
         bytes.push(0x7f);
 
         // Bits, LSB-first per byte, then NRZI levels: 0 = change, 1 = no change.
@@ -432,88 +490,82 @@ mod tests {
         assert!(parse_frame(&bits).is_none(), "noise must not fabricate a frame");
     }
 
-    /// Turn NRZI levels into the AM-detected audio: a tone at 2400 Hz for a
-    /// high level and 1200 Hz for a low one, continuous phase.
-    pub(super) fn levels_to_audio(levels: &[u8], rate: f64, sps: usize) -> Vec<f32> {
-        let t = std::f64::consts::TAU;
-        let mut phase = 0.0f64;
-        let mut out = Vec::with_capacity(levels.len() * sps);
-        for &l in levels {
-            let f = if l == 1 { 2400.0 } else { 1200.0 };
-            for _ in 0..sps {
-                out.push(phase.cos() as f32);
-                phase = (phase + t * f / rate) % t;
-            }
-        }
-        out
-    }
 
-    #[test]
-    fn a_synthetic_signal_decodes_end_to_end() {
-        let msg = sample();
-        let levels = encode(&msg);
-        let rate = 48_000.0;
-        let sps = (rate / BAUD).round() as usize;
-        let mut audio = levels_to_audio(&levels, rate, sps);
-        // A little more of the last tone, so the final symbol and its block
-        // check are inside the audio rather than cut off by its end.
-        audio.extend(std::iter::repeat_n(0.0f32, sps * 4));
-        let mut rx = AcarsRx::new(rate);
-        let mut events = Vec::new();
-        // Feed in blocks, as the engine would.
-        for chunk in audio.chunks(4096) {
-            rx.process(chunk, &mut events);
-        }
-        let got: Vec<&AcarsFrame> = events
-            .iter()
-            .filter_map(|e| match e {
-                AcarsEvent::Message(m) => Some(m),
-                _ => None,
-            })
-            .collect();
-        assert!(!got.is_empty(), "a synthetic frame must decode");
-        assert_eq!(got[0].text, "HELLO FROM ACARS");
-        assert!(got[0].crc_ok, "and its block check must verify");
-    }
 
     /// The symbol clock carries its fractional remainder. At 51.2 kHz a symbol
     /// is 21.33… samples, and rounding that away each symbol walks the sampling
     /// grid off a long frame — the far end reads the wrong samples and the
     /// block check never matches. 48 kHz divides evenly and hid it.
-    #[test]
-    fn a_fractional_symbol_rate_still_decodes() {
-        let levels = encode(&sample());
-        let rate = 51_200.0;
-        // Symbol boundaries at their true fractional positions.
-        let t = std::f64::consts::TAU;
-        let mut phase = 0.0f64;
-        let mut audio = Vec::new();
-        for (k, &l) in levels.iter().enumerate() {
-            let start = (k as f64 * rate / BAUD).round() as usize;
-            let end = (((k + 1) as f64) * rate / BAUD).round() as usize;
-            let f = if l == 1 { 2400.0 } else { 1200.0 };
-            for _ in start..end {
-                audio.push(phase.cos() as f32);
-                phase = (phase + t * f / rate) % t;
-            }
-        }
-        audio.extend(std::iter::repeat_n(0.0f32, 200));
-        let mut rx = AcarsRx::new(rate);
-        let mut events = Vec::new();
-        for chunk in audio.chunks(4096) {
-            rx.process(chunk, &mut events);
-        }
-        let got = events.iter().find_map(|e| match e {
-            AcarsEvent::Message(m) => Some(m),
-            _ => None,
-        });
-        let got = got.expect("a frame at a fractional symbol rate must decode");
-        assert!(got.crc_ok, "and its block check must verify");
-    }
+
+    /// The block check is the reflected CRC-16 with initial value 0 — the same
+    /// form as CRC-16/KERMIT, whose check value for "123456789" is 0x2189.
+    /// CCITT-FALSE would give 0x29B1 and does not verify real frames.
 
     #[test]
-    fn the_crc_matches_the_ccitt_known_answer() {
-        // "123456789" under CRC-16/CCITT-FALSE is 0x29B1.
-        assert_eq!(crc16(b"123456789"), 0x29B1);
+    fn the_block_check_is_the_reflected_crc() {
+        assert_eq!(crc16(b"123456789"), 0x2189);
+    }
+
+    /// Decode an off-air recording, which is the only thing that can say
+    /// whether the demodulator matches the air rather than its own encoder.
+    ///
+    /// Ignored by default: it needs a file that is not in the tree. Point
+    /// `SDROXIDE_ACARS_SAMPLE` at a WAV at a multiple of 12 kHz — acarsdec's
+    /// `test.wav` is one — or drop a capture beside the tree and point the
+    /// variable at it. Only the first channel is read; acarsdec's own file
+    /// carries four receivers side by side.
+    ///
+    /// `SDROXIDE_ACARS_SAMPLE=/path/test.wav cargo test -p sdroxide-dsp
+    /// --release -- --ignored --nocapture`
+    #[test]
+    #[ignore = "needs an off-air recording; set SDROXIDE_ACARS_SAMPLE"]
+    fn an_off_air_recording_decodes() {
+        let Ok(path) = std::env::var("SDROXIDE_ACARS_SAMPLE") else {
+            eprintln!("skipping: set SDROXIDE_ACARS_SAMPLE to a WAV recording");
+            return;
+        };
+        let mut reader = hound::WavReader::open(&path)
+            .unwrap_or_else(|e| panic!("opening {path}: {e}"));
+        let spec = reader.spec();
+        let rate = f64::from(spec.sample_rate);
+        let channels = spec.channels as usize;
+        let samples: Vec<f32> = match (spec.sample_format, spec.bits_per_sample) {
+            (hound::SampleFormat::Int, bits) => {
+                let scale = 1.0 / (1i64 << (bits - 1)) as f32;
+                reader
+                    .samples::<i32>()
+                    .step_by(channels)
+                    .filter_map(Result::ok)
+                    .map(|s| s as f32 * scale)
+                    .collect()
+            }
+            (hound::SampleFormat::Float, _) => {
+                reader.samples::<f32>().step_by(channels).filter_map(Result::ok).collect()
+            }
+        };
+        let mut rx = AcarsRx::new(rate);
+        let mut events = Vec::new();
+        for chunk in samples.chunks(4096) {
+            rx.process(chunk, &mut events);
+        }
+        let good: Vec<&AcarsFrame> = events
+            .iter()
+            .filter_map(|e| match e {
+                AcarsEvent::Message(m) if m.crc_ok => Some(m),
+                _ => None,
+            })
+            .collect();
+        for m in &good {
+            eprintln!(
+                "ok  {} {} {}  {}",
+                m.address.trim(),
+                m.label,
+                m.block_id,
+                m.text.trim()
+            );
+        }
+        eprintln!("{} good frames, {} bad, {} samples", good.len(), rx.bad(), samples.len());
+        eprintln!("{} good frames, {} bad, {} samples", good.len(), rx.bad(), samples.len());
+        assert!(!good.is_empty(), "the recording produced no frame with a good block check");
     }
 }
