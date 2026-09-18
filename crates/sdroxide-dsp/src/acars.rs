@@ -78,37 +78,61 @@ fn crc16(data: &[u8]) -> u16 {
     crc
 }
 
-/// Assemble bytes from a bit slice, least-significant bit first, eight bits each.
-fn bytes_lsb_first(bits: &[u8]) -> Vec<u8> {
+/// Assemble bytes from a bit slice, least-significant bit first, eight bits
+/// each — every bit inverted when `invert` is set.
+fn bytes_lsb_first(bits: &[u8], invert: bool) -> Vec<u8> {
+    let flip = u8::from(invert);
     bits.chunks(8)
         .filter(|c| c.len() == 8)
-        .map(|c| c.iter().enumerate().fold(0u8, |b, (i, &v)| b | ((v & 1) << i)))
+        .map(|c| c.iter().enumerate().fold(0u8, |b, (i, &v)| b | (((v ^ flip) & 1) << i)))
         .collect()
 }
 
-/// Parse an NRZI-decoded bit stream into a message, hunting for the start of
+/// Parse a demodulated bit stream into a message, hunting for the start of
 /// the frame.
 ///
-/// Returns `None` when no frame with a valid block check is found — the parse
-/// is what rejects noise, so a false positive costs a check rather than a
-/// phantom message.
+/// Returns a frame whose block check matches if the stream holds one, and
+/// otherwise the first heading that framed at all, with `crc_ok` false. `None`
+/// when nothing frames — the parse is what rejects noise, so a false positive
+/// costs a check rather than a phantom message.
 pub fn parse_frame(bits: &[u8]) -> Option<AcarsFrame> {
-    // Byte-align every shift of the stream and keep the headings; the real one
-    // is whichever ends with a block check that matches.
-    for shift in 0..8 {
-        let aligned = &bits[shift..];
-        let bytes = bytes_lsb_first(aligned);
-        for (i, &b) in bytes.iter().enumerate() {
-            // SOH, with odd parity, marks the header.
-            if b & 0x7f != 0x01 || !parity_ok(b) {
-                continue;
-            }
-            if let Some(msg) = parse_from(&bytes[i + 1..]) {
-                return Some(msg);
+    find_frame(bits).map(|(msg, _)| msg)
+}
+
+/// [`parse_frame`], with the bit offset of the frame's `SOH` in `bits`.
+///
+/// Both polarities are tried. The carrier loop settles with either sign — an
+/// MSK phase detector cannot tell the two apart — and a burst demodulated
+/// upside down is every bit inverted. acarsdec reads the sign off an inverted
+/// SYN and flips its demodulator; reading the window both ways and keeping
+/// the block check that matches comes to the same thing. Without it, half the
+/// bursts in acarsdec's own recording never framed.
+///
+/// A heading whose block check matches wins over any that does not, wherever
+/// either sits: a coincidental heading read the wrong way up must not hide
+/// the real frame read the right way.
+fn find_frame(bits: &[u8]) -> Option<(AcarsFrame, usize)> {
+    let mut failed = None;
+    for invert in [false, true] {
+        for shift in 0..8 {
+            let Some(aligned) = bits.get(shift..) else { break };
+            let bytes = bytes_lsb_first(aligned, invert);
+            for (i, &b) in bytes.iter().enumerate() {
+                // SOH, with odd parity, marks the header.
+                if b & 0x7f != 0x01 || !parity_ok(b) {
+                    continue;
+                }
+                if let Some(msg) = parse_from(&bytes[i + 1..]) {
+                    let at = shift + 8 * i;
+                    if msg.crc_ok {
+                        return Some((msg, at));
+                    }
+                    failed.get_or_insert((msg, at));
+                }
             }
         }
     }
-    None
+    failed
 }
 
 /// Parse the header and text that follow `SOH`.
@@ -492,6 +516,37 @@ mod tests {
         assert!(got.crc_ok, "the block check covers the header and ETX");
     }
 
+    /// The carrier loop can settle with either sign, which turns every bit
+    /// over. The frame must decode the same either way up.
+    #[test]
+    fn an_inverted_bit_stream_still_decodes() {
+        let bits: Vec<u8> = nrzi_decode(&encode(&sample())).iter().map(|b| b ^ 1).collect();
+        let got = parse_frame(&bits).expect("a frame read upside down");
+        assert_eq!(got.text, "HELLO FROM ACARS");
+        assert!(got.crc_ok);
+    }
+
+    /// A heading that frames but fails its check, ahead of a good frame in the
+    /// same window, must not be what comes back.
+    #[test]
+    fn a_failed_heading_does_not_hide_a_good_frame_behind_it() {
+        let mut bad = nrzi_decode(&encode(&sample()));
+        // Two bits of the first text character: parity still holds, so the
+        // heading frames, and only the block check can tell. The text starts
+        // after 16 bytes of pre-key and 18 of sync and header.
+        let text = (16 + 18) * 8;
+        bad[text] ^= 1;
+        bad[text + 1] ^= 1;
+        let only = parse_frame(&bad).expect("the damaged frame still frames");
+        assert!(!only.crc_ok);
+        let mut good = sample();
+        good.text = "SECOND".into();
+        bad.extend(nrzi_decode(&encode(&good)));
+        let got = parse_frame(&bad).expect("a frame");
+        assert!(got.crc_ok, "the frame that checks out wins");
+        assert_eq!(got.text, "SECOND");
+    }
+
     #[test]
     fn a_corrupt_block_check_is_reported_not_hidden() {
         let mut bits = nrzi_decode(&encode(&sample()));
@@ -537,10 +592,10 @@ mod tests {
     /// whether the demodulator matches the air rather than its own encoder.
     ///
     /// Ignored by default: it needs a file that is not in the tree. Point
-    /// `SDROXIDE_ACARS_SAMPLE` at a WAV at a multiple of 12 kHz — acarsdec's
-    /// `test.wav` is one — or drop a capture beside the tree and point the
-    /// variable at it. Only the first channel is read; acarsdec's own file
-    /// carries four receivers side by side.
+    /// `SDROXIDE_ACARS_SAMPLE` at a WAV of demodulated AM audio at any rate —
+    /// acarsdec's `test.wav` (12.5 kHz, four receivers side by side) is one.
+    /// Every channel is decoded as a receiver of its own; acarsdec finds seven
+    /// frames in that file, 2 + 2 + 2 + 1, and so should this.
     ///
     /// `SDROXIDE_ACARS_SAMPLE=/path/test.wav cargo test -p sdroxide-dsp
     /// --release -- --ignored --nocapture`
@@ -551,48 +606,39 @@ mod tests {
             eprintln!("skipping: set SDROXIDE_ACARS_SAMPLE to a WAV recording");
             return;
         };
-        let mut reader = hound::WavReader::open(&path)
-            .unwrap_or_else(|e| panic!("opening {path}: {e}"));
+        let mut reader =
+            hound::WavReader::open(&path).unwrap_or_else(|e| panic!("opening {path}: {e}"));
         let spec = reader.spec();
         let rate = f64::from(spec.sample_rate);
         let channels = spec.channels as usize;
-        let samples: Vec<f32> = match (spec.sample_format, spec.bits_per_sample) {
-            (hound::SampleFormat::Int, bits) => {
-                let scale = 1.0 / (1i64 << (bits - 1)) as f32;
-                reader
-                    .samples::<i32>()
-                    .step_by(channels)
-                    .filter_map(Result::ok)
-                    .map(|s| s as f32 * scale)
-                    .collect()
+        let samples: Vec<f32> = match spec.sample_format {
+            hound::SampleFormat::Int => {
+                let scale = 1.0 / (1i64 << (spec.bits_per_sample - 1)) as f32;
+                reader.samples::<i32>().filter_map(Result::ok).map(|s| s as f32 * scale).collect()
             }
-            (hound::SampleFormat::Float, _) => {
-                reader.samples::<f32>().step_by(channels).filter_map(Result::ok).collect()
-            }
+            hound::SampleFormat::Float => reader.samples::<f32>().filter_map(Result::ok).collect(),
         };
-        let mut rx = AcarsRx::new(rate);
-        let mut events = Vec::new();
-        for chunk in samples.chunks(4096) {
-            rx.process(chunk, &mut events);
+        let mut total = 0;
+        for ch in 0..channels {
+            let mono: Vec<f32> = samples.iter().skip(ch).step_by(channels).copied().collect();
+            let mut rx = AcarsRx::new(rate);
+            let mut events = Vec::new();
+            for chunk in mono.chunks(4096) {
+                rx.process(chunk, &mut events);
+            }
+            for AcarsEvent::Message(m) in &events {
+                eprintln!(
+                    "#{} ok  {} {} {}  {}",
+                    ch + 1,
+                    m.address,
+                    m.label,
+                    m.block_id,
+                    m.text.trim()
+                );
+            }
+            eprintln!("#{}: {} good frames, {} bad", ch + 1, rx.frames(), rx.bad());
+            total += rx.frames();
         }
-        let good: Vec<&AcarsFrame> = events
-            .iter()
-            .filter_map(|e| match e {
-                AcarsEvent::Message(m) if m.crc_ok => Some(m),
-                _ => None,
-            })
-            .collect();
-        for m in &good {
-            eprintln!(
-                "ok  {} {} {}  {}",
-                m.address.trim(),
-                m.label,
-                m.block_id,
-                m.text.trim()
-            );
-        }
-        eprintln!("{} good frames, {} bad, {} samples", good.len(), rx.bad(), samples.len());
-        eprintln!("{} good frames, {} bad, {} samples", good.len(), rx.bad(), samples.len());
-        assert!(!good.is_empty(), "the recording produced no frame with a good block check");
+        assert!(total > 0, "the recording produced no frame with a good block check");
     }
 }
