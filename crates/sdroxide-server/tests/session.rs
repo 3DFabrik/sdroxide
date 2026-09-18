@@ -23,6 +23,9 @@ const AUTH_PORT: u16 = 39472;
 const SHARE_PORT: u16 = 39473;
 /// Named-operator settings, on its own engine for the same reason.
 const SETTINGS_PORT: u16 = 39474;
+/// Same named operator reconnecting, on its own engine so it cannot share a
+/// control key with the handover test.
+const RECONNECT_PORT: u16 = 39475;
 
 async fn recv_msg(
     ws: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
@@ -389,4 +392,46 @@ async fn a_named_operator_gets_their_settings_back() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     let stored = saved.lock().unwrap().clone().expect("the station wrote the settings");
     assert!((stored.volume - 0.3).abs() < f32::EPSILON);
+}
+
+/// A named operator who reconnects — the same person on a new socket, the old
+/// one still half-open — is working the radio again, not listening to themselves.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_named_operator_who_reconnects_takes_the_radio_back() {
+    spawn_server(
+        RECONNECT_PORT,
+        Some(Box::new(|| Access {
+            shared: RemoteAccess::default(),
+            users: Users {
+                users: vec![User {
+                    name: "df7zz".into(),
+                    password: "hunter2".into(),
+                    ..User::default()
+                }],
+            },
+        })),
+    )
+    .await;
+    let url = format!("ws://127.0.0.1:{RECONNECT_PORT}/ws");
+
+    let (mut first, _) = tokio_tungstenite::connect_async(&url).await.expect("first");
+    send(&mut first, &hello()).await;
+    assert_eq!(recv_msg(&mut first).await, ServerMsg::AuthRequired);
+    send(&mut first, &ClientMsg::Auth { username: "df7zz".into(), password: "hunter2".into() })
+        .await;
+    assert!(matches!(recv_msg(&mut first).await, ServerMsg::HelloAck { .. }));
+    let held = wait_for_control(&mut first).await;
+    assert!(held.i_hold());
+    assert!(!held.shared());
+
+    let (mut second, _) = tokio_tungstenite::connect_async(&url).await.expect("second");
+    send(&mut second, &hello()).await;
+    assert_eq!(recv_msg(&mut second).await, ServerMsg::AuthRequired);
+    send(&mut second, &ClientMsg::Auth { username: "df7zz".into(), password: "hunter2".into() })
+        .await;
+    assert!(matches!(recv_msg(&mut second).await, ServerMsg::HelloAck { .. }));
+    let back = wait_for_control(&mut second).await;
+    assert!(back.i_hold(), "the reconnecting operator has the radio");
+    assert!(!back.shared(), "the stale session is not still sitting beside them: {back:?}");
+    let _ = first;
 }

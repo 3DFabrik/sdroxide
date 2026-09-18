@@ -165,9 +165,42 @@ fn announce_control(shared: &Shared) {
     }
 }
 
-/// Whether `slot` is the client working this radio.
-fn holds_control(shared: &Shared, slot: u64) -> bool {
-    shared.control.lock().unwrap().holder == Some(slot)
+/// Drop every session already signed in as `who`, so a named operator who
+/// reconnects — laptop off the cable and onto Wi-Fi, browser tab restored —
+/// is not left listening to themselves.
+///
+/// Only a roster identity does this. A station with one shared password cannot
+/// tell two people apart, and kicking the first of them would be the old
+/// single-client lockout in a new shape.
+fn drop_stale_sessions_of(shared: &Shared, who: &auth::Identity) {
+    if !who.named || who.name.is_empty() {
+        return;
+    }
+    let gone: Vec<u64> = {
+        let mut clients = shared.clients.lock().unwrap();
+        let mut gone = Vec::new();
+        clients.retain(|c| {
+            if c.who.named && c.who.name.eq_ignore_ascii_case(&who.name) {
+                gone.push(c.slot);
+                false
+            } else {
+                true
+            }
+        });
+        gone
+    };
+    if gone.is_empty() {
+        return;
+    }
+    info!(
+        radio = shared.id,
+        who = who.label(),
+        previous = gone.len(),
+        "the same operator is back; the previous session is dropped"
+    );
+    for slot in gone {
+        release_control(shared, slot);
+    }
 }
 
 /// Give the control key to `slot`, releasing whoever had it.
@@ -518,6 +551,7 @@ async fn run_session(
         tx: SessionTx { reliable: rel_tx, audio: aud_tx, rx_codec },
     };
     let slot = me.slot;
+    drop_stale_sessions_of(shared, &who);
     // A radio nobody is working is handed to whoever attaches to it, so a
     // single-operator station behaves exactly as it always did: connect, and the
     // radio is yours. Only a second client has to ask.
