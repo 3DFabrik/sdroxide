@@ -39,6 +39,7 @@ use self::net::{
     broadcast_stations_settings, net_heading, net_row, net_secret, operator_identity_note,
     settings_freedv_tab,
 };
+use self::profiles::settings_profiles_tab;
 use self::radio::{
     settings_airspy_tab, settings_airspyhf_tab, settings_cat_tab, settings_elad_tab,
     settings_fobos_tab, settings_hackrf_tab, settings_hpsdr_tab, settings_hydrasdr_tab,
@@ -53,7 +54,6 @@ use self::servers::{
     settings_rigctld_tab, settings_rotator_tab, settings_tci_server_tab, settings_wsjtx_tab,
 };
 use self::tle::settings_tle_tab;
-use self::profiles::settings_profiles_tab;
 use self::ui_tab::settings_ui_tab;
 use crate::app::SdroxideApp;
 use crate::app::persist::{persist_alerts_settings, persist_speech_settings, persist_ui_settings};

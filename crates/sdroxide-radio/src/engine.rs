@@ -3717,9 +3717,7 @@ fn engine_thread(
     let _ = event_tx.send(RadioEvent::Memories(memories.clone()));
     let _ = event_tx.send(RadioEvent::MemoryFolders(mem_folders.clone()));
     let _ = event_tx.send(RadioEvent::Scanner(scan_cfg.clone()));
-    let _ = event_tx.send(RadioEvent::Profiles(
-        profiles.iter().map(|p| p.name.clone()).collect(),
-    ));
+    let _ = event_tx.send(RadioEvent::Profiles(profiles.iter().map(|p| p.name.clone()).collect()));
     // Surface any warning captured while opening the source (e.g. radio audio
     // device unavailable / mono card chosen for IQ) so the UI can show it
     // instead of an unexplained "waiting for spectrum" — together with any
@@ -9380,7 +9378,6 @@ impl Engine {
             // The station's named working setups — dials, VFOs, mode and
             // filters, gains and drive, the digital identity, and the band
             // stacks. The hardware is deliberately not part of it.
-
             ProfileSave(name) => {
                 let name = name.trim().to_string();
                 if name.is_empty() {
@@ -9396,11 +9393,7 @@ impl Engine {
                     digi: self.digi_config.clone(),
                     stacks: self.stacks.clone(),
                 };
-                match self
-                    .profiles
-                    .iter()
-                    .position(|p| p.name.eq_ignore_ascii_case(&name))
-                {
+                match self.profiles.iter().position(|p| p.name.eq_ignore_ascii_case(&name)) {
                     Some(i) => self.profiles[i] = snapshot,
                     None => self.profiles.push(snapshot),
                 }
@@ -9420,17 +9413,13 @@ impl Engine {
                 // any route: keyed at the radio, or a message the rig's own
                 // keyer is sending, as well as our own key.
                 if self.on_air() || self.state.tx.ptt {
-                    self.notice(
-                        "Wait for the transmission to finish before putting a profile on.",
-                    );
+                    self.notice("Wait for the transmission to finish before putting a profile on.");
                     return;
                 }
                 let Some(profile) =
                     self.profiles.iter().find(|p| p.name.eq_ignore_ascii_case(&name)).cloned()
                 else {
-                    self.notice(&format!(
-                        "Profile \u{201c}{name}\u{201d} does not exist."
-                    ));
+                    self.notice(&format!("Profile \u{201c}{name}\u{201d} does not exist."));
                     return;
                 };
                 self.apply_profile(&profile);
@@ -9442,12 +9431,9 @@ impl Engine {
             ProfileDelete(name) => {
                 self.poll_shared_stores();
                 let before = self.profiles.len();
-                self.profiles
-                    .retain(|p| !p.name.eq_ignore_ascii_case(&name));
+                self.profiles.retain(|p| !p.name.eq_ignore_ascii_case(&name));
                 if self.profiles.len() == before {
-                    self.notice(&format!(
-                        "Profile \u{201c}{name}\u{201d} does not exist."
-                    ));
+                    self.notice(&format!("Profile \u{201c}{name}\u{201d} does not exist."));
                     return;
                 }
                 if let Err(e) = sdroxide_config::save_profiles(&self.profiles) {

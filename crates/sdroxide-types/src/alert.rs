@@ -366,7 +366,8 @@ mod tests {
             let d = dec(to, Some("OE3ABC"), true, None);
             Decode { message: "CQ OE3ABC JO63".to_string(), ..d }
         };
-        let mut seen = vec![AlertEvent::for_decode(&d(Some("DL1ABC")), "DL1ABC", "JO63", everything)];
+        let mut seen =
+            vec![AlertEvent::for_decode(&d(Some("DL1ABC")), "DL1ABC", "JO63", everything)];
         seen.push(AlertEvent::for_decode(&d(None), "DL1ABC", "JO63", everything));
         seen.push(AlertEvent::for_decode(
             &d(None),

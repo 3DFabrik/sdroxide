@@ -76,11 +76,13 @@ pub(in crate::app) fn settings_profiles_tab(
     for name in profiles {
         ui.horizontal(|ui| {
             ui.label(RichText::new(name).strong());
-            if ui.button("Apply").on_hover_text(format!(
-                "Put the station back onto \u{201c}{name}\u{201d}: dials, VFOs, mode, filters, \
+            if ui
+                .button("Apply")
+                .on_hover_text(format!(
+                    "Put the station back onto \u{201c}{name}\u{201d}: dials, VFOs, mode, filters, \
                  gains, drive, antennas, identity and band stacks."
-            ))
-            .clicked()
+                ))
+                .clicked()
             {
                 cmds.push(Command::ProfileApply(name.clone()));
                 // The engine rewrites the digital identity in place; its answer
@@ -88,9 +90,7 @@ pub(in crate::app) fn settings_profiles_tab(
                 // would put the old callsign back.
                 *io.digi_reseed = true;
             }
-            if ui.button("✕").on_hover_text(format!("Delete \u{201c}{name}\u{201d}"))
-                .clicked()
-            {
+            if ui.button("✕").on_hover_text(format!("Delete \u{201c}{name}\u{201d}")).clicked() {
                 cmds.push(Command::ProfileDelete(name.clone()));
             }
         });

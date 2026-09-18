@@ -107,7 +107,10 @@ fn wait_for(h: &EngineHandles, what: &str, f: impl Fn(&RadioState) -> bool) -> R
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    panic!("the state never showed {what}; last: {:?}", last.map(|s| (s.active_vfo, s.active_freq_hz())));
+    panic!(
+        "the state never showed {what}; last: {:?}",
+        last.map(|s| (s.active_vfo, s.active_freq_hz()))
+    );
 }
 
 /// The first digital status that satisfies `f`.

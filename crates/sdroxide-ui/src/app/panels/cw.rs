@@ -248,10 +248,8 @@ impl SdroxideApp {
         // is the *text* keyer, and with the Space bar made a key, typing into
         // it would be the text keyer speaking over the operator's hand.
         let tx_ok = self.tx_capable();
-        let entered = tx_ok
-            && !self.cw_straight
-            && send_on_enter
-            && crate::chrome::take_return(ui, tx_id);
+        let entered =
+            tx_ok && !self.cw_straight && send_on_enter && crate::chrome::take_return(ui, tx_id);
 
         let resp = ui
             .add_enabled_ui(tx_ok && !self.cw_straight, |ui| {
@@ -328,7 +326,8 @@ impl SdroxideApp {
         if self.cw_straight && tx_ok && self.focused {
             // The key is the operator's only when nothing on screen holds the
             // keyboard: a caret in some other field is a typist, not a keyer.
-            let free = !ui.memory(|m| m.focused().is_some()) && !ui.ctx().egui_wants_keyboard_input();
+            let free =
+                !ui.memory(|m| m.focused().is_some()) && !ui.ctx().egui_wants_keyboard_input();
             let down = free && ui.input(|i| i.key_down(egui::Key::Space));
             if down != self.cw_key_down {
                 self.cw_key_down = down;
