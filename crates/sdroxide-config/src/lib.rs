@@ -1368,7 +1368,14 @@ pub type BandStacks =
 ///
 /// "Save" writes whatever the radio is doing right now; "apply" puts the
 /// radio back onto a saved setup without touching hardware it is not part of.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// `#[serde(default)]`, like the [`Session`] and the digital settings inside
+/// it: a profile is kept for as long as the operator keeps it, so it will be
+/// read by builds that have grown fields since it was written. A field it
+/// lacks takes its default instead of dropping the whole profile out of the
+/// list.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Profile {
     /// The operator's name for it — "contest", "DX", "CB", the band plan.
     pub name: String,
@@ -2475,6 +2482,18 @@ mod tests {
         assert!(!back.tx_ham_only, "a value below a table must not become part of it");
         assert_eq!(back.server_port, 4952, "the port we listen on is not the one we dial");
         assert_eq!(back.speech, s.speech, "the table above must survive too");
+    }
+
+    /// A profile written before a field existed still loads, with that field
+    /// at its default — here one with nothing but a name and a dial.
+    #[test]
+    fn a_profile_missing_fields_still_loads() {
+        let p: Profile =
+            serde_json::from_str(r#"{"name":"DX","session":{"freq_hz":14025000.0}}"#).unwrap();
+        assert_eq!(p.name, "DX");
+        assert_eq!(p.session.freq_hz, 14_025_000.0);
+        assert!(p.stacks.is_empty());
+        assert_eq!(p.digi, sdroxide_types::DigiConfig::default());
     }
 
     /// The alerts table carries sub-tables of its own, so it gets the same
