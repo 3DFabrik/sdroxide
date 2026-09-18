@@ -18,6 +18,14 @@
 //! symbol-aligned to the first sample and its carrier is not exactly 1800 Hz,
 //! so both have to be recovered. It is checked against an off-air recording of
 //! acarsdec's, not only its own encoder.
+//!
+//! Ported from [acarsdec] — the demodulator from `msk.c`, the block check and
+//! the frame layout from `acars.c` (Thierry Leconte, Copyright (c) 2015–2017,
+//! GNU Library General Public License version 2). That licence lets a work
+//! built on it be distributed under the ordinary GPL, version 2 or later,
+//! instead (section 3); this file is, as part of a GPL-3.0-or-later program.
+//!
+//! [acarsdec]: https://github.com/TLeconte/acarsdec
 
 use crate::resample::MonoResampler;
 use num_complex::Complex32;
