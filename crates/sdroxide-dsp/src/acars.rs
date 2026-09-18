@@ -247,6 +247,13 @@ pub struct AcarsRx {
     symbols: u32,
     /// Bits since the last framing attempt, trimmed to a sane maximum.
     bits: Vec<u8>,
+    /// Bits dropped off the front of `bits` since the start, so a position in
+    /// the window can be named in the stream as a whole.
+    consumed: u64,
+    /// Where in the stream the last failed heading sat. The window steps past
+    /// one a byte at a time, so the same heading is found again after every
+    /// byte until it has gone; this is how it is counted once.
+    last_bad: Option<u64>,
     /// Resamples the incoming audio to the 12 kHz the demodulator runs at.
     /// `None` when it already is.
     rs: Option<MonoResampler>,
@@ -284,6 +291,8 @@ impl AcarsRx {
             dphi: 0.0,
             symbols: 0,
             bits: Vec::new(),
+            consumed: 0,
+            last_bad: None,
             rs: MonoResampler::new(rate, demod_rate),
             rs_buf: Vec::new(),
             level: 0.0,
@@ -380,7 +389,7 @@ impl AcarsRx {
 
     /// One demodulated bit: buffer it, and try to frame once a byte is in.
     ///
-    /// A heading whose block check fails is counted and stepped past, not
+    /// A heading whose block check fails is counted once and stepped past, not
     /// thrown away with the rest of the buffer: on real audio there are several
     /// SOH-shaped coincidences per burst, and clearing on the first of them
     /// discards the real frame sitting behind it. Only a frame that checks out
@@ -392,21 +401,29 @@ impl AcarsRx {
         if self.bits.len() % 8 != 0 || self.bits.len() < 8 * 32 {
             return;
         }
-        match parse_frame(&self.bits) {
-            Some(msg) if msg.crc_ok => {
+        match find_frame(&self.bits) {
+            Some((msg, _)) if msg.crc_ok => {
                 self.frames += 1;
                 out.push(AcarsEvent::Message(msg));
-                self.bits.clear();
+                self.drop_bits(self.bits.len());
             }
-            Some(_) => {
-                self.bad += 1;
-                self.bits.drain(..8);
+            Some((_, at)) => {
+                let at = self.consumed + at as u64;
+                if self.last_bad != Some(at) {
+                    self.bad += 1;
+                    self.last_bad = Some(at);
+                }
+                self.drop_bits(8);
             }
-            None if self.bits.len() > 8 * 480 => {
-                self.bits.drain(..8 * 40);
-            }
+            None if self.bits.len() > 8 * 480 => self.drop_bits(8 * 40),
             None => {}
         }
+    }
+
+    /// Drop `n` bits off the front of the window.
+    fn drop_bits(&mut self, n: usize) {
+        self.bits.drain(..n);
+        self.consumed += n as u64;
     }
 }
 
@@ -545,6 +562,25 @@ mod tests {
         let got = parse_frame(&bad).expect("a frame");
         assert!(got.crc_ok, "the frame that checks out wins");
         assert_eq!(got.text, "SECOND");
+    }
+
+    /// One damaged frame is one failed block: the window steps past it a byte
+    /// at a time and finds the same heading again after every byte, which
+    /// counted it once per byte until it drained out.
+    #[test]
+    fn a_failed_heading_is_counted_once() {
+        let mut bits = nrzi_decode(&encode(&sample()));
+        let text = (16 + 18) * 8;
+        bits[text] ^= 1;
+        bits[text + 1] ^= 1;
+        bits.extend(std::iter::repeat_n(1, 8 * 400));
+        let mut rx = AcarsRx::new(12_000.0);
+        let mut out = Vec::new();
+        for b in bits {
+            rx.push_bit(b == 1, &mut out);
+        }
+        assert!(out.is_empty(), "nothing that fails its check is emitted");
+        assert_eq!(rx.bad(), 1);
     }
 
     #[test]
