@@ -16,15 +16,19 @@ use sdroxide_types::{AcarsStatus, Command, Vfo};
 use crate::app::SdroxideApp;
 use crate::theme;
 
-/// The airline channels ACARS is commonly found on. Widely published; the two
-/// main service frequencies are in the middle of the band and of this list.
+/// The airline channels ACARS is commonly found on. Widely published: 131.550
+/// is the primary almost everywhere, Europe works 131.525, 131.725 and 131.825
+/// (the three acarsdec's own examples listen to), and the rest are North
+/// American.
 const CHANNELS: &[(u32, &str)] = &[
     (129_125_000, "129.125"),
     (130_025_000, "130.025"),
     (130_450_000, "130.450"),
     (131_125_000, "131.125"),
+    (131_525_000, "131.525"),
     (131_550_000, "131.550"),
     (131_725_000, "131.725"),
+    (131_825_000, "131.825"),
     (136_700_000, "136.700"),
 ];
 
