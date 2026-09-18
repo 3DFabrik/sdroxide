@@ -11,7 +11,7 @@ use sdroxide_radio::{
     AudioParams, Complex32, EngineConfig, EngineHandles, IqSource, Result, rtrb, start_engine,
 };
 use sdroxide_types::{
-    Command, DeviceCaps, DigiConfig, DigiStatus, Mode, RadioEvent, RadioState, RxId, Vfo,
+    Command, DeviceCaps, DigiConfig, DigiStatus, Mode, RadioEvent, RadioState, Vfo,
 };
 
 const A_HZ: f64 = 14_074_000.0;
