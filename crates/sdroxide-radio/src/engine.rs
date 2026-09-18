@@ -13757,12 +13757,22 @@ impl Engine {
         // `current_session`), so the *active* dial is `vfo_b_hz` when B was the
         // one in use — reading `freq_hz` there put a profile saved on B onto A's
         // frequency.
-        self.state.active_vfo = s.active_vfo;
         let active_hz = match s.active_vfo {
             sdroxide_types::Vfo::A => s.freq_hz,
             sdroxide_types::Vfo::B => s.vfo_b_hz.unwrap_or(s.freq_hz),
         };
         let mode = s.vfo_modes.map(|m| m[s.active_vfo.index()]).unwrap_or(s.mode);
+        if s.active_vfo != self.state.active_vfo {
+            self.state.active_vfo = s.active_vfo;
+            // A rig with its own pair of VFOs is told which one is now being
+            // worked, and before the retune below, for `SelectVfo`'s reasons:
+            // a retune sent ahead of the selection lands on the VFO being left
+            // and overwrites the radio's other dial. The rig's number, in the
+            // mode the profile puts it in, as there. The inactive shelf needs
+            // no shelving here — it is set whole from the profile below.
+            let rig_hz = active_hz + self.rig_cw_offset_hz_in(mode);
+            self.source.select_vfo(s.active_vfo, rig_hz);
+        }
         let band = Band::containing(active_hz);
         let (filter_lo, filter_hi) = self
             .stacks

@@ -201,3 +201,26 @@ fn the_rig_is_told_which_vfo_before_it_is_retuned_for_it() {
         "A's dial reached the rig after B was selected: {log:?}"
     );
 }
+
+/// A profile saved on the other VFO puts the station back on that VFO — and the
+/// rig is told so before the dial is sent, exactly as an A/B press tells it.
+/// Setting the active VFO behind the rig's back left its own A/B on the old one
+/// and put the profile's frequency into the dial it was not meant for (#197).
+#[test]
+fn a_profile_saved_on_the_other_vfo_tells_the_rig_before_retuning() {
+    let (told, log) = run(&[
+        Command::SetVfo { vfo: Vfo::B, hz: 1_200_000.0 },
+        Command::SelectVfo(Vfo::B),
+        Command::ProfileSave("on B".into()),
+        Command::SelectVfo(Vfo::A),
+        Command::ProfileApply("on B".into()),
+    ]);
+    let vfos: Vec<Vfo> = told.iter().map(|(v, _)| *v).collect();
+    assert_eq!(vfos, vec![Vfo::B, Vfo::A, Vfo::B], "the apply never told the rig");
+    let (_, hz) = told.last().unwrap();
+    assert!((hz - 1_200_000.0).abs() < 1.0, "B is on 1.2 MHz, the rig was told {hz}");
+
+    let selected = log.iter().rposition(|l| l == "select B").unwrap();
+    let retuned = log.iter().rposition(|l| l == "tune 1200000").expect("the apply retuned");
+    assert!(selected < retuned, "the dial went ahead of the selection: {log:?}");
+}
