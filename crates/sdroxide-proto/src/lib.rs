@@ -1348,7 +1348,14 @@ use sdroxide_types::{
 /// v152: the CW keyboard straight key (issue #322). `Command::CwStraight` and
 /// `Command::CwKey`, appended last so no surviving discriminant moved, but a
 /// v151 peer has no name for either and fails to decode the message carrying it.
-pub const PROTO_VERSION: u16 = 152;
+///
+/// v153: station profiles (issue #197). `Command` gains `ProfileSave`,
+/// `ProfileApply` and `ProfileDelete`, appended last so no surviving
+/// discriminant moved, but a v152 station has no name for them and fails to
+/// decode the message carrying one. `RadioEvent::Profiles` is deliberately not
+/// forwarded — there is no `ServerMsg` variant for it — so a remote client can
+/// ask for a saved profile by name but cannot list them.
+pub const PROTO_VERSION: u16 = 153;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]

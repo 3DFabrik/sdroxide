@@ -18,6 +18,7 @@
 pub(in crate::app) mod controls;
 pub(in crate::app) mod general;
 pub(in crate::app) mod net;
+pub(in crate::app) mod profiles;
 pub(in crate::app) mod radio;
 pub(in crate::app) mod relay;
 #[cfg(not(target_arch = "wasm32"))]
@@ -52,6 +53,7 @@ use self::servers::{
     settings_rigctld_tab, settings_rotator_tab, settings_tci_server_tab, settings_wsjtx_tab,
 };
 use self::tle::settings_tle_tab;
+use self::profiles::settings_profiles_tab;
 use self::ui_tab::settings_ui_tab;
 use crate::app::SdroxideApp;
 use crate::app::persist::{persist_alerts_settings, persist_speech_settings, persist_ui_settings};
@@ -89,6 +91,9 @@ pub(in crate::app) enum SettingsTab {
     #[cfg(not(target_arch = "wasm32"))]
     Remote,
     Tle,
+    /// Named working setups (issue #197): the operator's saved snapshots of how
+    /// the station is set up, each put back on whole by one click.
+    Profiles,
 }
 
 /// A "Test connection" button's state: still asking, or an answer.
@@ -170,6 +175,14 @@ pub(in crate::app) struct SettingsIo<'a> {
     rx_site: &'a mut Option<sdroxide_types::RxSite>,
     audio_pick: &'a mut Option<(bool, Option<String>)>,
     hpsdr_discover: &'a mut bool,
+    /// The name being typed in the Profiles tab's save box. Owned on the app:
+    /// the dialog lives across taps of the tab bar, and a half-typed name is
+    /// not a setting.
+    profile_name: &'a mut String,
+    /// Set when an action rewrote the digital identity in the engine, so the
+    /// screen's editable copy must be re-seeded from the next status — see
+    /// `SdroxideApp::digi_cfg_seeded`.
+    digi_reseed: &'a mut bool,
     /// Re-enumerate the USB bus for RTL-SDR dongles. Cheap and non-invasive —
     /// no device is opened — so it cannot disturb a running stream.
     rtlsdr_rescan: &'a mut bool,
@@ -961,6 +974,8 @@ impl SdroxideApp {
         // Edits collected here and applied after the window closure, which
         // borrows `&self` and so can't touch `&mut self.ctrl`.
         let mut audio_pick: Option<(bool, Option<String>)> = None;
+        let mut profile_name = std::mem::take(&mut self.profile_name_edit);
+        let mut digi_reseed = self.digi_cfg_seeded;
         let mut speech_edit = self.speech.settings().clone();
         let speech_status = self.speech.status();
         let mut speech_test = false;
@@ -1131,6 +1146,8 @@ impl SdroxideApp {
                             rx_site: &mut rx_site,
                             audio_pick: &mut audio_pick,
                             hpsdr_discover: &mut hpsdr_discover,
+                            profile_name: &mut profile_name,
+                            digi_reseed: &mut digi_reseed,
                             rtlsdr_rescan: &mut rtlsdr_rescan,
                             rx888_rescan: &mut rx888_rescan,
                             airspyhf_rescan: &mut airspyhf_rescan,
@@ -1228,6 +1245,8 @@ impl SdroxideApp {
         self.show_settings = open;
         self.settings_tab = tab;
         self.settings_upload_tab = upload_tab;
+        self.profile_name_edit = profile_name;
+        self.digi_cfg_seeded = digi_reseed;
         // The multi-radio shell drains these after the frame.
         self.radio_tab_requests.append(&mut radio_tab_reqs);
         {
@@ -1717,6 +1736,7 @@ impl SdroxideApp {
         #[cfg(not(target_arch = "wasm32"))]
         tabs.push((SettingsTab::Remote, "Remote"));
         tabs.push((SettingsTab::Tle, "TLE"));
+        tabs.push((SettingsTab::Profiles, "Profiles"));
         // Wrapped: the tab strip no longer fits the window's width on one line.
         // Real tabs rather than chips — a chip strip standing in for a tab strip
         // reads as a row of buttons that happen to stay pressed, with nothing to
@@ -3265,6 +3285,7 @@ impl SdroxideApp {
                 self.remote_status.as_ref(),
             ),
             SettingsTab::Tle => settings_tle_tab(ui, io),
+            SettingsTab::Profiles => settings_profiles_tab(ui, io, cmds, &self.profiles),
         }
     }
 
