@@ -131,6 +131,8 @@ async fn spawn_server(port: u16, probe: Option<ProbeFn>) {
         remove_radio: None,
         rename_radio: None,
         radio_power: None,
+        load_user_settings: None,
+        save_user_settings: None,
     }));
     tokio::time::sleep(Duration::from_millis(400)).await;
 }

@@ -278,6 +278,15 @@ pub struct SdroxideApp {
     /// Display preferences (frame rate, waterfall + spectrum speed), loaded from
     /// config at startup, edited in the UI tab, persisted on change.
     ui_settings: sdroxide_types::UiSettings,
+    /// Whether this connection has been given a named operator's stored
+    /// settings. Until then nothing is pushed back to the station — a local
+    /// engine and a shared-password station have nowhere to put them.
+    user_settings_on: bool,
+    /// Last snapshot applied or pushed, so a slider does not rewrite the
+    /// station's file every frame.
+    last_user_settings: Option<sdroxide_types::UserSettings>,
+    last_pushed_user_settings: Option<sdroxide_types::UserSettings>,
+    user_settings_dirty_at: Option<f64>,
     /// The theme and chrome styles last written into the egui context, so the
     /// top-of-frame check in `frame.rs` can re-apply the visuals the moment
     /// the settings dialog changes any of them — no restart.
@@ -1270,6 +1279,10 @@ impl SdroxideApp {
             profile_apply_pending: false,
             settings_upload_tab: sdroxide_types::UploadTarget::QrzLogbook,
             ui_settings,
+            user_settings_on: false,
+            last_user_settings: None,
+            last_pushed_user_settings: None,
+            user_settings_dirty_at: None,
             applied_look: (ui_settings.theme, ui_settings.button_style, ui_settings.window_style),
             applied_ui_font: ui_settings.menu_font_size,
             speech: speech::SpeechRuntime::new(load_speech_settings(storage)),
@@ -1617,6 +1630,81 @@ impl SdroxideApp {
     /// Multi-radio: mark the logbook file as shared with other tabs.
     pub(crate) fn set_shared_log(&mut self, shared: bool) {
         self.shared_log = shared;
+    }
+
+    fn snapshot_user_settings(&self) -> sdroxide_types::UserSettings {
+        let holding = self.ctrl.control().is_none_or(|c| c.i_hold());
+        let last = self.last_user_settings.as_ref();
+        sdroxide_types::UserSettings {
+            ui: self.ui_settings,
+            input: self.input.cfg.clone(),
+            volume: if holding {
+                self.state.rx[0].volume
+            } else {
+                last.map(|s| s.volume).unwrap_or(self.state.rx[0].volume)
+            },
+            squelch_db: if holding {
+                self.state.rx[0].squelch_db
+            } else {
+                last.map(|s| s.squelch_db).unwrap_or(self.state.rx[0].squelch_db)
+            },
+            bandstacks: last.map(|s| s.bandstacks.clone()).unwrap_or_default(),
+        }
+    }
+
+    fn apply_user_settings(
+        &mut self,
+        incoming: sdroxide_types::UserSettings,
+        cmds: &mut Vec<sdroxide_types::Command>,
+    ) {
+        self.ui_settings = incoming.ui;
+        crate::app::persist::persist_ui_settings(&self.ui_settings);
+        self.input.cfg = incoming.input.clone();
+        self.input.persist();
+        if self.ctrl.control().is_none_or(|c| c.i_hold()) {
+            cmds.push(sdroxide_types::Command::SetVolume {
+                rx: sdroxide_types::RxId::Main,
+                v: incoming.volume,
+            });
+            cmds.push(sdroxide_types::Command::SetSquelch {
+                rx: sdroxide_types::RxId::Main,
+                db: incoming.squelch_db,
+            });
+        }
+        self.last_user_settings = Some(incoming.clone());
+        self.last_pushed_user_settings = Some(incoming);
+        self.user_settings_on = true;
+        self.user_settings_dirty_at = None;
+    }
+
+    /// Apply a snapshot the station just sent, then push local edits back
+    /// once they have sat still for a moment.
+    pub(in crate::app) fn sync_user_settings(
+        &mut self,
+        now: f64,
+        cmds: &mut Vec<sdroxide_types::Command>,
+    ) {
+        if let Some(incoming) = self.ctrl.take_user_settings() {
+            self.apply_user_settings(incoming, cmds);
+        }
+        if !self.user_settings_on {
+            return;
+        }
+        let snap = self.snapshot_user_settings();
+        if self.last_pushed_user_settings.as_ref() == Some(&snap) {
+            self.user_settings_dirty_at = None;
+            return;
+        }
+        if self.user_settings_dirty_at.is_none() {
+            self.user_settings_dirty_at = Some(now);
+        }
+        if now - self.user_settings_dirty_at.unwrap_or(now) < 0.5 {
+            return;
+        }
+        self.last_user_settings = Some(snap.clone());
+        self.last_pushed_user_settings = Some(snap.clone());
+        self.user_settings_dirty_at = None;
+        self.ctrl.send_user_settings(snap);
     }
 
     /// Multi-radio: the network spots and feed status this tab holds, and the

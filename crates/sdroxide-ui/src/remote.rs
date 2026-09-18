@@ -176,6 +176,14 @@ pub struct RemoteController {
     /// Whether that station takes roster edits from here, as it said with the
     /// roster ([`RadioController::station_roster_editable`]).
     peers_editable: bool,
+    /// How the radio is being shared, as the station last said. `None` until it
+    /// has — and for ever on a station too old to say, which is exactly the
+    /// behaviour that client had: one client, full control.
+    control: Option<sdroxide_types::ControlStatus>,
+    /// This operator's settings, as the station last sent them. Taken by the
+    /// app and then cleared, so a later poll does not re-apply the same
+    /// snapshot over a change the operator has just made.
+    incoming_user: Option<sdroxide_types::UserSettings>,
 }
 
 /// How long an edited interface configuration is held before it goes out.
@@ -265,6 +273,8 @@ impl RemoteController {
             muted: false,
             peers: None,
             peers_editable: false,
+            control: None,
+            incoming_user: None,
         })
     }
 
@@ -452,6 +462,11 @@ impl RemoteController {
                 self.peers = Some((me, radios));
                 self.peers_editable = editable;
             }
+            // Who is working this radio. Kept rather than turned into an event:
+            // it is a standing condition that half the interface is drawn from,
+            // and an event would have to be remembered somewhere anyway.
+            ServerMsg::Control(status) => self.control = Some(status),
+            ServerMsg::UserSettings(settings) => self.incoming_user = Some(settings),
         }
     }
 
@@ -489,9 +504,16 @@ impl RemoteController {
     }
 
     fn pump_mic(&mut self) {
+        // `transmitting` is read off the *radio's* state, so it is true for
+        // everybody on it the moment anybody keys up. On a shared radio that
+        // would open a listener's microphone because somebody else is talking —
+        // their uplink spent on audio the station throws away, and their room
+        // live on a station they are only listening to.
+        let mine = self.control.as_ref().is_none_or(|c| c.may_transmit());
+        let want_mic = mine && (self.transmitting || self.voice_recording);
         let Some(bridge) = self.audio.as_mut() else { return };
-        bridge.set_mic_active(self.transmitting || self.voice_recording);
-        if !self.transmitting && !self.voice_recording {
+        bridge.set_mic_active(want_mic);
+        if !want_mic {
             self.mic_buf.clear();
             // Keep draining the capture ring so it doesn't back up.
             let mut scratch = Vec::new();
@@ -514,6 +536,19 @@ impl RemoteController {
 
 impl RadioController for RemoteController {
     fn send(&mut self, cmd: Command) {
+        // A client that is only listening sends nothing to the radio. The station
+        // refuses these anyway — that is where the rule is actually enforced, and
+        // has to be, because this half is the half anybody can rewrite — but
+        // stopping them here keeps a listener's screen from arguing with the
+        // station: every refusal comes back as a notice, and a held PTT would
+        // produce one a frame.
+        //
+        // In `send` rather than at the buttons because there are dozens of ways
+        // into it — keys, a control surface, a scanner, a hidden tab flushing its
+        // backlog — and one of them would be missed.
+        if self.control.as_ref().is_some_and(|c| !c.i_hold()) {
+            return;
+        }
         // The one command a gesture produces once a frame for as long as it
         // lasts, and the most expensive one to act on at the far end — held to
         // a rate the network and the radio can carry, latest value wins. See
@@ -603,6 +638,38 @@ impl RadioController for RemoteController {
         self.peers_editable
     }
 
+    fn control(&self) -> Option<sdroxide_types::ControlStatus> {
+        self.control.clone()
+    }
+
+    // Through `send_msg` rather than `write`, so a request made while the
+    // sign-in dialog is still up is held with everything else and goes out once
+    // the station has let this client in — the gate exists precisely because a
+    // message sent before then is a message the station throws away.
+    fn request_control(&mut self) {
+        self.send_msg(ClientMsg::RequestControl);
+    }
+
+    fn release_control(&mut self) {
+        self.send_msg(ClientMsg::ReleaseControl);
+    }
+
+    fn grant_control(&mut self, to: u64) {
+        self.send_msg(ClientMsg::GrantControl { to });
+    }
+
+    fn deny_control(&mut self, to: u64) {
+        self.send_msg(ClientMsg::DenyControl { to });
+    }
+
+    fn take_user_settings(&mut self) -> Option<sdroxide_types::UserSettings> {
+        self.incoming_user.take()
+    }
+
+    fn send_user_settings(&mut self, settings: sdroxide_types::UserSettings) {
+        self.send_msg(ClientMsg::SetUserSettings(settings));
+    }
+
     fn add_station_radio(&mut self, name: &str) {
         self.send_msg(ClientMsg::AddRadio { name: name.to_string() });
     }
@@ -667,10 +734,10 @@ impl RadioController for RemoteController {
     }
 
     fn reconnect(&mut self) -> Result<(), String> {
-        // Close first, and only then dial: the server allows one control
-        // session at a time, so a new socket opened while the old one is still
-        // registered is answered with `Busy` — the reconnect would fail on the
-        // strength of the connection it is replacing.
+        // Close first, and only then dial: the old socket has to drop out of
+        // the station's client list before this one can take its place as a
+        // new listener — or, if nobody else is on the radio, pick the control
+        // key up again.
         self.sender.close();
         let (sender, receiver) = dial(&self.url, &self.wake)?;
         self.sender = sender;
@@ -694,6 +761,11 @@ impl RadioController for RemoteController {
         // station may have gained or lost a radio while the link was down.
         self.peers = None;
         self.peers_editable = false;
+        // ...and how the radio was being shared, for the same reason: the new
+        // session is a new client on it, with a slot number of its own and
+        // possibly no control key at all. The station says so on connect.
+        self.control = None;
+        self.incoming_user = None;
         // The interface configuration is per-session too: the new socket may
         // reach a different station, and an edit queued against the dead one
         // must not be applied to it. The fresh session announces its own.

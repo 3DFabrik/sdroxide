@@ -11,6 +11,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::{Band, BandStackEntry, InputSettings, SQUELCH_OPEN_DB, UiSettings};
+
 /// The credentials a remote client has to present before the server will let it
 /// near the radio.
 ///
@@ -67,6 +69,236 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
         diff |= u64::from(x ^ y);
     }
     diff == 0
+}
+
+/// One operator of a station that more than one person uses.
+///
+/// [`RemoteAccess`] above is the whole of what a single-operator station needs:
+/// one secret, and whoever knows it is the operator. A station several people
+/// work needs to tell them apart — not to keep them from each other's radio,
+/// which the control key does, but because "whose settings are these" and "who
+/// is on the transmitter" are questions with a name for an answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct User {
+    /// What this operator signs in as. A callsign is the obvious choice and
+    /// what the log will show, but nothing here requires one.
+    pub name: String,
+    /// The password as a PHC-string hash — what [`User::password`] becomes.
+    pub password_hash: String,
+    /// A password written in by hand, still in the clear.
+    ///
+    /// Accepted so the roster can be edited with a text editor, and cleared
+    /// again the first time the station reads it: the server hashes it into
+    /// `password_hash` and writes the file back. This is somebody *else's*
+    /// password, which is the difference from every other secret sdroxide
+    /// keeps — those are the operator's own, and a file they can read anyway.
+    pub password: String,
+    /// Whether this operator may key the transmitter.
+    ///
+    /// `false` leaves them everything else: they can hold the control key,
+    /// tune around and work the receiver, and PTT, TUNE and the CW key are
+    /// refused. For a listener, or an unlicensed guest at the radio.
+    #[serde(default = "yes")]
+    pub may_transmit: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl User {
+    /// Whether `password` is the one written into this entry by hand.
+    ///
+    /// Only for an entry that still holds one — a hashed entry is checked by
+    /// whoever knows the hash function, which is the server. Compared in
+    /// constant time for the same reason as [`RemoteAccess::accepts`].
+    pub fn accepts_plaintext(&self, password: &str) -> bool {
+        !self.password.is_empty() & ct_eq(self.password.as_bytes(), password.as_bytes())
+    }
+}
+
+impl Default for User {
+    /// Deliberately hand-written rather than derived: the derive would make a
+    /// new entry one that may not transmit, while an entry in the file with no
+    /// `may_transmit` line reads back as one that may. The two have to agree,
+    /// and permission to transmit is the sane default for somebody the
+    /// operator has just put on the roster.
+    fn default() -> Self {
+        User {
+            name: String::new(),
+            password_hash: String::new(),
+            password: String::new(),
+            may_transmit: true,
+        }
+    }
+}
+
+/// The station's operators, as `users.toml` holds them.
+///
+/// An empty roster is the default and means this file has nothing to say:
+/// [`RemoteAccess`] decides, exactly as it did before any of this existed. That
+/// is the upgrade path — an installation that never creates the file keeps the
+/// sign-in it already had.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Users {
+    pub users: Vec<User>,
+}
+
+impl Users {
+    /// Whether this roster is what the server should ask against.
+    pub fn is_enforced(&self) -> bool {
+        self.users.iter().any(|u| !u.name.is_empty())
+    }
+
+    /// Which entry goes by `name`, if any.
+    ///
+    /// Every entry is compared, and the answer is taken from the last match
+    /// rather than the first, so the search costs the same whoever is asked
+    /// for — a loop that returned early would time out the difference between
+    /// a name on the roster and one that is not, which is exactly what an
+    /// attacker holding a list of callsigns wants to know.
+    pub fn find(&self, name: &str) -> Option<usize> {
+        let mut found = None;
+        for (i, u) in self.users.iter().enumerate() {
+            if ct_eq(u.name.as_bytes(), name.as_bytes()) {
+                found = Some(i);
+            }
+        }
+        found
+    }
+
+    /// The entries still holding a hand-written password, for the server to
+    /// hash and write back.
+    pub fn plaintext_entries(&self) -> Vec<usize> {
+        self.users
+            .iter()
+            .enumerate()
+            .filter(|(_, u)| !u.password.is_empty())
+            .map(|(i, _)| i)
+            .collect()
+    }
+}
+
+/// One client on a radio, as the others see it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientInfo {
+    /// The station's number for this client, and what a grant or a refusal is
+    /// addressed to. Never reused within a run of the server, so an answer
+    /// cannot land on whoever attached after the asker left.
+    pub slot: u64,
+    /// What to call them: the roster name they signed in under. Empty on a
+    /// station with one shared password, which cannot tell its clients apart —
+    /// the client shows something like "another client" for those.
+    pub name: String,
+    /// Whether this one may key the transmitter at all. A [`User`] with
+    /// `may_transmit = false` can hold the control key and work the receiver;
+    /// the station refuses PTT, TUNE and the CW key from them.
+    pub may_transmit: bool,
+}
+
+impl ClientInfo {
+    /// What to call this client on somebody else's screen.
+    ///
+    /// A station with one shared password cannot tell its clients apart, so
+    /// there is genuinely no name to show — and saying so is better than showing
+    /// an empty chip or inventing "Client 3", which would look like a name and
+    /// is only a counter.
+    pub fn label(&self) -> String {
+        if self.name.is_empty() { "another client".to_string() } else { self.name.clone() }
+    }
+}
+
+/// How a radio is being shared right now.
+///
+/// The whole of what a client knows about the other clients on its radio: who is
+/// working it, who else is listening, and who has asked for a turn. Sent on
+/// connect and on every change, so it is a standing condition rather than an
+/// event — a client attaching to a radio somebody else is working has to know
+/// that before it draws a PTT button.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlStatus {
+    /// Which client this was sent to, so it can find itself in the lists below.
+    /// The one field a client cannot work out for itself.
+    pub me: u64,
+    /// The client working the radio, if anybody is. `None` means the key is
+    /// free and the next request for it is granted without anybody being asked.
+    pub holder: Option<ClientInfo>,
+    /// Everybody signed in, the holder included, in the order they arrived.
+    pub clients: Vec<ClientInfo>,
+    /// Who has asked for the control key, oldest first. Shown to the holder as
+    /// something to answer; shown to an asker as their own place in the queue.
+    pub waiting: Vec<ClientInfo>,
+}
+
+/// What follows a named operator from one screen to another.
+///
+/// The radio's own settings — the interface, the sample rate, the memories —
+/// stay with the station. These are the operator's: how the screen looks, how
+/// the knobs are bound, the volume and squelch they last left, and the band
+/// stacks they work from. A station with a roster keeps one of these per name
+/// under `users/<name>/settings.json` and hands it over on sign-in, so the
+/// same operator at a PC and on a phone sees the same screen.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UserSettings {
+    pub ui: UiSettings,
+    pub input: InputSettings,
+    /// Main-receiver AF volume, 0.0..=1.0. Applied to the radio only while
+    /// this operator holds the control key, so a listener's preference does
+    /// not turn the holder's audio down.
+    pub volume: f32,
+    /// Main-receiver squelch, in dBFS. Same rule as [`Self::volume`].
+    pub squelch_db: f32,
+    /// Band stacks, as `(band, entries)` rather than a map so the wire form
+    /// does not depend on HashMap iteration order.
+    pub bandstacks: Vec<(Band, Vec<BandStackEntry>)>,
+}
+
+impl Default for UserSettings {
+    fn default() -> Self {
+        UserSettings {
+            ui: UiSettings::default(),
+            input: InputSettings::default(),
+            volume: 0.5,
+            squelch_db: SQUELCH_OPEN_DB,
+            bandstacks: Vec::new(),
+        }
+    }
+}
+
+impl ControlStatus {
+    /// Whether the client this was sent to is the one working the radio.
+    ///
+    /// The question every control in the interface hangs off, so it is answered
+    /// in one place: a client that is only listening shows no PTT and no dial,
+    /// because the station would refuse them anyway.
+    pub fn i_hold(&self) -> bool {
+        self.holder.as_ref().is_some_and(|h| h.slot == self.me)
+    }
+
+    /// Whether this client has already asked for the control key.
+    pub fn i_am_waiting(&self) -> bool {
+        self.waiting.iter().any(|c| c.slot == self.me)
+    }
+
+    /// Whether anybody else is signed in to this radio.
+    ///
+    /// What decides whether the interface mentions sharing at all: a station
+    /// with one operator on it looks exactly as it did before any of this
+    /// existed.
+    pub fn shared(&self) -> bool {
+        self.clients.len() > 1
+    }
+
+    /// What this client may transmit with, if it may at all.
+    ///
+    /// Both halves of the answer in one place: holding the key is not permission
+    /// to transmit, and permission to transmit is not the key.
+    pub fn may_transmit(&self) -> bool {
+        self.holder.as_ref().is_some_and(|h| h.slot == self.me && h.may_transmit)
+    }
 }
 
 /// The other end of the same wire: which sdroxide server *this* screen dials.
@@ -306,6 +538,71 @@ mod tests {
         // it — turning it on must not rewrite somebody's plain-text tunnel.
         let typed = RemoteServer { host: "ws://shack.example/ws".into(), port: 443, tls: true };
         assert_eq!(typed.url(), "ws://shack.example/ws");
+    }
+
+    fn roster(names: &[&str]) -> Users {
+        Users {
+            users: names.iter().map(|n| User { name: (*n).into(), ..User::default() }).collect(),
+        }
+    }
+
+    /// The upgrade path again, in the other file: a station that has never
+    /// written a roster is one `[remote_access]` still decides for.
+    #[test]
+    fn an_empty_roster_decides_nothing() {
+        assert!(!Users::default().is_enforced());
+        // An entry with no name is not an operator either — that is a stanza
+        // somebody started and did not finish, and treating it as a roster
+        // would lock everybody out of a station that had been working.
+        assert!(!roster(&[""]).is_enforced());
+        assert!(roster(&["oe1test"]).is_enforced());
+    }
+
+    #[test]
+    fn a_name_on_the_roster_is_found_and_one_that_is_not_is_not() {
+        let r = roster(&["oe1test", "dl2abc"]);
+        assert_eq!(r.find("oe1test"), Some(0));
+        assert_eq!(r.find("dl2abc"), Some(1));
+        assert_eq!(r.find("dl9xyz"), None);
+        assert_eq!(r.find(""), None, "the empty name matches nobody");
+        // A prefix is not a name, in either direction.
+        assert_eq!(r.find("oe1tes"), None);
+        assert_eq!(r.find("oe1test1"), None);
+    }
+
+    /// A new entry may transmit, and so does one in a file that predates the
+    /// setting. The two have to agree — see [`User::default`].
+    #[test]
+    fn a_new_operator_may_transmit() {
+        assert!(User::default().may_transmit);
+        let from_file: User = serde_json::from_str(r#"{"name":"oe1test"}"#).expect("parse");
+        assert!(from_file.may_transmit);
+        let refused: User =
+            serde_json::from_str(r#"{"name":"guest","may_transmit":false}"#).expect("parse");
+        assert!(!refused.may_transmit);
+    }
+
+    /// Which entries the server has to hash and write back — the only reason a
+    /// plaintext password is accepted at all.
+    #[test]
+    fn hand_written_passwords_are_the_ones_reported() {
+        let mut r = roster(&["oe1test", "dl2abc", "guest"]);
+        r.users[0].password_hash = "$argon2id$vraisemblable".into();
+        r.users[1].password = "hunter2".into();
+        r.users[2].password = "letmein".into();
+        assert_eq!(r.plaintext_entries(), vec![1, 2]);
+    }
+
+    #[test]
+    fn user_settings_round_trip_through_json() {
+        let mut s = UserSettings::default();
+        s.volume = 0.4;
+        s.ui.frame_rate_fps = 30;
+        let back: UserSettings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back, s);
+        let empty: UserSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty.volume, 0.5);
+        assert_eq!(empty.squelch_db, SQUELCH_OPEN_DB);
     }
 
     #[test]

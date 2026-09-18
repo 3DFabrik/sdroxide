@@ -69,7 +69,10 @@ mod winlink;
 mod wsjtx;
 mod wspr;
 
-pub use access::{AUTH_BUSY, AUTH_REFUSED, AuthPhase, RemoteAccess, RemoteServer, is_auth_busy};
+pub use access::{
+    AUTH_BUSY, AUTH_REFUSED, AuthPhase, ClientInfo, ControlStatus, RemoteAccess, RemoteServer,
+    User, UserSettings, Users, is_auth_busy,
+};
 pub use adsb::{
     ADSB_DROP_LIST_S, ADSB_DROP_MAP_S, ADSB_FREQ_HZ, ADSB_GOOD_RATE_HZ, ADSB_HISTORY_POINTS,
     ADSB_MAX_AIRCRAFT, ADSB_MAX_RATE_HZ, ADSB_MIN_RATE_HZ, ADSB_TRACK_MAX, ADSB_VECTOR_MINUTES,

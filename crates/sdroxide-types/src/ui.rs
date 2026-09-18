@@ -566,7 +566,11 @@ pub struct UiSettings {
     /// This screen's preference, like the theme: the spots themselves are the
     /// station's, but what colour they are painted is the operator's, and a
     /// remote client picks its own.
-    #[serde(default = "default_spot_colors", deserialize_with = "spot_colors")]
+    #[serde(
+        default = "default_spot_colors",
+        deserialize_with = "spot_colors",
+        serialize_with = "ser_spot_colors"
+    )]
     pub spot_colors: [[u8; 3]; SpotKind::COUNT],
     /// The shade each band-plan class wears on the strip along the bottom of
     /// the waterfall, indexed by [`BandplanKind::index`]. Starts at
@@ -575,7 +579,11 @@ pub struct UiSettings {
     /// This screen's preference, like the spot tints above: the plan itself is
     /// the station's, but what colour an allocation is shaded is whatever the
     /// operator looking at it can read (issue #145).
-    #[serde(default = "default_bandplan_colors", deserialize_with = "bandplan_colors")]
+    #[serde(
+        default = "default_bandplan_colors",
+        deserialize_with = "bandplan_colors",
+        serialize_with = "ser_bandplan_colors"
+    )]
     pub bandplan_colors: [[u8; 3]; BandplanKind::COUNT],
     /// Which layout the window wears, or `Auto` to pick from the viewport.
     pub layout: LayoutMode,
@@ -698,6 +706,13 @@ where
     Ok(out)
 }
 
+fn ser_spot_colors<S>(v: &[[u8; 3]; SpotKind::COUNT], s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    v.as_slice().serialize(s)
+}
+
 /// Default for [`UiSettings::bandplan_colors`] — every class on its stock shade.
 fn default_bandplan_colors() -> [[u8; 3]; BandplanKind::COUNT] {
     let mut out = [[0u8; 3]; BandplanKind::COUNT];
@@ -721,6 +736,13 @@ where
         *slot = c;
     }
     Ok(out)
+}
+
+fn ser_bandplan_colors<S>(v: &[[u8; 3]; BandplanKind::COUNT], s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    v.as_slice().serialize(s)
 }
 
 impl Default for UiSettings {

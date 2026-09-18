@@ -384,7 +384,10 @@ async fn session(mut socket: WebSocket, hub: Arc<SolarHub>, auth: Arc<crate::aut
         },
     )
     .await;
-    if !signed_in {
+    // Who it is does not matter here, only that they got in: a viewer on this
+    // endpoint controls nothing, so there is no control key to hold and no
+    // per-operator setting to look up.
+    if signed_in.is_none() {
         let _ = socket.close().await;
         return;
     }

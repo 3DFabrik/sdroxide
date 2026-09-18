@@ -153,6 +153,8 @@ async fn the_servers_interface_is_replayed_editable_and_switchable_from_a_client
         remove_radio: None,
         rename_radio: None,
         radio_power: None,
+        load_user_settings: None,
+        save_user_settings: None,
     }));
     // Long enough that the engine's one startup announcement is already behind
     // us when the client arrives — which is the case the replay exists for.

@@ -1363,7 +1363,17 @@ use sdroxide_types::{
 /// a trailing `acars` field, and postcard numbers struct fields by position, so
 /// a v153 peer desynchronises on the tail of every `DigiStatus`. The field is
 /// last, so no surviving field moved.
-pub const PROTO_VERSION: u16 = 154;
+///
+/// v155: several clients on one radio, one of them working it, and per-operator
+/// settings for a station with a roster. `ClientMsg` gains `RequestControl`,
+/// `ReleaseControl`, `GrantControl`, `DenyControl` and `SetUserSettings`, and
+/// `ServerMsg` gains `Control` and `UserSettings`, all appended last so no
+/// surviving discriminant moved — but a v154 client is never sent the control
+/// status and would not know what to do with it, and it would show a PTT button
+/// on a radio somebody else is working. That is the reason for the version
+/// rather than a decoding failure: the old client's mistake would be silent and
+/// on the air.
+pub const PROTO_VERSION: u16 = 155;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]
@@ -1470,6 +1480,47 @@ pub enum ClientMsg {
         id: u32,
         on: bool,
     },
+    /// Ask for the control key — permission to work this radio rather than only
+    /// listen to it.
+    ///
+    /// Not a demand. Whoever holds it is told who is asking and answers with
+    /// [`ClientMsg::GrantControl`] or [`ClientMsg::DenyControl`], which is the
+    /// same courtesy as a handover on the air and for the same reason: the
+    /// operator may be mid-contact, and a key taken out from under them is a
+    /// dropped QSO at best. A radio nobody is working hands it over at once,
+    /// because there is nobody to ask.
+    ///
+    /// Appended last, like every message added since the sign-in: postcard
+    /// encodes the variant as a positional discriminant, so inserting anywhere
+    /// else would silently renumber every message after it.
+    RequestControl,
+    /// Give the control key up, so somebody else can have it.
+    ///
+    /// The radio is put down first — PTT, TUNE and the CW key all released —
+    /// because the client letting go is the only one that can let go of what it
+    /// was holding.
+    ReleaseControl,
+    /// Hand the control key to the client that asked for it.
+    ///
+    /// Only the holder's grant means anything, and only for a slot that is
+    /// actually waiting: an answer that arrives after the asker has gone is
+    /// dropped rather than applied to whoever came next.
+    GrantControl {
+        to: u64,
+    },
+    /// Turn a request for the control key down. The asker is told, and is free
+    /// to ask again.
+    DenyControl {
+        to: u64,
+    },
+    /// Replace this operator's stored settings on the station.
+    ///
+    /// Only a roster sign-in has anywhere to put them; a station with one
+    /// shared password ignores this. The client coalesces edits so a slider
+    /// does not rewrite the file sixty times a second.
+    ///
+    /// Appended last, for the usual reason.
+    SetUserSettings(sdroxide_types::UserSettings),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1816,6 +1867,26 @@ pub enum ServerMsg {
     ///
     /// Appended last, for the usual reason.
     Profiles(Vec<String>),
+
+    /// Who is working this radio, who else is listening, and who has asked for
+    /// a turn.
+    ///
+    /// Sent on connect and again on every change, exactly as [`ServerMsg::
+    /// Memories`] and [`ServerMsg::Scanner`] are, and for the same reason: this
+    /// is a standing condition and not an event. A client attaching to a radio
+    /// somebody else is working has to know that before it draws a PTT button,
+    /// not when it next changes hands.
+    ///
+    /// Appended last, for the usual reason.
+    Control(sdroxide_types::ControlStatus),
+
+    /// This operator's stored settings, replayed on connect after a roster
+    /// sign-in. Absent (never sent) on a station that cannot tell its clients
+    /// apart, so an older client and a single-password station look the same:
+    /// the screen keeps whatever it already had.
+    ///
+    /// Appended last, for the usual reason.
+    UserSettings(sdroxide_types::UserSettings),
 }
 
 /// One radio in a station's roster, as a client sees it.
@@ -2553,5 +2624,37 @@ mod tests {
     fn rejects_wrong_version_byte() {
         assert!(matches!(decode::<ClientMsg>(&[0x7f, 0, 0]), Err(ProtoError::Version(0x7f))));
         assert!(matches!(decode::<ClientMsg>(&[]), Err(ProtoError::Empty)));
+    }
+
+    /// The control-key and per-user settings variants live at the end of the
+    /// enums so a 154 peer still decodes everything it already knew. They
+    /// still have to round-trip for 155 peers.
+    #[test]
+    fn roundtrip_control_and_user_settings() {
+        use sdroxide_types::{ClientInfo, ControlStatus, UserSettings};
+
+        for m in [
+            ClientMsg::RequestControl,
+            ClientMsg::ReleaseControl,
+            ClientMsg::GrantControl { to: 7 },
+            ClientMsg::DenyControl { to: 7 },
+            ClientMsg::SetUserSettings(UserSettings::default()),
+        ] {
+            assert_eq!(decode::<ClientMsg>(&encode(&m).unwrap()).unwrap(), m, "{m:?}");
+        }
+
+        let status = ControlStatus {
+            me: 1,
+            holder: Some(ClientInfo { slot: 2, name: "dl1a".into(), may_transmit: true }),
+            clients: vec![
+                ClientInfo { slot: 2, name: "dl1a".into(), may_transmit: true },
+                ClientInfo { slot: 1, name: "dl2b".into(), may_transmit: true },
+            ],
+            waiting: vec![ClientInfo { slot: 1, name: "dl2b".into(), may_transmit: true }],
+        };
+        let tells = [ServerMsg::Control(status), ServerMsg::UserSettings(UserSettings::default())];
+        for m in &tells {
+            assert_eq!(decode::<ServerMsg>(&encode(m).unwrap()).unwrap(), *m);
+        }
     }
 }

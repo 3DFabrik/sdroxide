@@ -4,7 +4,16 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# The roster's password hashes (src/passwd.rs). `[remote_access]` keeps its one
+# password in the clear, which is defensible for a secret that belongs to
+# whoever can read the config directory anyway; a roster holds other people's.
+argon2 = "0.5.3"
 axum = { version = "0.8.9", features = ["ws"] }
+# The salt for those hashes. `argon2` re-exports `password-hash`'s `rand_core`
+# but not an OS random source — that crate takes rand_core without its
+# `getrandom` feature, so `OsRng` is not in what it re-exports. Same 0.6 line,
+# so this unifies with the one already in the tree rather than adding a second.
+rand_core = { version = "0.6.4", features = ["getrandom"] }
 crossbeam-channel.workspace = true
 futures-util = "0.3.34"
 mime_guess = "2.0.5"

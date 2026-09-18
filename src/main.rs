@@ -27,6 +27,7 @@ mod smartsdr_source;
 mod spyserver_source;
 mod tci_source;
 mod usb_audio_source;
+mod users;
 
 use anyhow::{Context, bail};
 use clap::Parser;
@@ -128,6 +129,15 @@ struct Cli {
     /// Run as a server: HTTP web client + WebSocket streaming backend
     #[arg(long)]
     server: bool,
+
+    /// Add a named operator to users.toml. Password from stdin, or from
+    /// SDROXIDE_PASSWORD when that is set.
+    #[arg(long, value_name = "NAME")]
+    add_user: Option<String>,
+
+    /// Set the password of an existing operator in users.toml.
+    #[arg(long, value_name = "NAME")]
+    set_password: Option<String>,
 
     /// Connect as a native remote client to a running sdroxide server
     /// (e.g. "host:4950" or a full ws:// URL)
@@ -251,6 +261,12 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let mut cli = Cli::parse();
+    if let Some(name) = cli.add_user.clone() {
+        return users::add_user(&name);
+    }
+    if let Some(name) = cli.set_password.clone() {
+        return users::set_password(&name);
+    }
     let settings = Settings::load();
     // Before anything reads a band edge — the console panadapter, the headless
     // smoke tests and the GUI all do. The engine sets these again from the same

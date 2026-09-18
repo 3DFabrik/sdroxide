@@ -1,7 +1,8 @@
+
 use crate::{
-    CallsignInfo, Command, Decode, DeviceCaps, DigiStatus, MemoryChannel, MemoryFolder, Meters,
-    QsoRecord, RadioState, RifpMeta, RifpStatus, SkimmerSpot, SpectrumFrame, Spot, SstvMode,
-    SstvStatus, UploadResult, VoiceStatus,
+    CallsignInfo, Command, ControlStatus, Decode, DeviceCaps, DigiStatus, MemoryChannel,
+    MemoryFolder, Meters, QsoRecord, RadioState, RifpMeta, RifpStatus, SkimmerSpot, SpectrumFrame,
+    Spot, SstvMode, SstvStatus, UploadResult, UserSettings, VoiceStatus,
 };
 
 /// Events flowing engine → UI.
@@ -581,6 +582,58 @@ pub trait RadioController {
     /// would be quietly ignored.
     fn station_roster_editable(&self) -> bool {
         false
+    }
+
+    /// How the radio at the far end is being shared, or `None` where sharing
+    /// does not apply.
+    ///
+    /// `None` for this machine's own engine — a radio on the desk has one
+    /// operator and it is whoever is sitting at it — and until the far end has
+    /// said. Either way the client shows what it always showed: full control,
+    /// and nothing about anybody else. Only a station that reports several
+    /// clients has anything to draw.
+    fn control(&self) -> Option<ControlStatus> {
+        None
+    }
+
+    /// Ask for the control key: permission to work this radio rather than only
+    /// listen to it.
+    ///
+    /// Nothing comes back from the call. What answers is the control status,
+    /// which the station sends to everybody on the radio whenever it changes —
+    /// the same shape as a roster edit above, and for the same reason: the
+    /// answer is a fact about the station, not about this call.
+    fn request_control(&mut self) {}
+
+    /// Give the control key up, so somebody else can work the radio.
+    fn release_control(&mut self) {}
+
+    /// Hand the control key to the client that asked for it. `to` is a
+    /// [`ClientInfo::slot`] from [`ControlStatus::waiting`].
+    fn grant_control(&mut self, to: u64) {
+        let _ = to;
+    }
+
+    /// Turn a request for the control key down, leaving the radio where it is.
+    fn deny_control(&mut self, to: u64) {
+        let _ = to;
+    }
+
+    /// Take a freshly arrived copy of this operator's stored settings, if the
+    /// station sent one since last poll.
+    ///
+    /// `None` for a local engine, a station without a roster, and until the
+    /// far end has said. The client applies what comes back and then forgets
+    /// it, so a later poll does not re-apply the same snapshot over a change
+    /// the operator has just made.
+    fn take_user_settings(&mut self) -> Option<UserSettings> {
+        None
+    }
+
+    /// Store this operator's current settings on the station. Coalesced by
+    /// the caller so a slider does not rewrite the file every frame.
+    fn send_user_settings(&mut self, settings: UserSettings) {
+        let _ = settings;
     }
 
     /// Ask the station at the far end to put another radio in its roster.

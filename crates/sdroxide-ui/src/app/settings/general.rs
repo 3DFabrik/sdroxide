@@ -125,6 +125,50 @@ pub(in crate::app) fn remote_access_settings(ui: &mut egui::Ui, access: &mut Rem
         .size(10.5)
         .color(crate::theme::gray(140)),
     );
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let users = sdroxide_config::load_users();
+        ui.add_space(12.0);
+        ui.label(RichText::new("Operators").size(14.0).strong().color(crate::theme::CYAN()));
+        ui.add_space(4.0);
+        if users.is_enforced() {
+            ui.label(
+                RichText::new(
+                    "A roster in users.toml is what this station asks against. Each name has \
+                     its own password and its own screen settings. Edit the file, or run \
+                     sdroxide --add-user NAME.",
+                )
+                .size(11.5)
+                .weak(),
+            );
+            ui.add_space(6.0);
+            for u in &users.users {
+                if u.name.is_empty() {
+                    continue;
+                }
+                let tx = if u.may_transmit { "may transmit" } else { "receive only" };
+                ui.label(RichText::new(format!("{} — {tx}", u.name)).size(12.0));
+            }
+            if let Some(path) = sdroxide_config::users_path() {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(path.display().to_string())
+                        .size(10.5)
+                        .color(crate::theme::gray(140)),
+                );
+            }
+        } else {
+            ui.label(
+                RichText::new(
+                    "No roster. The username and password above are the whole of who may \
+                     connect. To name operators, run sdroxide --add-user NAME on this machine.",
+                )
+                .size(11.5)
+                .weak(),
+            );
+        }
+    }
 }
 
 /// The fixed trim on this radio's receive audio.

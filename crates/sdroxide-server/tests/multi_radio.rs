@@ -131,6 +131,8 @@ async fn every_radio_in_the_roster_is_served_and_separately_addressable() {
         remove_radio: None,
         rename_radio: None,
         radio_power: None,
+        load_user_settings: None,
+        save_user_settings: None,
     }));
     tokio::time::sleep(Duration::from_millis(400)).await;
 
@@ -185,7 +187,7 @@ async fn every_radio_in_the_roster_is_served_and_separately_addressable() {
     loop {
         match recv_msg(&mut first).await {
             ServerMsg::Pong(7) => break,
-            ServerMsg::Busy | ServerMsg::Error(_) => panic!("the first session was displaced"),
+            ServerMsg::Error(_) => panic!("the first session was displaced"),
             _ => continue,
         }
     }
@@ -197,10 +199,10 @@ async fn every_radio_in_the_roster_is_served_and_separately_addressable() {
         .expect("connect /ws/0");
     send(&mut zero, &hello()).await;
     match recv_msg(&mut zero).await {
-        // Busy is the *right* answer: /ws/0 and /ws are the same radio, and it
-        // already has a client.
-        ServerMsg::Busy => {}
-        other => panic!("expected Busy on /ws/0 while /ws is held, got {other:?}"),
+        // HelloAck is the right answer now: /ws/0 and /ws are the same radio,
+        // and a second client is a listener rather than being turned away.
+        ServerMsg::HelloAck { .. } => {}
+        other => panic!("expected HelloAck on /ws/0 while /ws is held, got {other:?}"),
     }
 
     // A radio the station does not have is refused rather than rounded to one

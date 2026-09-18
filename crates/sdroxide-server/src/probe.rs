@@ -82,11 +82,16 @@ pub(crate) fn ask(shared: &Arc<Shared>, req: DeviceProbe) {
     }
 }
 
-/// Into the reliable lane of whichever session is attached — which may no
-/// longer be the one that asked, if it dropped mid-scan. Harmless: an answer
-/// nobody is waiting for lands in a list that is redrawn on demand.
+/// Into the reliable lane of every client on the radio — which no longer
+/// includes only the one that asked, and need not include it at all if it
+/// dropped mid-scan.
+///
+/// Harmless both ways round: an answer nobody is waiting for lands in a list
+/// that is redrawn on demand, and a client that sees the bus scan somebody else
+/// asked for sees the same hardware it would have found itself. Which client
+/// asked is not carried through the prober — the question goes to a thread with
+/// a queue in front of it, and threading a slot number through that to save two
+/// listeners a list they will not look at is not worth the wire.
 fn reply(shared: &Arc<Shared>, answer: ProbeAnswer) {
-    if let Some(s) = shared.session.lock().unwrap().as_ref() {
-        let _ = s.reliable.try_send(ServerMsg::ProbeAnswer(Box::new(answer)));
-    }
+    shared.tell_everyone(&ServerMsg::ProbeAnswer(Box::new(answer)));
 }

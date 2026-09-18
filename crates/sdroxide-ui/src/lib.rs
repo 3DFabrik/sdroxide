@@ -17,6 +17,7 @@ mod aprs_map;
 mod basemap;
 pub mod chrome;
 mod colormap;
+mod control;
 mod digi_map;
 mod download;
 /// Running eframe on our own winit loop, so a Wayland session does not spin.

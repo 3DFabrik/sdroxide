@@ -78,6 +78,7 @@ fn where_to_look(file: &str) -> &'static str {
         "contacts.json" => "check the FSQ contacts list",
         "scanner.json" => "check the SCAN window",
         "config.toml" => "check Settings",
+        "users.toml" => "check the station's operator roster",
         _ => "check Settings → Radio",
     }
 }
@@ -501,6 +502,106 @@ pub fn save_remote_access(access: &sdroxide_types::RemoteAccess) -> Result<(), C
     s.save()
 }
 
+/// The operator roster's file name in the config directory.
+pub const USERS_FILE: &str = "users.toml";
+
+/// The station's operator roster (`users.toml`), or an empty one if the file
+/// does not exist.
+///
+/// Read fresh on every call, for the same reason as [`load_remote_access`] and
+/// with more use for it: a station several people work is one where somebody is
+/// added or has their password changed while the server is running, and neither
+/// should cost everyone else their connection.
+///
+/// An empty roster is not an error and not a warning. It is what every
+/// installation that has never heard of this has, and it means
+/// `[remote_access]` still decides.
+pub fn load_users() -> sdroxide_types::Users {
+    let Ok(dir) = config_dir() else { return sdroxide_types::Users::default() };
+    let FileText::Text(text) = read_config_text(&dir, USERS_FILE) else {
+        return sdroxide_types::Users::default();
+    };
+    match toml::from_str(&text) {
+        Ok(u) => u,
+        Err(e) => {
+            quarantine_unreadable(&dir, USERS_FILE, &e);
+            sdroxide_types::Users::default()
+        }
+    }
+}
+
+/// Write the roster back.
+///
+/// Not read-modify-write like the `config.toml` helpers above: this file holds
+/// nothing else, and the caller has just read it — the server hashing a
+/// hand-written password, or `--add-user` adding a line.
+///
+/// The file is left readable only by its owner. Every other secret sdroxide
+/// stores belongs to the operator, who can read their own config directory
+/// anyway; these are other people's passwords, and worth the one syscall.
+pub fn save_users(users: &sdroxide_types::Users) -> Result<(), ConfigError> {
+    let dir = config_dir()?;
+    let text = toml::to_string_pretty(users)?;
+    write_atomic(&dir, USERS_FILE, &text)?;
+    restrict_to_owner(&dir.join(USERS_FILE));
+    Ok(())
+}
+
+/// Where `users.toml` lives, for a message that has to name it.
+pub fn users_path() -> Option<PathBuf> {
+    config_dir().ok().map(|d| d.join(USERS_FILE))
+}
+
+/// The directory name an operator's settings live under, or `None` if `name`
+/// contains nothing that is safe to put in a path.
+///
+/// Only ASCII letters, digits and hyphen survive — the same filter
+/// `image_rx_dir` uses — so `../etc` cannot walk out of the config tree and
+/// `oe1/test` cannot create a nested directory of its own.
+pub fn sanitize_username(name: &str) -> Option<String> {
+    let safe: String = name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    (!safe.is_empty()).then_some(safe)
+}
+
+/// One named operator's settings (`users/<name>/settings.json`), or the
+/// defaults if they have never saved any.
+pub fn load_user_settings(name: &str) -> sdroxide_types::UserSettings {
+    let Some(store) = Store::user(name) else { return sdroxide_types::UserSettings::default() };
+    store.load("settings.json")
+}
+
+/// Write one named operator's settings. Refused for a name that sanitizes to
+/// nothing, so a caller that passed `../` does not create `users/` itself as
+/// somebody's home.
+pub fn save_user_settings(
+    name: &str,
+    settings: &sdroxide_types::UserSettings,
+) -> Result<(), ConfigError> {
+    let Some(store) = Store::user(name) else {
+        return Err(ConfigError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "that name is not a usable operator",
+        )));
+    };
+    store.save("settings.json", settings)
+}
+
+/// Take away every permission but the owner's, where the platform has them.
+///
+/// Best effort: a roster on a filesystem that cannot express this is still a
+/// working roster, and refusing to save one would be the worse failure.
+fn restrict_to_owner(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+            warn!("cannot restrict permissions on {}: {e}", path.display());
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
 /// Load the server this screen last dialled from Settings → Remote.
 pub fn load_remote_server() -> sdroxide_types::RemoteServer {
     Settings::load().remote_server
@@ -589,8 +690,8 @@ pub fn config_dir() -> Result<PathBuf, ConfigError> {
         .ok_or(ConfigError::NoConfigDir)
 }
 
-/// A configuration scope: the station's root config directory, or one radio's
-/// subdirectory under it.
+/// A configuration scope: the station's root config directory, one radio's
+/// subdirectory under it, or one named operator's subdirectory.
 ///
 /// Multi-radio keeps **one file per radio scope** rather than one list file,
 /// because the engine and the UI each re-read and re-write `radio.json`
@@ -603,38 +704,58 @@ pub fn config_dir() -> Result<PathBuf, ConfigError> {
 /// `session.json`, `scanner.json`, `tciserver.json`, `rigctld.json`,
 /// `wsjtx.json`. Everything the operator shares across radios — memories,
 /// band stacks, the logbook, `config.toml` — stays on the root free functions.
+/// A named operator's UI preferences live under `users/<name>/`, which is a
+/// scope of its own rather than a radio's.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Store {
-    /// `None` = the legacy root (the station scope, and radio 0);
-    /// `Some(n)` = `<config>/radio-<n>/`.
-    scope: Option<u32>,
+    scope: Scope,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+enum Scope {
+    #[default]
+    Station,
+    Radio(u32),
+    User(String),
 }
 
 impl Store {
     /// The station scope: the legacy root directory.
     pub fn station() -> Store {
-        Store { scope: None }
+        Store { scope: Scope::Station }
     }
 
     /// The scope for radio `id`. Id 0 is the legacy root — the radio every
     /// existing installation already has — so its files stay exactly where a
     /// single-radio sdroxide reads and writes them.
     pub fn radio(id: u32) -> Store {
-        Store { scope: (id != 0).then_some(id) }
+        Store { scope: if id == 0 { Scope::Station } else { Scope::Radio(id) } }
+    }
+
+    /// The scope for a named operator, or `None` if `name` sanitizes to
+    /// nothing — a username that is only path punctuation must not become a
+    /// directory, or `../` would walk out of the config tree.
+    pub fn user(name: &str) -> Option<Store> {
+        sanitize_username(name).map(|name| Store { scope: Scope::User(name) })
     }
 
     /// Which radio this scope belongs to, as the roster numbers it. The station
-    /// scope answers 0, which is the radio it holds the files of.
+    /// scope answers 0, which is the radio it holds the files of. An operator
+    /// scope is not a radio and answers 0 the same way.
     pub fn radio_id(&self) -> u32 {
-        self.scope.unwrap_or(0)
+        match self.scope {
+            Scope::Radio(id) => id,
+            Scope::Station | Scope::User(_) => 0,
+        }
     }
 
     /// This scope's directory. Not created here; writers create it on demand.
     pub fn dir(&self) -> Result<PathBuf, ConfigError> {
         let root = config_dir()?;
-        Ok(match self.scope {
-            None => root,
-            Some(id) => root.join(format!("radio-{id}")),
+        Ok(match &self.scope {
+            Scope::Station => root,
+            Scope::Radio(id) => root.join(format!("radio-{id}")),
+            Scope::User(name) => root.join("users").join(name),
         })
     }
 
@@ -2121,6 +2242,11 @@ pub fn save_voice_names(names: &[String]) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Tests that redirect `SDROXIDE_CONFIG_DIR` share this with tests that
+    /// read the default config path, so they cannot see each other's directory.
+    static CONFIG_DIR_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn published_version_parses_from_release_constant() {
@@ -2788,6 +2914,7 @@ mod tests {
 
     #[test]
     fn the_cache_path_is_named_for_the_season_and_cannot_escape_it() {
+        let _guard = CONFIG_DIR_LOCK.lock().unwrap();
         let a = broadcast_cache_path("a26").unwrap();
         let b = broadcast_cache_path("b26").unwrap();
         assert_ne!(a, b, "a season change has to miss the previous cache");
@@ -2901,6 +3028,7 @@ mod tests {
     /// other tests in this binary (none of which touch `config_dir`).
     #[test]
     fn radio_scopes_map_under_the_config_dir_and_radio_zero_is_the_root() {
+        let _guard = CONFIG_DIR_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!("sdroxide-store-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("scratch dir");
@@ -2912,6 +3040,29 @@ mod tests {
         assert_eq!(Store::radio(0).dir().unwrap(), root);
         assert_eq!(Store::station().dir().unwrap(), root);
         assert_eq!(Store::radio(2).dir().unwrap(), root.join("radio-2"));
+
+        // A named operator lives under users/<sanitized>/, and a name that is
+        // only path punctuation is refused rather than walked out of the tree.
+        assert_eq!(sanitize_username("oe1test"), Some("oe1test".into()));
+        assert_eq!(sanitize_username("OE1-TEST"), Some("OE1-TEST".into()));
+        assert_eq!(sanitize_username("../etc/passwd"), Some("etcpasswd".into()));
+        assert_eq!(sanitize_username("oe1/../../x"), Some("oe1x".into()));
+        assert_eq!(sanitize_username("..."), None);
+        assert_eq!(sanitize_username(""), None);
+        assert!(Store::user("...").is_none());
+        let user = Store::user("oe1test").expect("a callsign is a usable name");
+        assert_eq!(user.dir().unwrap(), root.join("users").join("oe1test"));
+        let mut prefs = sdroxide_types::UserSettings::default();
+        prefs.volume = 0.25;
+        save_user_settings("oe1test", &prefs).unwrap();
+        assert!(root.join("users/oe1test/settings.json").exists());
+        assert_eq!(load_user_settings("oe1test").volume, 0.25);
+        assert_eq!(
+            load_user_settings("../etc").volume,
+            sdroxide_types::UserSettings::default().volume,
+            "a path-shaped name must not read or write outside users/"
+        );
+        assert!(save_user_settings("...", &prefs).is_err());
 
         // A scoped write lands in the scope, resolves on read, and leaves the
         // root's file alone.

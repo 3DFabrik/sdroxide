@@ -173,6 +173,8 @@ pub fn run(
         })
     });
 
+    hash_hand_written_passwords();
+
     sdroxide_server::run_blocking(ServerParams {
         radios: params,
         bind: settings.server_bind.clone(),
@@ -183,7 +185,10 @@ pub fn run(
         // their password — by hand, or from the settings dialog of the GUI
         // running beside this server — should not have to restart the server
         // and drop whoever is on it for the change to hold.
-        access: Some(Box::new(sdroxide_config::load_remote_access)),
+        access: Some(Box::new(|| sdroxide_server::Access {
+            shared: sdroxide_config::load_remote_access(),
+            users: sdroxide_config::load_users(),
+        })),
         // The same enumeration the local settings dialog uses, offered to
         // whoever is connected. Without it the Rescan / Discover / Test buttons
         // on a remote or browser client have nothing to answer them, and a
@@ -213,6 +218,48 @@ pub fn run(
             }
             Ok(sdroxide_config::load_radios().is_enabled(id))
         })),
+        load_user_settings: Some(Box::new(|name| sdroxide_config::load_user_settings(name))),
+        save_user_settings: Some(Box::new(|name, settings| {
+            sdroxide_config::save_user_settings(name, settings).map_err(|e| e.to_string())
+        })),
     })?;
     Ok(())
+}
+
+/// Replace any password written into `users.toml` by hand with its hash.
+///
+/// The roster is meant to be editable with a text editor — that is the whole of
+/// what managing operators takes on a headless station — so a `password = "..."`
+/// line is accepted and works immediately. It is somebody else's password
+/// though, and leaving it lying in the clear is the one part of that which is
+/// not acceptable, so the next start turns it into an Argon2 hash and writes the
+/// file back.
+///
+/// Failure is reported and otherwise survived: a roster that could not be
+/// rewritten is still a roster the server can sign people in against, and
+/// refusing to start over it would take a working station off the air.
+fn hash_hand_written_passwords() {
+    let mut users = sdroxide_config::load_users();
+    let plaintext = users.plaintext_entries();
+    if plaintext.is_empty() {
+        return;
+    }
+    for i in plaintext {
+        let user = &mut users.users[i];
+        match sdroxide_server::hash_password(&user.password) {
+            Ok(hash) => {
+                user.password_hash = hash;
+                user.password.clear();
+                tracing::info!("hashed {}'s password in users.toml", user.name);
+            }
+            // Left as it was, which still signs them in. Nothing is cleared
+            // here that has not been replaced.
+            Err(e) => tracing::warn!("cannot hash {}'s password: {e}", user.name),
+        }
+    }
+    if let Err(e) = sdroxide_config::save_users(&users) {
+        tracing::warn!(
+            "cannot write users.toml ({e}); the passwords in it are still in the clear"
+        );
+    }
 }

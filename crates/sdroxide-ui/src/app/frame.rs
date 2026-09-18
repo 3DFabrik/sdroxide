@@ -16,6 +16,7 @@ use crate::app::net::auto_upload_adif;
 use crate::app::persist::persist_qso_log;
 use crate::app::settings::servers::TciServerStatus;
 use crate::app::spectrum::CFG_DEBOUNCE_S;
+use crate::control::ControlAction;
 
 /// Repaint-poll cadence when no spectrum stream is flowing (startup, connection
 /// lost, stalled stream) — the app truly idles between these wakes.
@@ -213,6 +214,7 @@ impl eframe::App for SdroxideApp {
         }
 
         let mut cmds = Vec::new();
+        self.sync_user_settings(now, &mut cmds);
         // A channel list chosen in the memories window: parsed here and sent
         // to the engine, which owns the list and the numbering in it.
         self.poll_chirp_import(&mut cmds);
@@ -260,6 +262,15 @@ impl eframe::App for SdroxideApp {
             )
             .show(ui, |ui| {
                 crate::chrome::angled_frame(ui, crate::theme::PINK(), |ui| {
+                    let status = self.ctrl.control();
+                    if let Some(action) = crate::control::chip(ui, status.as_ref()) {
+                        match action {
+                            ControlAction::Request => self.ctrl.request_control(),
+                            ControlAction::Release => self.ctrl.release_control(),
+                            ControlAction::Grant(slot) => self.ctrl.grant_control(slot),
+                            ControlAction::Deny(slot) => self.ctrl.deny_control(slot),
+                        }
+                    }
                     self.top_bar(ui, &mut cmds);
                 });
             });

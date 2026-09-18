@@ -1,5 +1,12 @@
-//! The single remote WebSocket session: Hello handshake, sign-in, codec
-//! negotiation, three-lane sender, and the command/mic receive loop.
+//! One remote WebSocket session: Hello handshake, sign-in, codec negotiation,
+//! three-lane sender, and the command/mic receive loop.
+//!
+//! A radio may have several of these at once and has exactly one operator. The
+//! difference is the control key ([`crate::Control`]): the session holding it
+//! may drive the radio, the rest are listening, and everything a listener sends
+//! that would reach the hardware is dropped here. That is the only place it can
+//! be dropped — past this loop a command is a command, and the engine has no
+//! idea which socket it came from.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -13,10 +20,10 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use sdroxide_proto::{AudioCaps, AudioCodec, ClientMsg, PROTO_VERSION, ServerMsg, decode, encode};
-use sdroxide_types::Command;
+use sdroxide_types::{ClientInfo, Command, ControlStatus};
 
 use crate::auth;
-use crate::{SessionTx, Shared, Station};
+use crate::{Attached, SessionTx, Shared, Station};
 
 /// `/ws` — the station's first radio, which is the whole of what a station
 /// with one radio has. Every client that predates the roster arrives here, so
@@ -52,33 +59,16 @@ fn msg(m: &ServerMsg) -> Message {
 }
 
 async fn session(mut socket: WebSocket, shared: Arc<Shared>, station: Arc<Station>) {
-    // Hello and the sign-in first, and only then the single-client slot. The
-    // order matters: claiming the slot before knowing who this is would let
-    // anyone who can open a socket lock the operator out of their own radio
-    // without ever proving they may touch it.
-    let Some(audio_caps) = handshake(&mut socket, &shared).await else {
+    // Hello and the sign-in first, and only then a place in the registry. The
+    // order matters: taking one before knowing who this is would let anyone who
+    // can open a socket displace the operator at their own radio without ever
+    // proving they may touch it.
+    let Some((audio_caps, who)) = handshake(&mut socket, &shared).await else {
         let _ = socket.close().await;
         return;
     };
 
-    // Single-client rule: the loser gets Busy and is closed immediately.
-    if shared.busy.swap(true, Ordering::SeqCst) {
-        let _ = socket.send(msg(&ServerMsg::Busy)).await;
-        let _ = socket.close().await;
-        return;
-    }
-    run_session(&mut socket, &shared, &station, audio_caps).await;
-
-    // Cleanup — whatever happened, release the slot and drop the key.
-    *shared.session.lock().unwrap() = None;
-    shared.busy.store(false, Ordering::SeqCst);
-    let _ = shared.cmd_tx.send(Command::SetPtt(false));
-    let _ = shared.cmd_tx.send(Command::SetTune(false));
-    // The CW straight key is a key of its own, held apart from PTT: a client
-    // that went away with the Space bar down would otherwise leave the carrier
-    // on until the keyer's hold cap ran out, half a minute later. Inert on
-    // any radio that is not being hand-keyed.
-    let _ = shared.cmd_tx.send(Command::CwKey(false));
+    run_session(&mut socket, &shared, &station, audio_caps, who).await;
     info!(radio = shared.id, "remote session ended");
 }
 
@@ -88,7 +78,10 @@ async fn session(mut socket: WebSocket, shared: Arc<Shared>, station: Arc<Statio
 /// The version check comes first so a client on the wrong protocol is told
 /// exactly that, rather than being asked to sign in to a server it could not
 /// have talked to anyway.
-async fn handshake(socket: &mut WebSocket, shared: &Arc<Shared>) -> Option<AudioCaps> {
+async fn handshake(
+    socket: &mut WebSocket,
+    shared: &Arc<Shared>,
+) -> Option<(AudioCaps, auth::Identity)> {
     // --- Hello (5 s budget) -------------------------------------------
     let hello = tokio::time::timeout(Duration::from_secs(5), socket.recv()).await;
     let audio_caps = match hello {
@@ -111,7 +104,7 @@ async fn handshake(socket: &mut WebSocket, shared: &Arc<Shared>) -> Option<Audio
     };
 
     // --- Sign-in ------------------------------------------------------
-    let signed_in = auth::challenge(
+    let who = auth::challenge(
         socket,
         &shared.auth,
         auth::Frames {
@@ -124,8 +117,189 @@ async fn handshake(socket: &mut WebSocket, shared: &Arc<Shared>) -> Option<Audio
             },
         },
     )
-    .await;
-    signed_in.then_some(audio_caps)
+    .await?;
+    Some((audio_caps, who))
+}
+
+// --- the control key ---------------------------------------------------------
+
+/// What the clients on a radio are, for the status every one of them is sent.
+fn who_is_here(shared: &Shared) -> Vec<ClientInfo> {
+    shared
+        .clients
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|c| ClientInfo {
+            slot: c.slot,
+            name: c.who.name.clone(),
+            may_transmit: c.who.may_transmit,
+        })
+        .collect()
+}
+
+/// Send every client on this radio the state of the sharing, each addressed to
+/// itself.
+///
+/// One message per client rather than one broadcast, because each has to be told
+/// which of the listed clients it is — `me`. Everything else in it is the same
+/// for everybody.
+fn announce_control(shared: &Shared) {
+    let clients = who_is_here(shared);
+    let (holder, waiting) = {
+        let control = shared.control.lock().unwrap();
+        let find = |slot: u64| clients.iter().find(|c| c.slot == slot).cloned();
+        let waiting: Vec<ClientInfo> = control.waiting.iter().filter_map(|s| find(*s)).collect();
+        (control.holder.and_then(find), waiting)
+    };
+    for c in clients.iter() {
+        shared.tell(
+            c.slot,
+            ServerMsg::Control(ControlStatus {
+                me: c.slot,
+                holder: holder.clone(),
+                clients: clients.clone(),
+                waiting: waiting.clone(),
+            }),
+        );
+    }
+}
+
+/// Whether `slot` is the client working this radio.
+fn holds_control(shared: &Shared, slot: u64) -> bool {
+    shared.control.lock().unwrap().holder == Some(slot)
+}
+
+/// Give the control key to `slot`, releasing whoever had it.
+///
+/// The radio is put down on the way through. Whoever was holding the key may
+/// have been holding the transmitter with it, and they are no longer the client
+/// that can let go of it — see [`Shared::safe_state`].
+fn give_control_to(shared: &Shared, slot: u64) {
+    {
+        let mut control = shared.control.lock().unwrap();
+        if control.holder == Some(slot) {
+            return;
+        }
+        control.holder = Some(slot);
+        control.waiting.retain(|s| *s != slot);
+    }
+    shared.safe_state();
+    announce_control(shared);
+}
+
+/// Take the control key off `slot`, if it has it, and offer it to whoever has
+/// been waiting longest.
+///
+/// Called when the holder gives it up and when their socket goes away. Nobody
+/// waiting leaves the radio unattended, which is the state a station spends most
+/// of its time in and the one where the next client to attach simply gets the
+/// key.
+fn release_control(shared: &Shared, slot: u64) {
+    // Read before the control lock is taken, never under it: the two locks are
+    // always taken clients-first, and holding this one across the other is the
+    // one way this deadlocks. See [`Shared::clients`].
+    let here: Vec<u64> = shared.clients.lock().unwrap().iter().map(|c| c.slot).collect();
+    let next = {
+        let mut control = shared.control.lock().unwrap();
+        if control.holder != Some(slot) {
+            // Not the holder: only their own place in the queue goes.
+            control.waiting.retain(|s| *s != slot);
+            drop(control);
+            announce_control(shared);
+            return;
+        }
+        control.holder = None;
+        control.waiting.retain(|s| *s != slot);
+        // Offered rather than granted only if somebody is actually still here to
+        // take it: a queue of clients that have since disconnected must not leave
+        // the radio holding a key for nobody.
+        control.waiting.iter().find(|s| here.contains(s)).copied()
+    };
+    shared.safe_state();
+    match next {
+        Some(next) => {
+            info!(radio = shared.id, "the control key passes to the next client waiting");
+            give_control_to(shared, next);
+        }
+        None => announce_control(shared),
+    }
+}
+
+/// Take a request for the control key.
+///
+/// A radio nobody is working hands it over at once — there is nobody to ask, and
+/// making an operator wait for a permission that cannot be given would be a dead
+/// button. Otherwise the request goes on the queue and the holder is told, which
+/// is what [`announce_control`] carries.
+fn ask_for_control(shared: &Shared, slot: u64) {
+    let free = {
+        let mut control = shared.control.lock().unwrap();
+        if control.holder == Some(slot) {
+            return;
+        }
+        if control.holder.is_none() {
+            true
+        } else {
+            if !control.waiting.contains(&slot) {
+                control.waiting.push(slot);
+            }
+            false
+        }
+    };
+    if free {
+        info!(radio = shared.id, "the radio was free; the control key goes to whoever asked");
+        give_control_to(shared, slot);
+    } else {
+        announce_control(shared);
+    }
+}
+
+/// Turn a request down. The asker is told by the status losing their entry, and
+/// a notice, because a queue place quietly vanishing is indistinguishable from
+/// the request never having arrived.
+fn deny_control(shared: &Shared, holder: u64, asked: u64) {
+    if !holds_control(shared, holder) {
+        return;
+    }
+    let was_waiting = {
+        let mut control = shared.control.lock().unwrap();
+        let before = control.waiting.len();
+        control.waiting.retain(|s| *s != asked);
+        control.waiting.len() != before
+    };
+    if was_waiting {
+        shared.tell(
+            asked,
+            ServerMsg::Notice(Some("the operator is not handing the radio over".into())),
+        );
+        announce_control(shared);
+    }
+}
+
+/// Whether a command from this session reaches the engine, and why not.
+///
+/// Two gates, and the second is not implied by the first. A listener may not
+/// touch the radio at all. An operator who holds the key but whose roster entry
+/// says `may_transmit = false` may work the receiver and is refused the three
+/// commands that put a signal on the air — checked by name rather than by
+/// trusting the client not to send them, because the client is the half of this
+/// that anybody can rewrite.
+fn refuse_reason(
+    shared: &Shared,
+    slot: u64,
+    who: &auth::Identity,
+    cmd: &Command,
+) -> Option<&'static str> {
+    if !holds_control(shared, slot) {
+        return Some("you are listening to this radio, not working it");
+    }
+    let keys_the_transmitter =
+        matches!(cmd, Command::SetPtt(true) | Command::SetTune(true) | Command::CwKey(true));
+    if keys_the_transmitter && !who.may_transmit {
+        return Some("this sign-in may not transmit");
+    }
+    None
 }
 
 /// Tell the client that asked why a roster edit did not happen.
@@ -137,6 +311,10 @@ async fn handshake(socket: &mut WebSocket, shared: &Arc<Shared>) -> Option<Audio
 /// has already been given.
 fn report<T>(
     shared: &Shared,
+    // Who asked, so the answer goes to them rather than to everybody on the
+    // radio: a refusal is about the button somebody just pressed, and the others
+    // never pressed it.
+    slot: u64,
     outcome: Result<Result<T, String>, tokio::task::JoinError>,
     what: &str,
 ) {
@@ -148,9 +326,7 @@ fn report<T>(
         Err(e) => format!("the station could not answer ({e})"),
     };
     warn!(radio = shared.id, "{what}: {why}");
-    if let Some(s) = shared.session.lock().unwrap().as_ref() {
-        let _ = s.reliable.try_send(ServerMsg::Notice(Some(format!("{what}: {why}"))));
-    }
+    shared.tell(slot, ServerMsg::Notice(Some(format!("{what}: {why}"))));
 }
 
 async fn run_session(
@@ -160,6 +336,7 @@ async fn run_session(
     // apart from the `station` below, which is the *config* of the station.
     roster: &Arc<Station>,
     audio_caps: AudioCaps,
+    who: auth::Identity,
 ) {
     let rx_codec =
         if audio_caps.opus_decode { AudioCodec::Opus48kMono } else { AudioCodec::Pcm16_48k };
@@ -237,6 +414,16 @@ async fn run_session(
     let _ = socket.send(msg(&ServerMsg::MemoryFolders(mem_folders))).await;
     let _ = socket.send(msg(&ServerMsg::Scanner(scanner))).await;
     let _ = socket.send(msg(&ServerMsg::Profiles(profiles))).await;
+    // This operator's own settings, where the station knows who they are. A
+    // shared-password station cannot tell its clients apart and has nowhere to
+    // keep a per-operator file, so nothing is sent and the client keeps what
+    // it already had.
+    if who.named {
+        if let Some(load) = roster.load_user.as_ref() {
+            let settings = load(&who.name);
+            let _ = socket.send(msg(&ServerMsg::UserSettings(settings))).await;
+        }
+    }
     // The operator config, which the engine announced once at startup. Without
     // this replay the client's callsign and grid come up empty and greyed out.
     if let Some(d) = digi {
@@ -322,12 +509,42 @@ async fn run_session(
     if notice.is_some() {
         let _ = socket.send(msg(&ServerMsg::Notice(notice))).await;
     }
-    info!(radio = shared.id, ?rx_codec, ?tx_codec, "remote client connected");
-
     // --- register lanes -----------------------------------------------
     let (rel_tx, mut rel_rx) = mpsc::channel::<ServerMsg>(256);
     let (aud_tx, mut aud_rx) = mpsc::channel::<ServerMsg>(8);
-    *shared.session.lock().unwrap() = Some(SessionTx { reliable: rel_tx, audio: aud_tx, rx_codec });
+    let me = Attached {
+        slot: shared.next_slot.fetch_add(1, Ordering::Relaxed),
+        who: who.clone(),
+        tx: SessionTx { reliable: rel_tx, audio: aud_tx, rx_codec },
+    };
+    let slot = me.slot;
+    // A radio nobody is working is handed to whoever attaches to it, so a
+    // single-operator station behaves exactly as it always did: connect, and the
+    // radio is yours. Only a second client has to ask.
+    let take_control = {
+        // Both locks, in the order everything here takes them, and the key
+        // claimed under the same guard that reads it free: two clients arriving
+        // together must not both conclude the radio was unattended.
+        let mut clients = shared.clients.lock().unwrap();
+        clients.push(me);
+        let mut control = shared.control.lock().unwrap();
+        let free = control.holder.is_none();
+        if free {
+            control.holder = Some(slot);
+        }
+        free
+    };
+    info!(
+        radio = shared.id,
+        who = who.label(),
+        ?rx_codec,
+        ?tx_codec,
+        listening = !take_control,
+        "remote client connected"
+    );
+    // After the lanes are registered either way, so the client is told how the
+    // radio is being shared on its own socket rather than having to ask.
+    announce_control(shared);
 
     let (mut ws_tx, mut ws_rx) = futures_util::StreamExt::split(socket);
 
@@ -385,8 +602,32 @@ async fn run_session(
             };
             match decode::<ClientMsg>(&bytes) {
                 Ok(ClientMsg::Command(cmd)) => {
-                    let _ = shared.cmd_tx.send(cmd);
+                    // The one gate between a listening client and the hardware.
+                    // Past this line a command is a command and the engine has
+                    // no idea which socket it arrived on, so nothing further
+                    // down can make this decision — see [`refuse_reason`].
+                    match refuse_reason(shared, slot, &who, &cmd) {
+                        None => {
+                            let _ = shared.cmd_tx.send(cmd);
+                        }
+                        Some(why) => {
+                            // Rate-limited by being sent only for a command that
+                            // would have keyed something or changed the radio; a
+                            // client that has been told it is listening does not
+                            // send these, and one that does is either stale or
+                            // being driven by hand.
+                            warn!(radio = shared.id, who = who.label(), "refused a command: {why}");
+                            shared.tell(slot, ServerMsg::Notice(Some(why.into())));
+                        }
+                    }
                 }
+                // Nobody's microphone but the operator's reaches the transmitter.
+                // A listener's frames are dropped without a word: a browser tab
+                // holds the microphone open for as long as the page has it, and
+                // saying so for every 20 ms frame would be fifty log lines a
+                // second.
+                Ok(ClientMsg::MicFrame { .. })
+                    if !holds_control(shared, slot) || !who.may_transmit => {}
                 Ok(ClientMsg::MicFrame { payload, .. }) => {
                     let n = match tx_codec {
                         AudioCodec::Opus48kMono => {
@@ -440,18 +681,18 @@ async fn run_session(
                     // configuration scope and starts an engine, neither of
                     // which belongs on the socket task.
                     let done = tokio::task::spawn_blocking(move || station.add_radio(&name)).await;
-                    report(shared, done, "adding a radio");
+                    report(shared, slot, done, "adding a radio");
                 }
                 Ok(ClientMsg::RemoveRadio { id }) => {
                     let station = roster.clone();
                     let done = tokio::task::spawn_blocking(move || station.remove_radio(id)).await;
-                    report(shared, done, "closing a radio");
+                    report(shared, slot, done, "closing a radio");
                 }
                 Ok(ClientMsg::RenameRadio { id, name }) => {
                     let station = roster.clone();
                     let done =
                         tokio::task::spawn_blocking(move || station.rename_radio(id, &name)).await;
-                    report(shared, done, "renaming a radio");
+                    report(shared, slot, done, "renaming a radio");
                 }
                 // Also the station's business, not this radio's engine: it is
                 // the roster that says whether a radio has an interface at all.
@@ -461,11 +702,38 @@ async fn run_session(
                     let station = roster.clone();
                     let done =
                         tokio::task::spawn_blocking(move || station.set_radio_power(id, on)).await;
-                    report(shared, done, "switching a radio");
+                    report(shared, slot, done, "switching a radio");
                 }
-                Ok(ClientMsg::Ping(t)) => {
-                    if let Some(s) = shared.session.lock().unwrap().as_ref() {
-                        let _ = s.reliable.try_send(ServerMsg::Pong(t));
+                Ok(ClientMsg::Ping(t)) => shared.tell(slot, ServerMsg::Pong(t)),
+                // The control key. Handled here rather than forwarded anywhere:
+                // who is working the radio is a fact about the station's clients,
+                // and the engine neither knows nor needs to.
+                Ok(ClientMsg::RequestControl) => ask_for_control(shared, slot),
+                Ok(ClientMsg::ReleaseControl) => release_control(shared, slot),
+                Ok(ClientMsg::GrantControl { to }) => {
+                    // Only from the holder, and only to a client that is still
+                    // here and still asking. A grant that has been overtaken by
+                    // the asker disconnecting is dropped rather than applied to
+                    // whoever took their place in the queue.
+                    let asking = holds_control(shared, slot)
+                        && shared.control.lock().unwrap().waiting.contains(&to);
+                    if asking {
+                        info!(radio = shared.id, "the operator hands the radio over");
+                        give_control_to(shared, to);
+                    }
+                }
+                Ok(ClientMsg::DenyControl { to }) => deny_control(shared, slot, to),
+                Ok(ClientMsg::SetUserSettings(settings)) => {
+                    if who.named {
+                        if let Some(save) = roster.save_user.as_ref() {
+                            if let Err(e) = save(&who.name, &settings) {
+                                warn!(
+                                    radio = shared.id,
+                                    who = who.label(),
+                                    "could not store operator settings: {e}"
+                                );
+                            }
+                        }
                     }
                 }
                 Ok(ClientMsg::Hello { .. }) => {} // ignore late Hello
@@ -483,4 +751,12 @@ async fn run_session(
         _ = sender => {}
         _ = receiver => {}
     }
+
+    // Whatever happened, this client is gone: out of the registry, out of the
+    // queue, and — if it was the one working the radio — the key offered to
+    // whoever has been waiting longest. `release_control` puts the radio down on
+    // the way through, which is the part that matters: a socket that died with
+    // the PTT held would otherwise leave the transmitter on.
+    shared.clients.lock().unwrap().retain(|c| c.slot != slot);
+    release_control(shared, slot);
 }

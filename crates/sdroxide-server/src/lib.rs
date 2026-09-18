@@ -1,10 +1,11 @@
 //! Server mode: HTTP (static WASM client) + a WebSocket session per radio,
 //! speaking `sdroxide-proto`.
 //!
-//! One session per radio, and one client per session: `/ws` is the station's
-//! first radio — all a single-radio station has, and all a client that knows
-//! nothing of a roster ever asks for — while `/ws/<id>` names any of them.
-//! `/radios` lists what is on offer.
+//! One session per radio: `/ws` is the station's first radio — all a
+//! single-radio station has, and all a client that knows nothing of a roster
+//! ever asks for — while `/ws/<id>` names any of them. `/radios` lists what is
+//! on offer. Several clients may listen to one radio; exactly one of them holds
+//! the control key and may drive it.
 //!
 //! Lanes into the socket (per the project plan):
 //! - control/state/memories/meters: reliable queue, never intentionally dropped
@@ -16,6 +17,7 @@
 //! the latest state/caps/memories so a new session can be greeted instantly.
 
 mod auth;
+mod passwd;
 mod probe;
 mod session;
 mod solar;
@@ -48,6 +50,23 @@ pub enum ServerError {
     NoRadios,
 }
 
+/// Who this station lets in, in both of the shapes that can say so.
+///
+/// A single-operator station has one secret and no use for names, which is what
+/// `shared` is and what every station before the roster had. A station several
+/// people work has `users`, and then the station knows which of them is on it —
+/// the difference that makes a named control key and per-operator settings
+/// possible at all.
+///
+/// Where both are set the roster decides. Both empty leaves the server open to
+/// anyone who can reach the port, which is the default and what every
+/// installation that has never touched this has.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Access {
+    pub shared: sdroxide_types::RemoteAccess,
+    pub users: sdroxide_types::Users,
+}
+
 /// How the server finds out who may connect.
 ///
 /// A function rather than a value because it is called afresh for every
@@ -56,9 +75,20 @@ pub enum ServerError {
 /// settings dialog of a GUI running beside the server — expects that to hold
 /// without restarting the server and dropping whoever is on it.
 ///
-/// `None`, or a [`RemoteAccess`](sdroxide_types::RemoteAccess) with both fields
-/// empty, leaves the server open to anyone who can reach the port.
-pub type AccessFn = Box<dyn Fn() -> sdroxide_types::RemoteAccess + Send + Sync>;
+/// `None`, or an [`Access`] with nothing in it, leaves the server open to
+/// anyone who can reach the port.
+pub type AccessFn = Box<dyn Fn() -> Access + Send + Sync>;
+
+/// Hash a password the way the roster holds them, for whoever is putting an
+/// operator on it — `--add-user`, and the settings dialog if it ever grows the
+/// buttons.
+///
+/// Exported from here because this crate is where the verification lives, and
+/// the two have to be the same algorithm at the same cost or the entry it
+/// writes is one nobody can sign in with.
+pub fn hash_password(password: &str) -> Result<String, String> {
+    passwd::hash(password)
+}
 
 pub use probe::ProbeFn;
 
@@ -99,6 +129,15 @@ pub type RenameRadioFn = Box<dyn Fn(u32, &str) -> Result<(), String> + Send + Sy
 /// and clients are told so ([`sdroxide_proto::RadioInfo::enabled`] is then
 /// `None`), rather than left pressing a button that does nothing.
 pub type RadioPowerFn = Box<dyn Fn(u32, Option<bool>) -> Result<bool, String> + Send + Sync>;
+
+/// How this station loads one named operator's settings. `None` leaves them
+/// unsent: a test, or a station that has no roster, has nothing to look up.
+pub type LoadUserSettingsFn = Box<dyn Fn(&str) -> sdroxide_types::UserSettings + Send + Sync>;
+
+/// How this station writes one named operator's settings. `None` drops a
+/// `SetUserSettings` on the floor rather than claiming to have stored it.
+pub type SaveUserSettingsFn =
+    Box<dyn Fn(&str, &sdroxide_types::UserSettings) -> Result<(), String> + Send + Sync>;
 
 /// One radio's engine endpoints. A station hands the server one of these per
 /// radio in its roster, and each gets an address of its own on the socket —
@@ -161,12 +200,51 @@ pub struct ServerParams {
     /// every client's, which for a headless station means nobody has one at
     /// all. See [`RadioPowerFn`].
     pub radio_power: Option<RadioPowerFn>,
+    /// Per-operator settings. Both `None` — the default in tests — leaves a
+    /// roster sign-in with nowhere to keep a screen preference, which is
+    /// exactly how a station without a roster behaves.
+    pub load_user_settings: Option<LoadUserSettingsFn>,
+    pub save_user_settings: Option<SaveUserSettingsFn>,
 }
 
 pub(crate) struct SessionTx {
     pub reliable: mpsc::Sender<ServerMsg>,
     pub audio: mpsc::Sender<ServerMsg>,
     pub rx_codec: AudioCodec,
+}
+
+/// One signed-in client on a radio.
+///
+/// A radio used to hold exactly one of these — a single client, which is what
+/// one transmitter and one dial mean. It still has exactly one *operator*, and
+/// that is now a fact about which entry in this list holds the control key
+/// rather than about how many entries there can be: everybody else is listening,
+/// which costs the radio nothing and is what makes a station worth sharing.
+pub(crate) struct Attached {
+    /// Which client this is, for the messages that have to name one — the
+    /// control key being asked for, granted or handed over. A counter that
+    /// never repeats, so a request cannot be answered for whoever took the same
+    /// place in the list after the asker left.
+    pub slot: u64,
+    /// Who signed in. What the roster said, or nothing much on a station that
+    /// has one shared password — see [`auth::Identity`].
+    pub who: auth::Identity,
+    pub tx: SessionTx,
+}
+
+/// Which client is working the radio, and who is waiting to.
+///
+/// The list is the order the requests arrived in, which is the order they are
+/// offered the key in when whoever holds it leaves. Nothing here grants
+/// anything on its own: an operator asks, and the one at the radio says yes —
+/// the same courtesy as a handover on the air, and for the same reason. Only a
+/// client that has gone away loses the key without being asked.
+#[derive(Default)]
+pub(crate) struct Control {
+    /// The slot working the radio, if anybody is.
+    pub holder: Option<u64>,
+    /// Slots that have asked for it, oldest first.
+    pub waiting: Vec<u64>,
 }
 
 #[derive(Default, Clone)]
@@ -298,6 +376,8 @@ pub(crate) struct Station {
     remove: Option<RemoveRadioFn>,
     rename: Option<RenameRadioFn>,
     power: Option<RadioPowerFn>,
+    load_user: Option<LoadUserSettingsFn>,
+    save_user: Option<SaveUserSettingsFn>,
     /// One roster edit at a time, across every client on the station. The
     /// callbacks below read `radios.json`, change it and write it back, so two
     /// sessions adding a radio at the same moment would each hand out the id
@@ -361,13 +441,11 @@ impl Station {
     /// told that *its own* radio has gone: the roster it gets simply does not
     /// list `me` any more.
     pub(crate) fn tell_roster(&self, r: &Shared, list: &[sdroxide_proto::RadioInfo]) {
-        if let Some(s) = r.session.lock().unwrap().as_ref() {
-            let _ = s.reliable.try_send(ServerMsg::Radios {
-                me: r.id,
-                radios: list.to_vec(),
-                editable: self.editable(),
-            });
-        }
+        r.tell_everyone(&ServerMsg::Radios {
+            me: r.id,
+            radios: list.to_vec(),
+            editable: self.editable(),
+        });
     }
 
     /// Tell every client what the station now has. Sent to all of them, not
@@ -431,15 +509,16 @@ impl Station {
             };
             radios.remove(i)
         };
-        // The one whose radio has gone hears first, and hears it while its
-        // socket is still open: the roster it gets no longer lists `me`, which
-        // is how its tab knows to close itself instead of trying to dial an
-        // address that is now a 404. Dropping the session then closes that
-        // socket — the queued message goes out ahead of the close, because a
-        // dropped sender leaves what it has already queued to be drained.
+        // Those whose radio has gone hear first, and hear it while their sockets
+        // are still open: the roster they get no longer lists `me`, which is how
+        // a tab knows to close itself instead of trying to dial an address that
+        // is now a 404. Dropping the sessions then closes those sockets — the
+        // queued message goes out ahead of the close, because a dropped sender
+        // leaves what it has already queued to be drained.
         let list = self.roster();
         self.tell_roster(&gone, &list);
-        *gone.session.lock().unwrap() = None;
+        gone.clients.lock().unwrap().clear();
+        *gone.control.lock().unwrap() = Control::default();
         for r in self.list() {
             self.tell_roster(&r, &list);
         }
@@ -510,8 +589,9 @@ impl Station {
             primary,
             cmd_tx: r.cmd_tx,
             latest: Mutex::new(Latest::default()),
-            session: Mutex::new(None),
-            busy: AtomicBool::new(false),
+            clients: Mutex::new(Vec::new()),
+            control: Mutex::new(Control::default()),
+            next_slot: std::sync::atomic::AtomicU64::new(1),
             mic_tx: Mutex::new(r.mic_tx),
             spectrum_rx,
             wide_spectrum_rx,
@@ -563,14 +643,26 @@ pub(crate) struct Shared {
     pub primary: bool,
     pub cmd_tx: crossbeam_channel::Sender<Command>,
     pub latest: Mutex<Latest>,
-    pub session: Mutex<Option<SessionTx>>,
-    pub busy: AtomicBool,
+    /// Everybody signed in to this radio: the operator at it and whoever else
+    /// is listening.
+    ///
+    /// One lock over both this and [`Shared::control`] would be tidier to reason
+    /// about, but the fan-out below takes this one on every audio block and
+    /// every state change, and the control key changes hands a few times an
+    /// evening. They are separate locks and always taken in this order — clients
+    /// first, control second — which is the whole of what keeps that safe.
+    pub clients: Mutex<Vec<Attached>>,
+    /// Who is working the radio. See [`Control`].
+    pub control: Mutex<Control>,
+    /// The next slot number to hand out. Never reused, so a stale answer to a
+    /// request cannot land on a different client.
+    pub next_slot: std::sync::atomic::AtomicU64,
     pub mic_tx: Mutex<rtrb::Producer<f32>>,
     pub spectrum_rx: watch::Receiver<Option<SpectrumFrame>>,
     pub wide_spectrum_rx: watch::Receiver<Option<SpectrumFrame>>,
-    /// The solar-system viewers on `/solar-ws`. Independent of `busy`: they
-    /// control nothing, so any number may watch alongside the one control
-    /// client. See [`solar`].
+    /// The solar-system viewers on `/solar-ws`. Independent of the radio's
+    /// clients: they control nothing, so any number may watch alongside whoever
+    /// is working the radio. See [`solar`].
     ///
     /// One feed for the station, held by every radio: it is a picture of the
     /// sky over this site, and a second radio does not put the station under a
@@ -618,6 +710,80 @@ impl Shared {
         }
         format!("Radio {}", self.id + 1)
     }
+
+    /// Send one message to every client on this radio.
+    ///
+    /// The reliable lane, so nothing here is dropped on purpose — but a client
+    /// whose queue has filled up is behind by more than this message, and
+    /// waiting for it would stop the pump for everybody else. It is named and
+    /// dropped, exactly as it was when there was one client to drop it for.
+    pub(crate) fn tell_everyone(&self, m: &ServerMsg) {
+        for c in self.clients.lock().unwrap().iter() {
+            if c.tx.reliable.try_send(m.clone()).is_err() {
+                // Named, for the reason `msg_kind` gives: what a dropped
+                // message costs depends entirely on which one it was.
+                warn!(
+                    radio = self.id,
+                    who = c.who.label(),
+                    "reliable lane full; dropping {}",
+                    msg_kind(m)
+                );
+            }
+        }
+    }
+
+    /// Send one message to one client, if it is still attached.
+    ///
+    /// A client that has gone in the meantime is not an error: the answer to
+    /// something it asked simply has nobody left to go to.
+    pub(crate) fn tell(&self, slot: u64, m: ServerMsg) {
+        if let Some(c) = self.clients.lock().unwrap().iter().find(|c| c.slot == slot) {
+            let _ = c.tx.reliable.try_send(m);
+        }
+    }
+
+    /// The distinct receive codecs the attached clients want their audio in.
+    ///
+    /// The pump encodes once per entry rather than once per client: a browser
+    /// and a native client want different things, but three browsers want the
+    /// same thing, and Opus is not cheap enough to do three times.
+    pub(crate) fn rx_codecs(&self) -> Vec<AudioCodec> {
+        let mut codecs: Vec<AudioCodec> = Vec::new();
+        for c in self.clients.lock().unwrap().iter() {
+            if !codecs.contains(&c.tx.rx_codec) {
+                codecs.push(c.tx.rx_codec);
+            }
+        }
+        codecs
+    }
+
+    /// Hand one encoded audio block to every client that wanted that codec.
+    ///
+    /// The bounded lane, where dropping *is* the policy: a client on a slow
+    /// link loses blocks rather than delaying the radio, and it loses only its
+    /// own — which is the point of a lane per client.
+    pub(crate) fn send_audio(&self, codec: AudioCodec, m: &ServerMsg) {
+        for c in self.clients.lock().unwrap().iter() {
+            if c.tx.rx_codec == codec {
+                let _ = c.tx.audio.try_send(m.clone());
+            }
+        }
+    }
+
+    /// Put the radio down: PTT, TUNE and the CW key all released.
+    ///
+    /// Called when the operator's client goes away and again whenever the
+    /// control key changes hands, because both are moments when whoever was
+    /// holding something down is no longer the one who can let go of it. The CW
+    /// straight key is a key of its own, held apart from PTT: a client that went
+    /// away with the Space bar down would otherwise leave the carrier on until
+    /// the keyer's hold cap ran out, half a minute later. Inert on any radio
+    /// that is not being hand-keyed.
+    pub(crate) fn safe_state(&self) {
+        let _ = self.cmd_tx.send(Command::SetPtt(false));
+        let _ = self.cmd_tx.send(Command::SetTune(false));
+        let _ = self.cmd_tx.send(Command::CwKey(false));
+    }
 }
 
 /// Build a tokio runtime and serve until the process exits.
@@ -638,6 +804,8 @@ pub async fn serve(params: ServerParams) -> Result<(), ServerError> {
         remove: params.remove_radio,
         rename: params.rename_radio,
         power: params.radio_power,
+        load_user: params.load_user_settings,
+        save_user: params.save_user_settings,
         edit: Mutex::new(()),
     });
 
@@ -653,8 +821,19 @@ pub async fn serve(params: ServerParams) -> Result<(), ServerError> {
     // asks for nothing should find that out from the log rather than from a
     // complaint about what went out on their callsign.
     match station.auth.required() {
-        Some(a) if a.username.is_empty() => info!("remote clients must give the password"),
-        Some(a) => info!("remote clients must sign in as {:?}", a.username),
+        Some(auth::Demand::Roster(users)) => {
+            let names: Vec<&str> = users.users.iter().map(|u| u.name.as_str()).collect();
+            info!("remote clients must sign in as one of: {}", names.join(", "));
+            let listeners: Vec<&str> =
+                users.users.iter().filter(|u| !u.may_transmit).map(|u| u.name.as_str()).collect();
+            if !listeners.is_empty() {
+                info!("these operators may not transmit: {}", listeners.join(", "));
+            }
+        }
+        Some(auth::Demand::Shared(a)) if a.username.is_empty() => {
+            info!("remote clients must give the password")
+        }
+        Some(auth::Demand::Shared(a)) => info!("remote clients must sign in as {:?}", a.username),
         None => warn!(
             "no remote-access credentials configured — anyone who can reach this port can \
              operate the radio; set [remote_access] in config.toml, or Settings → General"
@@ -883,11 +1062,18 @@ fn pump(
             mono.push(0.5 * (l + r));
         }
 
-        let session_codec = shared.session.lock().unwrap().as_ref().map(|s| s.rx_codec);
-        match session_codec {
-            None => mono.clear(),
-            Some(codec) => {
-                while mono.len() >= 960 {
+        // Once per codec anybody is listening in, not once per listener: three
+        // browsers all want PCM16 and would otherwise be three conversions of
+        // the same block, and a second Opus encode is the expensive half of this
+        // loop done twice. The encoded block is then cloned per client, which is
+        // a memcpy of a couple of kilobytes.
+        let codecs = shared.rx_codecs();
+        if codecs.is_empty() {
+            mono.clear();
+        } else {
+            while mono.len() >= 960 {
+                audio_seq = audio_seq.wrapping_add(1);
+                for codec in &codecs {
                     let payload = match codec {
                         AudioCodec::Opus48kMono => {
                             let enc = opus_enc.get_or_insert_with(|| {
@@ -902,7 +1088,6 @@ fn pump(
                                 Ok(v) => v,
                                 Err(e) => {
                                     warn!("opus encode: {e}");
-                                    mono.drain(..960);
                                     continue;
                                 }
                             }
@@ -916,13 +1101,9 @@ fn pump(
                             v
                         }
                     };
-                    audio_seq = audio_seq.wrapping_add(1);
-                    if let Some(s) = shared.session.lock().unwrap().as_ref() {
-                        // Bounded lane: dropping is the backpressure policy.
-                        let _ = s.audio.try_send(ServerMsg::RxAudio { seq: audio_seq, payload });
-                    }
-                    mono.drain(..960);
+                    shared.send_audio(*codec, &ServerMsg::RxAudio { seq: audio_seq, payload });
                 }
+                mono.drain(..960);
             }
         }
         // Bound the accumulator against pathological stalls.
@@ -1249,21 +1430,15 @@ fn handle_event(shared: &Shared, ev: RadioEvent) {
     if let Some(sat) = sat {
         shared.solar.set_sat_config(sat);
     }
+    // To everybody signed in to this radio, and named on the way out if a lane
+    // is full. A client that falls behind sheds a burst of these in well under a
+    // second, and the consequence is not the same for every kind: a state or
+    // meter update is re-sent on the next tick and the client catches up by
+    // itself, while a notice, a decoded line or a spot exists once and is simply
+    // gone. Without the discriminant in the log there is no way to tell those two
+    // apart afterwards (issue #443). See [`Shared::tell_everyone`].
     if let Some(msg) = msg {
-        if let Some(s) = shared.session.lock().unwrap().as_ref() {
-            if let Err(e) = s.reliable.try_send(msg) {
-                // Name what was dropped. A client that falls behind sheds a
-                // burst of these in well under a second, and the consequence
-                // is not the same for every kind: a state or meter update is
-                // re-sent on the next tick and the client catches up by
-                // itself, while a notice, a decoded line or a spot exists
-                // once and is simply gone. Without the discriminant in the
-                // log there is no way to tell those two apart afterwards
-                // (issue #443).
-                let dropped = e.into_inner();
-                warn!("reliable lane full; dropping {}", msg_kind(&dropped));
-            }
-        }
+        shared.tell_everyone(&msg);
     }
     // ...and to everybody on the station, not just to this radio's client: the
     // roster is what every tab strip is drawn from, and a radio that has just
