@@ -134,15 +134,19 @@ fn parse_from(rest: &[u8]) -> Option<AcarsFrame> {
     ck(rest[11])?;
     let block_id = ch(rest[11]).to_string();
     ck(rest[12])?;
-    if rest[12] & 0x7f != 0x02 {
-        return None;
-    }
+    // STX when text follows, ETX when the block has none — an uplink's
+    // acknowledgement or a `_d` general response is only the header. Requiring
+    // STX dropped every one of those.
+    let mut ended = match rest[12] & 0x7f {
+        0x02 => false,
+        0x03 => true,
+        _ => return None,
+    };
 
     // Text up to ETX/ETB, which carries parity like the rest.
     let mut text = String::new();
     let mut idx = 13;
-    let mut ended = false;
-    while idx < rest.len().min(13 + 220) {
+    while !ended && idx < rest.len().min(13 + 220) {
         let b = rest[idx];
         ck(b)?;
         idx += 1;
@@ -415,9 +419,12 @@ mod tests {
             bytes.push(ch(c));
         }
         bytes.push(ch(msg.block_id.chars().next().unwrap_or(' ')));
-        bytes.push(ch('\u{2}'));
-        for c in msg.text.chars() {
-            bytes.push(ch(c));
+        // A block with no text goes straight from the header to ETX.
+        if !msg.text.is_empty() {
+            bytes.push(ch('\u{2}'));
+            for c in msg.text.chars() {
+                bytes.push(ch(c));
+            }
         }
         bytes.push(ch('\u{3}'));
 
@@ -463,6 +470,26 @@ mod tests {
         assert_eq!(got.label, "H1");
         assert_eq!(got.text, "HELLO FROM ACARS");
         assert!(got.crc_ok, "the block check must verify");
+    }
+
+    /// A block with no text has ETX where STX would be. acarsdec's recording
+    /// has one (an uplink `_d` to LN-DYY), and it was the frame this decoder
+    /// missed at either polarity.
+    #[test]
+    fn a_frame_with_no_text_ends_its_header_with_etx() {
+        let msg = AcarsFrame {
+            mode: "2".into(),
+            address: ".LN-DYY".into(),
+            ack: "5".into(),
+            label: "_\u{7f}".into(),
+            block_id: "A".into(),
+            text: String::new(),
+            crc_ok: true,
+        };
+        let got = parse_frame(&nrzi_decode(&encode(&msg))).expect("a header-only frame");
+        assert_eq!(got.label, "_\u{7f}");
+        assert!(got.text.is_empty());
+        assert!(got.crc_ok, "the block check covers the header and ETX");
     }
 
     #[test]
