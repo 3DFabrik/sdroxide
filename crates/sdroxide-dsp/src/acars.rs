@@ -1,7 +1,7 @@
 //! ACARS — the VHF aircraft datalink, around 130 MHz (issue #436).
 //!
 //! An AM carrier in the airband carries a 2400-baud MSK signal centred on
-//! 1800 Hz (tones 1200/2400 Hz), NRZI-coded, character-oriented: 7-bit ASCII,
+//! 1800 Hz (tones 1200/2400 Hz), character-oriented: 7-bit ASCII,
 //! least-significant bit first, plus odd parity. A frame is a pre-key of ones,
 //! the bit- and character-sync pattern, `SOH`, a header (mode, address,
 //! acknowledgement, label, block id), `STX`, up to 220 characters of text,
@@ -13,7 +13,7 @@
 //! stream.
 //!
 //! The demodulator follows acarsdec's `msk.c`: a half-sine matched filter, a
-//! bit clock, and a PI loop that tracks the carrier. The fixed-grid integrator
+//! bit clock, and a loop that tracks the carrier. The fixed-grid integrator
 //! it started as only worked on this decoder's own encoder — real audio is not
 //! symbol-aligned to the first sample and its carrier is not exactly 1800 Hz,
 //! so both have to be recovered. It is checked against an off-air recording of
@@ -156,7 +156,7 @@ fn printable(b: u8) -> char {
 
 /// Parse the header and text that follow `SOH`.
 fn parse_from(rest: &[u8]) -> Option<AcarsFrame> {
-    // mode(1) address(7) ack(1) label(2) block_id(1) STX(1)
+    // mode(1) address(7) ack(1) label(2) block_id(1) STX-or-ETX(1)
     if rest.len() < 13 {
         return None;
     }
@@ -211,9 +211,7 @@ fn parse_from(rest: &[u8]) -> Option<AcarsFrame> {
         return None;
     }
 
-    // The block check is two unparitied bytes, then DEL. The CRC covers the
-    // header and text bytes as they were received (parity stripped is what the
-    // senders build it over, so strip it here too).
+    // The block check is two unparitied bytes, then DEL.
     if rest.len() < idx + 3 {
         return None;
     }
@@ -235,17 +233,6 @@ fn parse_from(rest: &[u8]) -> Option<AcarsFrame> {
     })
 }
 
-/// Undo the NRZI line coding: a *level* change is a data 0, no change a data 1.
-pub fn nrzi_decode(levels: &[u8]) -> Vec<u8> {
-    let mut prev = levels.first().copied().unwrap_or(1);
-    let mut out = Vec::with_capacity(levels.len());
-    for &l in levels {
-        out.push(u8::from(l == prev));
-        prev = l;
-    }
-    out
-}
-
 /// The ACARS demodulator: real audio in, bits out.
 ///
 /// Ported from acarsdec's `msk.c`: the mixer runs off a VCO whose phase is
@@ -253,6 +240,10 @@ pub fn nrzi_decode(levels: &[u8]) -> Vec<u8> {
 /// filter read at the bit clock's fractional position, and the clock itself is
 /// the VCO phase crossing 3π/2 — so it tracks a real signal's timing and
 /// frequency rather than assuming both.
+///
+/// What comes out are the data bits themselves, as acarsdec's `putbit` takes
+/// them: the alternating-arm MSK decision leaves no line code to undo. The
+/// sign is the loop's to choose, which is why [`parse_frame`] reads both.
 pub struct AcarsRx {
     /// Audio rate, for the VCO's centre-frequency step.
     rate: f32,
@@ -295,10 +286,10 @@ pub struct AcarsRx {
 
 impl AcarsRx {
     pub fn new(rate: f64) -> Self {
-        // acarsdec's demodulator is defined at 12 kHz and reaches it by
-        // averaging the input down; a resampler does the same for any rate, so
-        // the 12 kHz constants below stay exactly what the reference uses
-        // instead of being re-derived (wrongly) per rate.
+        // acarsdec runs its demodulator at one fixed rate (12.5 kHz today) and
+        // averages its input down to it. This one runs at 12 kHz and a
+        // resampler takes any input there, so the constants below are fixed
+        // rather than re-derived per rate — re-derived, 48 kHz decoded nothing.
         let demod_rate = 12_000.0f64;
         let over = 240usize;
         let bitlen = (demod_rate / 1200.0).ceil().max(1.0) as usize;
@@ -349,10 +340,11 @@ impl AcarsRx {
         let ms = audio.iter().map(|s| s * s).sum::<f32>() / audio.len().max(1) as f32;
         self.level += 0.3 * (ms.sqrt() - self.level);
 
-        // acarsdec's loop gains. It scales them by its own 12 kHz filter length
-        // (10 samples); the loop steps once per symbol and the symbol rate is
-        // fixed, so the per-symbol gains are what matter and they must not be
-        // re-scaled by *this* rate's filter length — that made an engine-fed
+        // The carrier loop's integral and proportional gains, applied once per
+        // symbol. A PI loop, where current acarsdec uses a one-pole filter
+        // (`PLLG`/`PLLC`); with these, every burst in acarsdec's recording
+        // locks. The symbol rate is fixed, so they are per-symbol constants and
+        // must not be scaled by the input rate — that made an engine-fed
         // 48 kHz signal far too slow to lock.
         let ki = 71e-7 / 10.0;
         let kp = 60e-3 / 10.0;
@@ -459,9 +451,9 @@ impl AcarsRx {
 mod tests {
     use super::*;
 
-    /// Build a frame's bit stream from a message, the way a transmitter would:
-    /// SOH, header, STX, text, ETX, BCS, DEL, each character 7 bits LSB-first
-    /// plus odd parity — then NRZI-encode it.
+    /// Build a frame's data bits from a message, the way the demodulator hands
+    /// them over: a pre-key of ones, sync, SOH, header, STX, text, ETX, BCS,
+    /// DEL, each character 7 bits LSB-first plus odd parity.
     pub(super) fn encode(msg: &AcarsFrame) -> Vec<u8> {
         let mut bytes: Vec<u8> = Vec::new();
         let ch = |c: char| -> u8 {
@@ -504,18 +496,11 @@ mod tests {
         bytes.push((bcs >> 8) as u8);
         bytes.push(0x7f);
 
-        // Bits, LSB-first per byte, then NRZI levels: 0 = change, 1 = no change.
-        let mut levels: Vec<u8> = vec![1; 16 * 8]; // pre-key of ones
-        let mut last = 1u8;
+        let mut bits: Vec<u8> = vec![1; 16 * 8]; // pre-key of ones
         for byte in bytes {
-            for i in 0..8 {
-                let bit = (byte >> i) & 1;
-                let level = if bit == 0 { 1 - last } else { last };
-                levels.push(level);
-                last = level;
-            }
+            bits.extend((0..8).map(|i| (byte >> i) & 1));
         }
-        levels
+        bits
     }
 
     fn sample() -> AcarsFrame {
@@ -531,9 +516,9 @@ mod tests {
     }
 
     #[test]
-    fn a_frame_round_trips_through_nrzi_and_the_parser() {
+    fn a_frame_round_trips_through_the_parser() {
         let msg = sample();
-        let bits = nrzi_decode(&encode(&msg));
+        let bits = encode(&msg);
         let got = parse_frame(&bits).expect("a frame");
         assert_eq!(got.address, "N12345", "the padding dot is not part of it");
         assert_eq!(got.label, "H1");
@@ -555,7 +540,7 @@ mod tests {
             text: String::new(),
             crc_ok: true,
         };
-        let got = parse_frame(&nrzi_decode(&encode(&msg))).expect("a header-only frame");
+        let got = parse_frame(&encode(&msg)).expect("a header-only frame");
         assert_eq!(got.label, "_d", "the general-response label, as it is written");
         assert!(got.text.is_empty());
         assert!(got.crc_ok, "the block check covers the header and ETX");
@@ -565,7 +550,7 @@ mod tests {
     /// over. The frame must decode the same either way up.
     #[test]
     fn an_inverted_bit_stream_still_decodes() {
-        let bits: Vec<u8> = nrzi_decode(&encode(&sample())).iter().map(|b| b ^ 1).collect();
+        let bits: Vec<u8> = encode(&sample()).iter().map(|b| b ^ 1).collect();
         let got = parse_frame(&bits).expect("a frame read upside down");
         assert_eq!(got.text, "HELLO FROM ACARS");
         assert!(got.crc_ok);
@@ -575,7 +560,7 @@ mod tests {
     /// same window, must not be what comes back.
     #[test]
     fn a_failed_heading_does_not_hide_a_good_frame_behind_it() {
-        let mut bad = nrzi_decode(&encode(&sample()));
+        let mut bad = encode(&sample());
         // Two bits of the first text character: parity still holds, so the
         // heading frames, and only the block check can tell. The text starts
         // after 16 bytes of pre-key and 18 of sync and header.
@@ -586,7 +571,7 @@ mod tests {
         assert!(!only.crc_ok);
         let mut good = sample();
         good.text = "SECOND".into();
-        bad.extend(nrzi_decode(&encode(&good)));
+        bad.extend(encode(&good));
         let got = parse_frame(&bad).expect("a frame");
         assert!(got.crc_ok, "the frame that checks out wins");
         assert_eq!(got.text, "SECOND");
@@ -597,7 +582,7 @@ mod tests {
     /// counted it once per byte until it drained out.
     #[test]
     fn a_failed_heading_is_counted_once() {
-        let mut bits = nrzi_decode(&encode(&sample()));
+        let mut bits = encode(&sample());
         let text = (16 + 18) * 8;
         bits[text] ^= 1;
         bits[text + 1] ^= 1;
@@ -618,7 +603,7 @@ mod tests {
         let mut msg = sample();
         msg.ack = "\u{15}".into();
         msg.text = "A\u{1b}[2JB\r\nC".into();
-        let got = parse_frame(&nrzi_decode(&encode(&msg))).expect("a frame");
+        let got = parse_frame(&encode(&msg)).expect("a frame");
         assert_eq!(got.ack, "NAK");
         assert_eq!(got.text, "A·[2JB\r\nC", "the escape is gone, the line break kept");
         assert!(got.crc_ok);
@@ -626,7 +611,7 @@ mod tests {
 
     #[test]
     fn a_corrupt_block_check_is_reported_not_hidden() {
-        let mut bits = nrzi_decode(&encode(&sample()));
+        let mut bits = encode(&sample());
         // Flip a text bit; the CRC must catch it.
         let n = bits.len();
         bits[n / 2] ^= 1;
@@ -649,17 +634,9 @@ mod tests {
         assert!(parse_frame(&bits).is_none(), "noise must not fabricate a frame");
     }
 
-
-
-    /// The symbol clock carries its fractional remainder. At 51.2 kHz a symbol
-    /// is 21.33… samples, and rounding that away each symbol walks the sampling
-    /// grid off a long frame — the far end reads the wrong samples and the
-    /// block check never matches. 48 kHz divides evenly and hid it.
-
     /// The block check is the reflected CRC-16 with initial value 0 — the same
     /// form as CRC-16/KERMIT, whose check value for "123456789" is 0x2189.
     /// CCITT-FALSE would give 0x29B1 and does not verify real frames.
-
     #[test]
     fn the_block_check_is_the_reflected_crc() {
         assert_eq!(crc16(b"123456789"), 0x2189);

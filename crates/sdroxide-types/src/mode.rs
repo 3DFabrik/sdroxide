@@ -254,6 +254,7 @@ pub enum Mode {
     /// analogue FM or AM carrier in North America: OFDM sidebands carrying
     /// CD-quality audio (or several programmes) plus the station's name,
     /// slogan and short text messages.
+    ///
     /// A broadcast mode like [`Mode::Drm`], and receive only: it is something
     /// to listen to, so it is a *demodulator* rather than one of the digital
     /// modes above — no transmit, no QSO, no transcript. The analogue carrier
@@ -263,7 +264,7 @@ pub enum Mode {
     HdRadio,
     /// ACARS — the VHF aircraft datalink around 130 MHz (issue #436): an AM
     /// carrier in the airband carrying 2400-baud MSK, character-oriented, with
-    /// odd parity and a CCITT block check. Receive only: it is an airline
+    /// odd parity and a 16-bit block check. Receive only: it is an airline
     /// service, not an amateur one.
     ///
     /// Appended for the same reason as [`Mode::Hell`].
