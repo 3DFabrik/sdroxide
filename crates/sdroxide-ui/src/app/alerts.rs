@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread::JoinHandle;
 #[cfg(not(target_arch = "wasm32"))]
@@ -97,9 +97,15 @@ enum Job {
     Quit,
 }
 
-/// The alarms themselves: settings plus, on native, a background worker that
-/// owns the alert device.
+/// The alarms themselves, as a radio tab holds them: a handle on an
+/// [`AlertCore`], which every tab of a station shares — see
+/// [`AlertRuntime::station`].
 pub struct AlertRuntime {
+    core: Arc<Mutex<AlertCore>>,
+}
+
+/// Settings plus, on native, a background worker that owns the alert device.
+struct AlertCore {
     status: Arc<Mutex<AlertStatus>>,
     cooldowns: Cooldown,
     settings: AlertSettings,
@@ -255,9 +261,75 @@ fn render(sound: AlertSound, rate: u32, volume: f32) -> Vec<f32> {
 }
 
 impl AlertRuntime {
-    /// Build the runtime and, if enabled, open the device in the background.
+    /// A runtime of its own: its own device, settings and cooldowns.
     pub fn new(settings: AlertSettings) -> Self {
-        let mut runtime = AlertRuntime {
+        AlertRuntime { core: Arc::new(Mutex::new(AlertCore::new(settings))) }
+    }
+
+    /// The station's alarm: one per process, whichever radio tab asks for it.
+    ///
+    /// Each tab of a multi-radio station used to build its own — its own
+    /// output stream on the alert device and its own copy of the settings, read
+    /// once at start-up — so switching alerts off on one tab left the others
+    /// ringing until a restart, and a station calling us on two receivers
+    /// rang twice. `settings` only seeds the first. Held weakly, so the last
+    /// tab to close still closes the device.
+    pub fn station(settings: AlertSettings) -> Self {
+        static STATION: Mutex<Weak<Mutex<AlertCore>>> = Mutex::new(Weak::new());
+        let mut slot = STATION.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(core) = slot.upgrade() {
+            return AlertRuntime { core };
+        }
+        let runtime = AlertRuntime::new(settings);
+        *slot = Arc::downgrade(&runtime.core);
+        runtime
+    }
+
+    fn core(&self) -> MutexGuard<'_, AlertCore> {
+        self.core.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A snapshot of the status, safe to read from any thread.
+    pub fn status(&self) -> AlertStatus {
+        self.core().status()
+    }
+
+    pub fn settings(&self) -> AlertSettings {
+        self.core().settings.clone()
+    }
+
+    /// Mastership goes here: whether alarms are worth listening for at all.
+    pub fn enabled(&self) -> bool {
+        self.core().settings.enabled
+    }
+
+    /// Update the configuration, for every tab at once.
+    pub fn set_settings(&mut self, settings: AlertSettings) {
+        self.core().set_settings(settings);
+    }
+
+    /// A preview alarm for the settings tab.
+    pub fn test(&self) {
+        self.core().test();
+    }
+
+    /// Feed one WSJT-style decode batch — see [`AlertCore::on_ft8`].
+    pub fn on_ft8(
+        &mut self,
+        decodes: &[Decode],
+        my_call: &str,
+        my_grid: &str,
+        log: &LogIndex,
+        band: &str,
+    ) {
+        self.core().on_ft8(decodes, my_call, my_grid, log, band);
+    }
+}
+
+impl AlertCore {
+    /// Build the runtime and, if enabled, open the device in the background.
+    fn new(settings: AlertSettings) -> Self {
+        let mut runtime = AlertCore {
             status: Arc::new(Mutex::new(AlertStatus::Idle)),
             cooldowns: Cooldown::new(),
             settings,
@@ -287,23 +359,13 @@ impl AlertRuntime {
         }
     }
 
-    /// A snapshot of the status, safe to read from any thread.
-    pub fn status(&self) -> AlertStatus {
+    fn status(&self) -> AlertStatus {
         self.status.lock().unwrap().clone()
-    }
-
-    pub fn settings(&self) -> &AlertSettings {
-        &self.settings
-    }
-
-    /// Mastership goes here: whether alarms are worth listening for at all.
-    pub fn enabled(&self) -> bool {
-        self.settings.enabled
     }
 
     /// Update the configuration. Any change to enabled/device means a new
     /// worker; the rest is read live at each decode.
-    pub fn set_settings(&mut self, settings: AlertSettings) {
+    fn set_settings(&mut self, settings: AlertSettings) {
         let device_changed = settings.device != self.settings.device;
         let enabled_changed = settings.enabled != self.settings.enabled;
         self.settings = settings;
@@ -321,14 +383,14 @@ impl AlertRuntime {
 
     /// A preview alarm for the settings tab: whatever sound the "called" rule
     /// is set to.
-    pub fn test(&self) {
+    fn test(&self) {
         self.play(self.settings.events.called.sound);
     }
 
     /// Feed one WSJT-style decode batch. Alarms intentionally do **not** wait
     /// for the window to be focused — the point is to reach the operator when
     /// they are looking at another window entirely.
-    pub fn on_ft8(
+    fn on_ft8(
         &mut self,
         decodes: &[Decode],
         my_call: &str,
@@ -584,14 +646,28 @@ mod tests {
             &log(),
             "",
         );
-        assert!(r.cooldowns.at.contains_key(&("W1ABC".to_string(), AlertEvent::Called)));
-        assert!(!r.cooldowns.at.contains_key(&("DL1ABC".to_string(), AlertEvent::Called)));
-        assert!(!r.cooldowns.at.contains_key(&("F5ABC".to_string(), AlertEvent::Called)));
+        assert!(r.core().cooldowns.at.contains_key(&("W1ABC".to_string(), AlertEvent::Called)));
+        assert!(!r.core().cooldowns.at.contains_key(&("DL1ABC".to_string(), AlertEvent::Called)));
+        assert!(!r.core().cooldowns.at.contains_key(&("F5ABC".to_string(), AlertEvent::Called)));
     }
 
     /// A sound card that stops taking samples mid-alarm must not hold the
     /// worker: the stop reaches it inside the wait, which is what lets `Drop`
     /// join it. Before, this wait only watched the ring and never returned.
+    /// Every tab asking for the station's alarm gets the same one: a setting
+    /// changed on one is the setting on all, and there is one device between
+    /// them. (Kept switched off, so no test here opens a sound card.)
+    #[test]
+    fn every_tab_shares_the_station_alarm() {
+        let mut a = AlertRuntime::station(AlertSettings::default());
+        let b = AlertRuntime::station(AlertSettings { volume: 0.1, ..Default::default() });
+        assert!(Arc::ptr_eq(&a.core, &b.core), "two tabs, two alarms");
+        a.set_settings(AlertSettings { volume: 0.3, ..Default::default() });
+        assert_eq!(b.settings().volume, 0.3, "the other tab kept its own copy");
+        // A runtime built on its own stays its own.
+        assert!(!Arc::ptr_eq(&a.core, &AlertRuntime::new(AlertSettings::default()).core));
+    }
+
     /// The batch's alarm is its most important match, wherever in the list it
     /// sits: a new entity decoded first must not stand in for a station
     /// calling us decoded after it.
@@ -608,12 +684,12 @@ mod tests {
         // The novelty on its own does ring, so the batch below is a real choice.
         let mut r = AlertRuntime::new(settings.clone());
         r.on_ft8(std::slice::from_ref(&novelty), "k1abc", "FN42", &log(), "20m");
-        assert!(r.cooldowns.at.contains_key(&("JA1ABC".to_string(), AlertEvent::NewDxcc)));
+        assert!(r.core().cooldowns.at.contains_key(&("JA1ABC".to_string(), AlertEvent::NewDxcc)));
 
         let mut r = AlertRuntime::new(settings);
         r.on_ft8(&[novelty, call], "k1abc", "FN42", &log(), "20m");
-        assert!(r.cooldowns.at.contains_key(&("DL1ABC".to_string(), AlertEvent::Called)));
-        assert!(!r.cooldowns.at.contains_key(&("JA1ABC".to_string(), AlertEvent::NewDxcc)));
+        assert!(r.core().cooldowns.at.contains_key(&("DL1ABC".to_string(), AlertEvent::Called)));
+        assert!(!r.core().cooldowns.at.contains_key(&("JA1ABC".to_string(), AlertEvent::NewDxcc)));
     }
 
     #[cfg(not(target_arch = "wasm32"))]

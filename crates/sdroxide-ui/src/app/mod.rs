@@ -289,7 +289,8 @@ pub struct SdroxideApp {
     speech_voices: Vec<String>,
     /// Audible alerts: played over a separate output, so they are heard even
     /// when the radio audio is somewhere else. Always present — switched off,
-    /// the sink is closed and the cost is a boolean per decode batch.
+    /// the sink is closed and the cost is a boolean per decode batch. One for
+    /// the whole station: every radio tab holds the same one.
     alerts: alerts::AlertRuntime,
     radio_cfg: Option<sdroxide_types::RadioConfig>,
     /// The converter offset being typed on the Radio tab, in Hz. Held apart
@@ -1266,7 +1267,7 @@ impl SdroxideApp {
             applied_ui_font: ui_settings.menu_font_size,
             speech: speech::SpeechRuntime::new(load_speech_settings(storage)),
             speech_voices: Vec::new(),
-            alerts: alerts::AlertRuntime::new(load_alerts_settings(storage)),
+            alerts: alerts::AlertRuntime::station(load_alerts_settings(storage)),
             radio_cfg: None,
             converter_edit_hz: None,
             range_edit: None,

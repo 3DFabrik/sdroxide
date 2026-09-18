@@ -979,7 +979,7 @@ impl SdroxideApp {
         let mut speech_edit = self.speech.settings().clone();
         let speech_status = self.speech.status();
         let mut speech_test = false;
-        let mut alerts_edit = self.alerts.settings().clone();
+        let mut alerts_edit = self.alerts.settings();
         let alerts_status = self.alerts.status();
         let mut alerts_test = false;
         let mut hpsdr_discover = false;
@@ -1637,7 +1637,7 @@ impl SdroxideApp {
         if speech_test {
             self.speech.announcer.say_sample(ctx.input(|i| i.time));
         }
-        if &alerts_edit != self.alerts.settings() {
+        if alerts_edit != self.alerts.settings() {
             // Live, like speech: a changed volume or rule reaches the running
             // worker on the next decode, and a changed device or master toggle
             // swaps the sink.
