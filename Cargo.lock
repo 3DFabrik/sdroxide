@@ -5008,6 +5008,7 @@ name = "sdroxide-dsp"
 version = "1.6.8"
 dependencies = [
  "deep_filter",
+ "hound",
  "ndarray",
  "nnnoiseless",
  "num-complex",

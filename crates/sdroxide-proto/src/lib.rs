@@ -1355,7 +1355,15 @@ use sdroxide_types::{
 /// decode the message carrying one. `ServerMsg` gains `Profiles`, the names
 /// to offer, appended last for the same reason: a v152 client handed the list
 /// fails to decode it.
-pub const PROTO_VERSION: u16 = 153;
+///
+/// v154: ACARS, the VHF airband airline datalink (issue #436). `Mode::Acars` is
+/// appended last, so no surviving discriminant moved, but a v153 peer has no
+/// name for it. The status rides the existing `RadioEvent::Ft8Status` /
+/// `ServerMsg::Ft8Status`, so there is no new message — but `DigiStatus` gains
+/// a trailing `acars` field, and postcard numbers struct fields by position, so
+/// a v153 peer desynchronises on the tail of every `DigiStatus`. The field is
+/// last, so no surviving field moved.
+pub const PROTO_VERSION: u16 = 154;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]
