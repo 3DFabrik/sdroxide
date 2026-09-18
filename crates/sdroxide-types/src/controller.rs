@@ -367,11 +367,8 @@ pub enum RadioEvent {
     /// the list to offer, so the payload is names — the profiles themselves
     /// live with everything else the radio remembers.
     ///
-    /// Native-engine only for now: bridging this to a remote/WASM client would
-    /// mean a matching variant in `sdroxide_proto::ServerMsg`, and while the
-    /// command works from a remote client, this list is what a remote UI would
-    /// build its row from — not done yet, for the same reason `Qo100Status`
-    /// is not.
+    /// Crosses the wire as `sdroxide_proto::ServerMsg::Profiles`, and the
+    /// server keeps the last one to replay to a client that connects later.
     ///
     /// Appended last, for the usual reason.
     Profiles(Vec<String>),

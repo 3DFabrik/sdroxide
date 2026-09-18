@@ -262,8 +262,8 @@ pub struct SdroxideApp {
     /// at start and after every save/apply/delete. Only the names — the
     /// profiles themselves stay with the radio's other remembered files.
     ///
-    /// Empty on a client that has not heard the announcement yet (a browser
-    /// client that connects late), or that the announcement is native-only.
+    /// Empty until the announcement arrives — at connect, for a remote or
+    /// browser client, which the server replays it to.
     profiles: Vec<String>,
     /// A profile was put on from this screen and the engine has not answered
     /// yet. Its answer — the profile list, announced once the apply is done —

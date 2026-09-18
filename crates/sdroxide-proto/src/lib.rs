@@ -1352,9 +1352,9 @@ use sdroxide_types::{
 /// v153: station profiles (issue #197). `Command` gains `ProfileSave`,
 /// `ProfileApply` and `ProfileDelete`, appended last so no surviving
 /// discriminant moved, but a v152 station has no name for them and fails to
-/// decode the message carrying one. `RadioEvent::Profiles` is deliberately not
-/// forwarded — there is no `ServerMsg` variant for it — so a remote client can
-/// ask for a saved profile by name but cannot list them.
+/// decode the message carrying one. `ServerMsg` gains `Profiles`, the names
+/// to offer, appended last for the same reason: a v152 client handed the list
+/// fails to decode it.
 pub const PROTO_VERSION: u16 = 153;
 const VERSION_BYTE: u8 = 0x12;
 
@@ -1799,6 +1799,15 @@ pub enum ServerMsg {
     ///
     /// Appended last, for the usual reason.
     Hd(sdroxide_types::HdRadioStatus),
+
+    /// `RadioEvent::Profiles`: the names of the station's saved profiles
+    /// (issue #197), the list the settings dialog's Profiles tab offers. Sent
+    /// on connect and after every save, apply and delete — without it a remote
+    /// screen showed "no profiles saved" beside a station full of them, and a
+    /// Save it made never appeared.
+    ///
+    /// Appended last, for the usual reason.
+    Profiles(Vec<String>),
 }
 
 /// One radio in a station's roster, as a client sees it.
@@ -1869,6 +1878,10 @@ mod tests {
         let m = ServerMsg::State(RadioState::default());
         let bytes = encode(&m).unwrap();
         let back: ServerMsg = decode(&bytes).unwrap();
+        assert_eq!(back, m);
+
+        let m = ServerMsg::Profiles(vec!["Contest".into(), "DX".into()]);
+        let back: ServerMsg = decode(&encode(&m).unwrap()).unwrap();
         assert_eq!(back, m);
 
         // The station-roster edits, and the announcement that answers them.

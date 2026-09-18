@@ -189,6 +189,7 @@ async fn run_session(
         drm,
         hd,
         relay,
+        profiles,
     ) = {
         let latest = shared.latest.lock().unwrap();
         (
@@ -214,6 +215,7 @@ async fn run_session(
             latest.drm.clone(),
             latest.hd.clone(),
             latest.relay.clone(),
+            latest.profiles.clone(),
         )
     };
     let ack = ServerMsg::HelloAck { proto: PROTO_VERSION, caps, state, rx_codec, tx_codec };
@@ -234,6 +236,7 @@ async fn run_session(
     let _ = socket.send(msg(&ServerMsg::Memories(memories))).await;
     let _ = socket.send(msg(&ServerMsg::MemoryFolders(mem_folders))).await;
     let _ = socket.send(msg(&ServerMsg::Scanner(scanner))).await;
+    let _ = socket.send(msg(&ServerMsg::Profiles(profiles))).await;
     // The operator config, which the engine announced once at startup. Without
     // this replay the client's callsign and grid come up empty and greyed out.
     if let Some(d) = digi {

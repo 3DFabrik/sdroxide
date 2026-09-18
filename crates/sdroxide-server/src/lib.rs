@@ -270,6 +270,10 @@ pub(crate) struct Latest {
     /// same position: sync and multiplex facts are standing conditions, not
     /// events.
     pub hd: Option<sdroxide_types::HdRadioStatus>,
+    /// The station's saved profile names, announced at engine start and after
+    /// every change, and replayed on connect for the same reason as
+    /// `memories`: a client that attaches later would otherwise offer nothing.
+    pub profiles: Vec<String>,
 }
 
 /// Everything the routes are served out of: the station's radios and the
@@ -1231,12 +1235,10 @@ fn handle_event(shared: &Shared, ev: RadioEvent) {
             // client's, and it is only ever asked for from the machine the
             // credentials live on. Same treatment as `RadioEvent::Notice`.
             RadioEvent::LoginTest(_) => None,
-            // Not forwarded: there is no `ServerMsg::Profiles` variant for the
-            // browser's settings dialog to build its row from (see the event's
-            // docs). A remote engine still applies a profile asked for by name,
-            // because the command crosses the wire; the list of names simply
-            // does not reach a remote screen. Same treatment as `LoginTest`.
-            RadioEvent::Profiles(_) => None,
+            RadioEvent::Profiles(p) => {
+                latest.profiles = p.clone();
+                Some(ServerMsg::Profiles(p))
+            }
         }
     };
     // The satellite half of the station config also drives this machine's own
