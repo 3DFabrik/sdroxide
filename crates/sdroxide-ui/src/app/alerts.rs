@@ -10,6 +10,8 @@
 
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
@@ -113,18 +115,28 @@ struct AlertSink {
     /// worker's failure path drains until the channel *closes*, and it can
     /// never close while this still holds a sender.
     tx: Option<SyncSender<Job>>,
+    /// Raised by [`Drop`], and read by the worker wherever it waits on the
+    /// sound card — the one wait a closed channel cannot end.
+    stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Drop for AlertSink {
     fn drop(&mut self) {
-        // Drop the sender first. The worker that failed to open a device waits
-        // for the channel to close rather than for a `Quit`, so holding the
-        // sender across the join deadlocked on quit or when alarms were turned
-        // off — the whole app froze.
+        // The flag first: a worker part-way through an alarm is waiting on the
+        // sound card, not on the channel, and a card that stopped taking
+        // samples (unplugged mid-alarm) would hold it there for ever. It also
+        // keeps the worker from playing out whatever was still queued before
+        // it reached the `Quit`, which stalled the screen for as long as that
+        // took.
+        self.stop.store(true, Ordering::Relaxed);
+        // Then the sender. The worker that failed to open a device waits for
+        // the channel to close rather than for a `Quit`, so holding the sender
+        // across the join deadlocked on quit or when alarms were turned off —
+        // the whole app froze. `try_send`, so a full queue cannot block here.
         if let Some(tx) = self.tx.take() {
-            let _ = tx.send(Job::Quit);
+            let _ = tx.try_send(Job::Quit);
         }
         if let Some(t) = self.thread.take() {
             let _ = t.join();
@@ -376,18 +388,20 @@ impl AlertRuntime {
 impl AlertSink {
     fn start(device: Option<String>, status: Arc<Mutex<AlertStatus>>) -> Self {
         let (tx, rx) = sync_channel::<Job>(16);
+        let stop = Arc::new(AtomicBool::new(false));
         let thread = {
             let status = status.clone();
+            let stop = stop.clone();
             std::thread::Builder::new()
                 .name("alerts".into())
-                .spawn(move || worker(rx, device, status))
+                .spawn(move || worker(rx, device, status, &stop))
                 .ok()
         };
         if thread.is_none() {
             *status.lock().unwrap() =
                 AlertStatus::Failed("could not start the alert thread".into());
         }
-        AlertSink { tx: Some(tx), thread }
+        AlertSink { tx: Some(tx), stop, thread }
     }
 
     fn play(&self, sound: AlertSound, volume: f32) {
@@ -409,7 +423,12 @@ const TICK: Duration = Duration::from_millis(20);
 
 /// Open the alert device and drive it until told to quit.
 #[cfg(not(target_arch = "wasm32"))]
-fn worker(rx: Receiver<Job>, device: Option<String>, status: Arc<Mutex<AlertStatus>>) {
+fn worker(
+    rx: Receiver<Job>,
+    device: Option<String>,
+    status: Arc<Mutex<AlertStatus>>,
+    stop: &AtomicBool,
+) {
     let (out, mut ring) = match sdroxide_audio::start_output(device.as_deref(), 48_000) {
         Ok(ok) => ok,
         Err(e) => {
@@ -431,6 +450,9 @@ fn worker(rx: Receiver<Job>, device: Option<String>, status: Arc<Mutex<AlertStat
     let lead = (out.sample_rate * LEAD_S) as usize;
 
     while let Ok(job) = rx.recv() {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
         match job {
             Job::Quit => break,
             Job::Play { sound, volume } => {
@@ -438,18 +460,43 @@ fn worker(rx: Receiver<Job>, device: Option<String>, status: Arc<Mutex<AlertStat
                 // never run more than `lead` stereo frames ahead of the sound
                 // card, so a tone starts when it should and the whole pattern
                 // lands within a beat of the decode.
-                for s in render(sound, out.sample_rate as u32, volume) {
-                    loop {
-                        if queued_frames(capacity, ring.slots()) < lead && ring.slots() >= 2 {
-                            break;
-                        }
-                        std::thread::sleep(TICK);
+                let pcm = render(sound, out.sample_rate as u32, volume);
+                let offer = |s| {
+                    let room = queued_frames(capacity, ring.slots()) < lead && ring.slots() >= 2;
+                    if room {
+                        let _ = ring.push(s);
                     }
-                    let _ = ring.push(s);
+                    room
+                };
+                if !push_paced(&pcm, stop, offer) {
+                    break;
                 }
             }
         }
     }
+}
+
+/// Hand `pcm` to the sound card no faster than it plays: `offer` takes a
+/// sample only when the card has room for it, and each one is offered again
+/// until it is taken. `false` when `stop` went up first.
+///
+/// The stop is read inside the wait, like the speech worker's generation, and
+/// that is the point of it. A card that has stopped taking samples — a USB
+/// headset pulled out mid-alarm — never makes room again, so a wait that only
+/// watched the ring held the worker for good, and the join in `Drop` held the
+/// screen behind it: the app froze on quit, on alerts off and on a change of
+/// device.
+#[cfg(not(target_arch = "wasm32"))]
+fn push_paced(pcm: &[f32], stop: &AtomicBool, mut offer: impl FnMut(f32) -> bool) -> bool {
+    for &s in pcm {
+        while !offer(s) {
+            if stop.load(Ordering::Relaxed) {
+                return false;
+            }
+            std::thread::sleep(TICK);
+        }
+    }
+    true
 }
 
 /// Stereo frames currently queued for the sound card.
@@ -533,6 +580,45 @@ mod tests {
         assert!(r.cooldowns.at.contains_key(&("W1ABC".to_string(), AlertEvent::Called)));
         assert!(!r.cooldowns.at.contains_key(&("DL1ABC".to_string(), AlertEvent::Called)));
         assert!(!r.cooldowns.at.contains_key(&("F5ABC".to_string(), AlertEvent::Called)));
+    }
+
+    /// A sound card that stops taking samples mid-alarm must not hold the
+    /// worker: the stop reaches it inside the wait, which is what lets `Drop`
+    /// join it. Before, this wait only watched the ring and never returned.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_card_that_stops_taking_samples_lets_the_worker_go() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let raise = {
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(60));
+                stop.store(true, Ordering::Relaxed);
+            })
+        };
+        let mut taken = 0;
+        // Room for three samples, then none ever again.
+        let finished = push_paced(&[0.1; 64], &stop, |_| {
+            let room = taken < 3;
+            taken += room as usize;
+            room
+        });
+        raise.join().unwrap();
+        assert!(!finished, "the alarm claims to have played out");
+        assert_eq!(taken, 3);
+    }
+
+    /// And a card that keeps up is handed every sample, in order.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_card_that_keeps_up_gets_the_whole_alarm() {
+        let stop = AtomicBool::new(false);
+        let mut got = Vec::new();
+        assert!(push_paced(&[0.1, 0.2, 0.3], &stop, |s| {
+            got.push(s);
+            true
+        }));
+        assert_eq!(got, [0.1, 0.2, 0.3]);
     }
 
     #[test]
