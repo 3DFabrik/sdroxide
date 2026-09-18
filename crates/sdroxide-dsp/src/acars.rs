@@ -40,7 +40,7 @@ pub const BAUD: f64 = 2400.0;
 pub struct AcarsFrame {
     /// The mode character, as text.
     pub mode: String,
-    /// The 7-character aircraft address, trimmed.
+    /// The aircraft address, its padding dots and spaces trimmed.
     pub address: String,
     /// The technical acknowledgement character.
     pub ack: String,
@@ -143,13 +143,24 @@ fn find_frame(bits: &[u8]) -> Option<(AcarsFrame, usize)> {
     failed
 }
 
+/// A received character as text: the parity bit stripped, and anything that is
+/// not printable — bar the line breaks and tab a message is laid out with —
+/// shown as `·`, so a decode error cannot put a control sequence on somebody's
+/// screen. The same rule as the VDL2 parser's.
+fn printable(b: u8) -> char {
+    match b & 0x7f {
+        c @ (b'\r' | b'\n' | b'\t' | 0x20..=0x7e) => c as char,
+        _ => '·',
+    }
+}
+
 /// Parse the header and text that follow `SOH`.
 fn parse_from(rest: &[u8]) -> Option<AcarsFrame> {
     // mode(1) address(7) ack(1) label(2) block_id(1) STX(1)
     if rest.len() < 13 {
         return None;
     }
-    let ch = |b: u8| (b & 0x7f) as char;
+    let ch = printable;
     let ck = |b: u8| -> Option<()> { parity_ok(b).then_some(()) };
     ck(rest[0])?;
     let mode = ch(rest[0]).to_string();
@@ -159,10 +170,18 @@ fn parse_from(rest: &[u8]) -> Option<AcarsFrame> {
         address.push(ch(b));
     }
     ck(rest[8])?;
-    let ack = ch(rest[8]).to_string();
+    // A negative acknowledgement is the NAK control character, written out.
+    let ack = match rest[8] & 0x7f {
+        0x15 => "NAK".to_string(),
+        c => ch(c).to_string(),
+    };
     ck(rest[9])?;
     ck(rest[10])?;
-    let label: String = [ch(rest[9]), ch(rest[10])].iter().collect();
+    // `_` and DEL is the general-response label, written `_d` by convention.
+    let label: String = match (rest[9] & 0x7f, rest[10] & 0x7f) {
+        (b'_', 0x7f) => "_d".to_string(),
+        (a, b) => [ch(a), ch(b)].iter().collect(),
+    };
     ck(rest[11])?;
     let block_id = ch(rest[11]).to_string();
     ck(rest[12])?;
@@ -206,7 +225,8 @@ fn parse_from(rest: &[u8]) -> Option<AcarsFrame> {
 
     Some(AcarsFrame {
         mode,
-        address: address.trim().to_string(),
+        // Right-aligned in its seven characters, padded with dots.
+        address: address.trim_matches(|c| c == '.' || c == ' ').to_string(),
         ack,
         label,
         block_id,
@@ -515,7 +535,7 @@ mod tests {
         let msg = sample();
         let bits = nrzi_decode(&encode(&msg));
         let got = parse_frame(&bits).expect("a frame");
-        assert_eq!(got.address, ".N12345");
+        assert_eq!(got.address, "N12345", "the padding dot is not part of it");
         assert_eq!(got.label, "H1");
         assert_eq!(got.text, "HELLO FROM ACARS");
         assert!(got.crc_ok, "the block check must verify");
@@ -536,7 +556,7 @@ mod tests {
             crc_ok: true,
         };
         let got = parse_frame(&nrzi_decode(&encode(&msg))).expect("a header-only frame");
-        assert_eq!(got.label, "_\u{7f}");
+        assert_eq!(got.label, "_d", "the general-response label, as it is written");
         assert!(got.text.is_empty());
         assert!(got.crc_ok, "the block check covers the header and ETX");
     }
@@ -589,6 +609,19 @@ mod tests {
         }
         assert!(out.is_empty(), "nothing that fails its check is emitted");
         assert_eq!(rx.bad(), 1);
+    }
+
+    /// Nothing that is not printable reaches the screen as itself: a NAK is
+    /// spelled out, and any other control character becomes a dot.
+    #[test]
+    fn control_characters_are_shown_not_sent() {
+        let mut msg = sample();
+        msg.ack = "\u{15}".into();
+        msg.text = "A\u{1b}[2JB\r\nC".into();
+        let got = parse_frame(&nrzi_decode(&encode(&msg))).expect("a frame");
+        assert_eq!(got.ack, "NAK");
+        assert_eq!(got.text, "A·[2JB\r\nC", "the escape is gone, the line break kept");
+        assert!(got.crc_ok);
     }
 
     #[test]
