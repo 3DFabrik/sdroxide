@@ -1714,6 +1714,10 @@ fn hpsdr_caps(board: &str, sample_rate: f64, protocol: u8, has_lna: bool, ddc: u
         },
         sample_rates: sdroxide_types::HpsdrConfig::rates_for(protocol).to_vec(),
         gains,
+        // The N2ADR filter board's coupler reports SWR on a Hermes-Lite 2.
+        // Without that board the needle simply stays empty; inventing watts
+        // from the raw ADC would need a calibration we do not have.
+        has_swr_sensor: hermes_lite && tx_channels > 0,
         ..DeviceCaps::default()
     }
 }

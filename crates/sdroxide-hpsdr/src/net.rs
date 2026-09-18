@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -651,6 +651,10 @@ pub(crate) struct ThreadCtx {
     /// [`HpsdrRx::pa_temp_c`]. [`TEMP_UNKNOWN`] until the board reports one —
     /// which most of them never do.
     pub temp_centi_c: Arc<AtomicI32>,
+    /// Hermes-Lite 2 slow-ADC forward and reverse power counts (AIN1 / AIN2).
+    /// [`ADC_UNKNOWN`] until a status frame carries them.
+    pub hl2_fwd: Arc<AtomicU32>,
+    pub hl2_rev: Arc<AtomicU32>,
     pub tx: Consumer<f32>,
     pub ctrl: Receiver<Ctrl>,
 }
@@ -663,6 +667,11 @@ pub(crate) struct ThreadCtx {
 /// has to be told apart from one that is genuinely 0 °C — a Hermes-Lite in a
 /// cold shack in February reads exactly that.
 pub const TEMP_UNKNOWN: i32 = i32::MIN;
+
+/// What [`ThreadCtx::hl2_fwd`] / [`ThreadCtx::hl2_rev`] hold before a
+/// Hermes-Lite has reported a coupler reading. Zero is a real idle count, so
+/// it cannot be the sentinel.
+pub const ADC_UNKNOWN: u32 = u32::MAX;
 
 /// What every stream of one connection shares. Dropping the last handle stops
 /// the stream and shuts the network thread down.
@@ -703,6 +712,9 @@ struct DevInner {
     /// The board's own temperature, hundredths of a degree — see
     /// [`TEMP_UNKNOWN`].
     temp_centi_c: Arc<AtomicI32>,
+    /// Hermes-Lite 2 coupler counts — see [`ADC_UNKNOWN`].
+    hl2_fwd: Arc<AtomicU32>,
+    hl2_rev: Arc<AtomicU32>,
     /// The TX ring's feed end, claimable exactly once — by DDC 0's stream.
     tx_endpoint: Mutex<Option<Producer<f32>>>,
     /// Which DDCs have a live [`HpsdrRx`], so one cannot be vended twice: two
@@ -853,6 +865,8 @@ impl HpsdrBoard {
         let conn_id = claim_connection(IpAddr::V4(ip));
         let radio_ptt = Arc::new(AtomicBool::new(false));
         let temp_centi_c = Arc::new(AtomicI32::new(TEMP_UNKNOWN));
+        let hl2_fwd = Arc::new(AtomicU32::new(ADC_UNKNOWN));
+        let hl2_rev = Arc::new(AtomicU32::new(ADC_UNKNOWN));
         let lna_gain_centi_db = Arc::new(AtomicI32::new((lna_gain_db * 100.0) as i32));
         let adc_overload = Arc::new(AtomicBool::new(false));
         if auto_gain.enabled && board_has_lna_gain(&board) {
@@ -883,6 +897,8 @@ impl HpsdrBoard {
             adc_overload: Arc::clone(&adc_overload),
             radio_ptt: Arc::clone(&radio_ptt),
             temp_centi_c: Arc::clone(&temp_centi_c),
+            hl2_fwd: Arc::clone(&hl2_fwd),
+            hl2_rev: Arc::clone(&hl2_rev),
             tx: tx_cons,
             ctrl: ctrl_rx,
         };
@@ -918,6 +934,8 @@ impl HpsdrBoard {
                 transmitting: Arc::new(AtomicBool::new(false)),
                 radio_ptt,
                 temp_centi_c,
+                hl2_fwd,
+                hl2_rev,
                 tx_endpoint: Mutex::new(Some(tx_prod)),
                 attached: Mutex::new(std::collections::HashSet::new()),
             }),
@@ -1214,6 +1232,28 @@ impl HpsdrRx {
             crate::net::TEMP_UNKNOWN => None,
             centi => Some(centi as f32 / 100.0),
         }
+    }
+
+    /// SWR from the Hermes-Lite 2's slow ADC (N2ADR coupler on AIN1/AIN2).
+    ///
+    /// `None` on every other board, on a stream that does not own the
+    /// transmitter, and when the coupler is not seeing enough forward RF to
+    /// trust the ratio — a board with no filter board stays silent rather than
+    /// inventing a needle.
+    pub fn tx_telemetry(&self) -> Option<sdroxide_types::TxTelemetry> {
+        if self.tx.is_none() || !board_is_hermes_lite(&self.dev.board) {
+            return None;
+        }
+        let fwd = match self.dev.hl2_fwd.load(Ordering::Relaxed) {
+            ADC_UNKNOWN => return None,
+            n => n as u16,
+        };
+        let rev = match self.dev.hl2_rev.load(Ordering::Relaxed) {
+            ADC_UNKNOWN => return None,
+            n => n as u16,
+        };
+        let swr = crate::protocol1::hl2_swr(fwd, rev)?;
+        Some(sdroxide_types::TxTelemetry { swr: Some(swr), ..Default::default() })
     }
 
     /// Stop transmitting.

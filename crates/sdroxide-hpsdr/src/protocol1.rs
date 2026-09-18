@@ -325,6 +325,13 @@ struct Ep6Info {
     /// 12-bit converter count. On a Hermes-Lite 2 this input carries the
     /// board's temperature sensor — see [`hl2_temperature_c`].
     ain5: Option<u16>,
+    /// AIN1, the second analogue reading of a status-set-1 frame. On a
+    /// Hermes-Lite 2 this is forward power from the slow ADC — the N2ADR
+    /// filter board's directional coupler, when one is fitted.
+    ain1: Option<u16>,
+    /// AIN2, the first analogue reading of a status-set-2 frame. On a
+    /// Hermes-Lite 2 this is reverse power from the same coupler.
+    ain2: Option<u16>,
 }
 
 /// Rate limiter for the two Hermes-Lite transmit faults worth shouting about.
@@ -392,9 +399,9 @@ fn hl2_status(c1: u8, c3: u8, keyed: bool, health: &mut TxHealth) {
 /// C0 bit 7, the Hermes-Lite's ACK flag:
 ///
 /// - **Clear** — the ordinary rotating status. Bits 7..3 select which sensor set
-///   C1..C4 carry; only set 0 is interpreted here, holding the ADC-overload flag
-///   and the version bytes, the two things a bring-up log needs. The power and
-///   voltage sets are board-specific and left to the caller's raw logging.
+///   C1..C4 carry. Set 0 holds the ADC-overload flag and the version bytes;
+///   sets 1 and 2 are the Hermes-Lite 2 slow ADC (temperature, forward and
+///   reverse power).
 /// - **Set** — an answer to a request we marked RQST. Bits 6..1 are the address
 ///   being answered and C1..C4 are its data. Nothing but the I2C tunnel asks for
 ///   these, so they are handed straight to it.
@@ -409,11 +416,17 @@ fn decode_ep6_status(cc: &[u8], info: &mut Ep6Info) {
             info.adc_overload |= cc[1] & 0x01 != 0;
             info.versions = Some((cc[1], cc[2], cc[3], cc[4]));
         }
-        // Set 1: C1/C2 are AIN5 and C3/C4 AIN1, both big-endian. AIN1 is
-        // forward power on a board that has a coupler wired to it, which the
-        // stock Hermes-Lite 2 has not — AIN5 is the one that means something on
-        // every HL2, and it is the temperature sensor (issue #333).
-        1 => info.ain5 = Some(u16::from_be_bytes([cc[1], cc[2]]) & 0x0FFF),
+        // Set 1 maps HL2 RADDR 0x01: temperature in C1/C2 (AIN5) and forward
+        // power in C3/C4 (AIN1). Both 12-bit, big-endian, against the 3.26 V
+        // slow-ADC reference. AIN1 is the N2ADR (or other) coupler's forward
+        // detector when one is fitted; it sits at nothing without that board.
+        1 => {
+            info.ain5 = Some(u16::from_be_bytes([cc[1], cc[2]]) & 0x0FFF);
+            info.ain1 = Some(u16::from_be_bytes([cc[3], cc[4]]) & 0x0FFF);
+        }
+        // Set 2 maps HL2 RADDR 0x02: reverse power in C1/C2 (AIN2). The rest of
+        // the word is PA current, which is not shown yet.
+        2 => info.ain2 = Some(u16::from_be_bytes([cc[1], cc[2]]) & 0x0FFF),
         _ => {}
     }
 }
@@ -446,6 +459,27 @@ fn hl2_temperature_c(count: u16) -> Option<f32> {
     Some((3.26 * f32::from(count) / 4096.0 - 0.5) / 0.01)
 }
 
+/// Counts below this are treated as "the coupler is not seeing RF" rather than
+/// as a match. The N2ADR detectors sit around a millivolt in receive and a
+/// couple of volts into a dummy load at 5 W; 64 is ~50 mV, well clear of the
+/// idle floor and still below a weak over.
+const HL2_SWR_MIN_FWD: u16 = 64;
+
+/// SWR from a Hermes-Lite 2's forward and reverse slow-ADC counts.
+///
+/// The detectors report RF *voltage*, so Γ is the ratio of the raw counts and
+/// SWR is `(1+Γ)/(1-Γ)` — the same arithmetic SparkSDR, Quisk and Thetis use,
+/// and the one that does not need a watt calibration. `None` when there is not
+/// enough forward voltage to trust the ratio, which is also how a board with
+/// no coupler stays silent rather than inventing a needle.
+pub(crate) fn hl2_swr(fwd: u16, rev: u16) -> Option<f32> {
+    if fwd < HL2_SWR_MIN_FWD {
+        return None;
+    }
+    let gamma = (f32::from(rev) / f32::from(fwd)).clamp(0.0, 0.999);
+    Some(((1.0 + gamma) / (1.0 - gamma)).min(99.9))
+}
+
 /// Decode an EP6 (radio→host) datagram, appending interleaved I,Q floats.
 /// Returns `None` if the datagram is not a valid EP6 frame.
 fn decode_ep6(d: &[u8], out: &mut Vec<f32>) -> Option<Ep6Info> {
@@ -459,6 +493,8 @@ fn decode_ep6(d: &[u8], out: &mut Vec<f32>) -> Option<Ep6Info> {
         ack: None,
         versions: None,
         ain5: None,
+        ain1: None,
+        ain2: None,
     };
     for f in 0..2 {
         let frame = &d[8 + f * 512..8 + f * 512 + 512];
@@ -524,6 +560,8 @@ pub(crate) fn run(ctx: ThreadCtx) {
         adc_overload: overload_line,
         radio_ptt: ptt_line,
         temp_centi_c,
+        hl2_fwd,
+        hl2_rev,
         mut tx,
         ctrl,
     } = ctx;
@@ -788,6 +826,18 @@ pub(crate) fn run(ctx: ThreadCtx) {
                     if hermes_lite && let Some(c) = info.ain5.and_then(hl2_temperature_c) {
                         temp_centi_c.store((c * 100.0) as i32, Ordering::Relaxed);
                     }
+                    // The N2ADR (or other) coupler, on the same slow ADC as the
+                    // temperature. Raw 12-bit counts; SWR is computed when a
+                    // caller asks, so a board with no coupler just sits at
+                    // idle and reports nothing.
+                    if hermes_lite {
+                        if let Some(fwd) = info.ain1 {
+                            hl2_fwd.store(u32::from(fwd), Ordering::Relaxed);
+                        }
+                        if let Some(rev) = info.ain2 {
+                            hl2_rev.store(u32::from(rev), Ordering::Relaxed);
+                        }
+                    }
                     // An overloaded ADC is the classic "the signal looks weird"
                     // fault: everything intermodulates and the noise floor
                     // jumps. Rate-limit the warning, it can fire every datagram.
@@ -1013,6 +1063,8 @@ mod tests {
             ack: None,
             versions: None,
             ain5: None,
+            ain1: None,
+            ain2: None,
         };
         // Status set 0, PTT closed, ADC overloaded, versions in C2..C4.
         decode_ep6_status(&[0x01, 0x01, 0x11, 0x22, 0x33], &mut info);
@@ -1029,12 +1081,15 @@ mod tests {
             ack: None,
             versions: None,
             ain5: None,
+            ain1: None,
+            ain2: None,
         };
-        // Set 2 (power/voltage): not versions, and not the temperature either.
+        // Set 2 (reverse power): not versions, and not the temperature either.
         decode_ep6_status(&[0x10, 0xFF, 0xFF, 0xFF, 0xFF], &mut other);
         assert!(!other.adc_overload);
         assert_eq!(other.versions, None);
         assert_eq!(other.ain5, None);
+        assert_eq!(other.ain2, Some(0x0FFF));
     }
 
     /// Issue #333: a Hermes-Lite 2 reports its board temperature on AIN5, in
@@ -1050,6 +1105,8 @@ mod tests {
             ack: None,
             versions: None,
             ain5: None,
+            ain1: None,
+            ain2: None,
         };
         decode_ep6_status(&cc, &mut info);
         assert_eq!(info.ain5, Some(0x078B));
@@ -1075,11 +1132,51 @@ mod tests {
             ack: None,
             versions: None,
             ain5: None,
+            ain1: None,
+            ain2: None,
         };
         decode_ep6_status(&[0x00, 0x01, 0x02, 0x03, 0x04], &mut info);
         assert!(info.ain5.is_none());
         assert_eq!(info.versions, Some((0x01, 0x02, 0x03, 0x04)));
         assert!(info.adc_overload);
+    }
+
+    /// The N2ADR coupler rides the same slow ADC as the temperature: forward
+    /// power in status set 1 (AIN1) and reverse in set 2 (AIN2).
+    #[test]
+    fn a_hermes_lite_reports_forward_and_reverse_power_on_the_slow_adc() {
+        let mut info = Ep6Info {
+            seq: 0,
+            ptt: false,
+            adc_overload: false,
+            ack: None,
+            versions: None,
+            ain5: None,
+            ain1: None,
+            ain2: None,
+        };
+        // Set 1: temperature 0x078B, forward 0x0EBB (~3 V into a dummy load).
+        decode_ep6_status(&[1u8 << 3, 0x07, 0x8B, 0x0E, 0xBB], &mut info);
+        assert_eq!(info.ain5, Some(0x078B));
+        assert_eq!(info.ain1, Some(0x0EBB));
+        decode_ep6_status(&[2u8 << 3, 0x00, 0x02, 0x00, 0x00], &mut info);
+        assert_eq!(info.ain2, Some(0x0002));
+    }
+
+    #[test]
+    fn hl2_swr_from_coupler_counts() {
+        // Idle / no coupler: not enough forward RF.
+        assert_eq!(hl2_swr(0, 0), None);
+        assert_eq!(hl2_swr(20, 0), None);
+        // Dummy load: a couple of volts forward, a millivolt reverse → ~1:1.
+        let dummy = hl2_swr(3770, 2).expect("a reading");
+        assert!((dummy - 1.0).abs() < 0.01, "{dummy}");
+        // Equal voltages are a dead short as far as the ratio can tell.
+        let flat = hl2_swr(1000, 1000).expect("a reading");
+        assert!(flat >= 99.0, "{flat}");
+        // Γ = 1/3 → SWR = 2:1.
+        let two = hl2_swr(300, 100).expect("a reading");
+        assert!((two - 2.0).abs() < 0.01, "{two}");
     }
 
     /// A converter puts the radio on an intermediate frequency, and the
