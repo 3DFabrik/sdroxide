@@ -334,9 +334,8 @@ impl SdroxideApp {
                 self.cw_key_down = down;
                 cmds.push(Command::CwKey(down));
             }
-            // Swallow the press so a PTT bound to Space, or the search box's
-            // catch-all, does not fire under a keyed hand as well.
-            ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space));
+            // The press itself was taken from everything else before the key
+            // bindings ran — see `swallow_straight_key`.
         } else if self.cw_key_down {
             // The mode went off, the keyboard was taken, or another radio has
             // it now — either way a key let go of the rig mid-character would
@@ -462,6 +461,29 @@ impl SdroxideApp {
         });
         self.cw_macro_row(ui, cmds, tx_ok, &my_call);
         ui.add_space(bottom_pad);
+    }
+
+    /// Take the Space bar away from everything else while it is the straight
+    /// key (issue #322).
+    ///
+    /// Called ahead of `control_inputs`, because the key bindings are polled
+    /// before any panel draws: swallowing the press in the panel came a frame
+    /// section too late, and a PTT bound to Space — the Controls tab offers it
+    /// in one click — keyed a carrier under the operator's hand as well. Only
+    /// the *events* go. egui keeps which keys are held apart from them, and that
+    /// is what the panel reads the key from.
+    ///
+    /// Nothing is taken while a widget holds the keyboard: a space there is
+    /// text, the straight key is not reading it, and the bindings stand down on
+    /// their own.
+    pub(in crate::app) fn swallow_straight_key(&self, ctx: &egui::Context) {
+        if !self.cw_straight || !self.tx_capable() {
+            return;
+        }
+        if ctx.egui_wants_keyboard_input() || ctx.memory(|m| m.focused()).is_some() {
+            return;
+        }
+        ctx.input_mut(|i| i.events.retain(|e| !is_straight_key_event(e)));
     }
 
     /// The operator's own message buttons, and the chip that edits them.
@@ -791,5 +813,68 @@ impl SdroxideApp {
         if changed && self.digi_cfg_seeded {
             cmds.push(Command::SetDigiConfig(self.digi_cfg_edit.clone()));
         }
+    }
+}
+
+/// A Space press — auto-repeat included — or the space it types: what the
+/// straight key keeps from the rest of the screen while it is engaged. The
+/// release is left alone; a binding holds nothing it never saw pressed, so it
+/// reaches nothing.
+fn is_straight_key_event(e: &egui::Event) -> bool {
+    match e {
+        egui::Event::Key { key: egui::Key::Space, pressed: true, .. } => true,
+        egui::Event::Text(t) => t == " ",
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn space(pressed: bool) -> egui::Event {
+        egui::Event::Key {
+            key: egui::Key::Space,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    /// The press goes and the key stays down: a binding polled after the swallow
+    /// never sees Space pressed, and the straight key still reads it held.
+    #[test]
+    fn swallowing_the_press_leaves_the_key_held() {
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            events: vec![space(true), egui::Event::Text(" ".into())],
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw, |ui| {
+            ui.ctx().input_mut(|i| i.events.retain(|e| !is_straight_key_event(e)));
+            ui.input(|i| {
+                assert!(!i.key_pressed(egui::Key::Space), "a binding would still fire");
+                assert!(i.key_down(egui::Key::Space), "the straight key lost its key");
+                assert!(i.events.is_empty(), "the typed space survived: {:?}", i.events);
+            });
+        });
+        // No renderer here to take the font atlas the first frame builds.
+        out.textures_delta.clear();
+    }
+
+    /// Only Space is taken. Every other key, the release, and text that merely
+    /// contains a space all pass.
+    #[test]
+    fn nothing_but_the_space_press_is_taken() {
+        assert!(!is_straight_key_event(&space(false)));
+        assert!(!is_straight_key_event(&egui::Event::Text("a b".into())));
+        assert!(!is_straight_key_event(&egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }));
     }
 }

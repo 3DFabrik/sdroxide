@@ -230,6 +230,9 @@ impl eframe::App for SdroxideApp {
             // An open manual takes the scrolling keys before the bindings run,
             // so reading it never tunes the radio at the same time.
             self.help.grab_keys(&ctx);
+            // Likewise the CW straight key takes the Space bar, so a PTT bound
+            // to it does not key the rig under the operator's hand.
+            self.swallow_straight_key(&ctx);
             self.control_inputs(&ctx, now, &mut cmds);
         }
         // (An unfocused pane's MIDI backlog is discarded in `drain_events`,
