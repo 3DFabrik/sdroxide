@@ -1068,4 +1068,22 @@ pub enum Command {
     SetHdProgram {
         program: u8,
     },
+
+    /// CW: use the PC keyboard as a straight key (issue #322) — engage (true)
+    /// or leave (false) the mode. Typed text is keyed to its timing queue; a
+    /// straight key cannot be a queue, so this hands the whole keyer over to
+    /// [`Command::CwKey`]. Refused (harmlessly) where the rig keys itself from
+    /// text and a hand keyed into its sound card would go nowhere.
+    ///
+    /// Appended for the usual reason — postcard numbers variants by position.
+    CwStraight(bool),
+
+    /// CW, with the straight key engaged: the key's position — down (true)
+    /// while a key is held, up (false) when it is released. Sent on each
+    /// change, never per frame: a held key is one press, and a repeat of down
+    /// from a stale frame would be a dit inside whatever the operator is
+    /// sending.
+    ///
+    /// Appended for the usual reason too.
+    CwKey(bool),
 }

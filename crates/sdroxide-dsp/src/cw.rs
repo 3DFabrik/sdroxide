@@ -1226,6 +1226,15 @@ pub struct CwTx {
     /// True once anything has been queued, so the first character does not get
     /// an inter-character gap in front of it.
     started: bool,
+    /// Manual keying (issue #322): a pc keyboard held down as a straight key.
+    ///
+    /// In manual mode the queue of timed elements is ignored — nothing from it
+    /// may cut across the operator's hand — and `next_block` becomes a switch:
+    /// tone while [`Self::held`] is down, silence while it is up, both through
+    /// the same raised-cosine envelope.
+    manual: bool,
+    /// The straight key's present position while manual keying is engaged.
+    held: bool,
 }
 
 impl CwTx {
@@ -1245,6 +1254,8 @@ impl CwTx {
             shape: 0.0,
             shape_step: 1.0 / (SHAPE_MS * 1e-3 * rate as f32).max(1.0),
             started: false,
+            manual: false,
+            held: false,
         }
     }
 
@@ -1334,6 +1345,55 @@ impl CwTx {
         self.sent_chars
     }
 
+    /// Turn manual keying on or off (issue #322). Coming in, everything the
+    /// timed keyer had queued or partially sent is dropped: the keyer is about
+    /// to hand the operator the frequency, and a half-typed automatic message
+    /// surfacing between dits would be the last thing they expected to hear.
+    pub fn set_manual(&mut self, manual: bool) {
+        self.clear();
+        self.manual = manual;
+        if !manual {
+            self.held = false;
+        }
+    }
+
+    /// The straight key up or down, while manual keying is engaged.
+    pub fn set_held(&mut self, down: bool) {
+        self.held = down && self.manual;
+    }
+
+    /// Whether the straight key is down.
+    pub fn held(&self) -> bool {
+        self.held
+    }
+
+    /// A block of straight-key sidetone, rendered straight at `out_rate`.
+    ///
+    /// The timed keyer runs at the CW rate in `TX_CHUNK`-sized pieces and is
+    /// resampled, so reading the key once per piece quantises every element to
+    /// that piece — 50 ms at 400 samples of 8 kHz, longer than a dit at any
+    /// speed worth sending. Manual keying has no queue to protect, so it
+    /// renders at the rate its caller asked for and reads the key once per
+    /// sample instead, leaving the resolution at the engine's own block.
+    pub fn next_manual_block(&mut self, out: &mut [f32], out_rate: f64) {
+        let inc = std::f64::consts::TAU * self.pitch / out_rate;
+        let step = 1.0 / (SHAPE_MS * 1e-3 * out_rate as f32).max(1.0);
+        for s in out.iter_mut() {
+            let target = if self.held { 1.0 } else { 0.0 };
+            self.shape = if self.shape < target {
+                (self.shape + step).min(target)
+            } else {
+                (self.shape - step).max(target)
+            };
+            let amp = 0.5 - 0.5 * (std::f32::consts::PI * self.shape).cos();
+            self.ph += inc;
+            if self.ph > std::f64::consts::TAU {
+                self.ph -= std::f64::consts::TAU;
+            }
+            *s = amp * self.ph.sin() as f32;
+        }
+    }
+
     /// Samples of keying still to go out, the element in progress included.
     pub fn queued_samples(&self) -> usize {
         self.q.iter().map(|k| k.samples).sum::<usize>() + self.cur_left
@@ -1344,7 +1404,14 @@ impl CwTx {
     }
 
     /// True once every queued element has gone out and the envelope has closed.
+    ///
+    /// Manual keying settles the moment the straight key is up again and the
+    /// envelope has closed — after that the keyer is just a switch neither
+    /// closed nor opening.
     pub fn drained(&self) -> bool {
+        if self.manual {
+            return !self.held && self.shape <= 0.0;
+        }
         self.q.is_empty() && self.cur_left == 0 && self.shape <= 0.0
     }
 
@@ -1360,6 +1427,13 @@ impl CwTx {
 
     /// Fill `out` with the next block of sidetone.
     pub fn next_block(&mut self, out: &mut [f32]) {
+        // Manual keying: the operator's hand is the timing, and nothing from
+        // the timed queue may surface between their elements. Rendered by the
+        // straight-key path, at this keyer's own rate.
+        if self.manual {
+            self.next_manual_block(out, self.rate);
+            return;
+        }
         let inc = std::f64::consts::TAU * self.pitch / self.rate;
         for s in out.iter_mut() {
             if self.cur_left == 0 {

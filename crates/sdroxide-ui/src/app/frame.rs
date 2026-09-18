@@ -1168,6 +1168,13 @@ impl SdroxideApp {
                         // keyed again the moment transmit came on. A QSY rebuilds
                         // nothing, and takes the half-typed over with it.
                         self.text_tx.clear();
+                        // The keyboard-as-straight-key toggle lives in the
+                        // panel; the keyer lives in the engine. The two are
+                        // kept in step only while the panel draws, so a
+                        // mode change drops the latch and lets a fresh
+                        // controller start unheld (issue #322).
+                        self.cw_straight = false;
+                        self.cw_key_down = false;
                     } else if qsy_clears_decodes(prev_band, self.state.band, self.state.rx[0].mode)
                     {
                         self.clear_digi_band_rx();
@@ -1736,8 +1743,18 @@ impl SdroxideApp {
             show_memories,
             show_voice,
             caps,
+            cw_key_down,
             ..
         } = self;
+        // The keyboard straight key is held by the operator's hand rather than
+        // by an input binding, so `release_all` knows nothing about it: without
+        // this, switching away from the tab with the key down left the carrier
+        // on until the operator came back (issue #322). The *mode* stays
+        // engaged — only the key goes up.
+        if *cw_key_down {
+            *cw_key_down = false;
+            cmds.push(Command::CwKey(false));
+        }
         let rig_squelch = caps.as_ref().is_some_and(|c| c.commands_squelch);
         let mut sink = crate::input::UiSink {
             view,

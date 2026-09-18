@@ -1344,7 +1344,11 @@ use sdroxide_types::{
 /// `ProbeAnswer::PublicSdrs`: a v150 client handed a receiver from that
 /// directory fails to decode the whole answer, and its browse window stays
 /// empty rather than showing the two lists it does know.
-pub const PROTO_VERSION: u16 = 151;
+///
+/// v152: the CW keyboard straight key (issue #322). `Command::CwStraight` and
+/// `Command::CwKey`, appended last so no surviving discriminant moved, but a
+/// v151 peer has no name for either and fails to decode the message carrying it.
+pub const PROTO_VERSION: u16 = 152;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]
