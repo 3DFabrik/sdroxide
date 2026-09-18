@@ -9416,8 +9416,10 @@ impl Engine {
 
             ProfileApply(name) => {
                 // A profile moves the dial, the mode and the transmit setup
-                // under whatever is on the air, so it waits for the over.
-                if self.tx_active || self.state.tx.ptt {
+                // under whatever is on the air, so it waits for the over — by
+                // any route: keyed at the radio, or a message the rig's own
+                // keyer is sending, as well as our own key.
+                if self.on_air() || self.state.tx.ptt {
                     self.notice(
                         "Wait for the transmission to finish before putting a profile on.",
                     );
