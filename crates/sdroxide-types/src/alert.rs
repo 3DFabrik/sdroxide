@@ -221,6 +221,19 @@ impl AlertEvent {
         }
     }
 
+    /// How much this event matters beside the others, most first: the order
+    /// [`Self::for_decode`] tries them in. When one batch of decodes matches
+    /// more than one event, the alarm is for the one ranked first.
+    pub fn rank(self) -> u8 {
+        match self {
+            AlertEvent::Called => 0,
+            AlertEvent::NewDxcc => 1,
+            AlertEvent::NewDxccBand => 2,
+            AlertEvent::NewGrid => 3,
+            AlertEvent::Cq => 4,
+        }
+    }
+
     /// The alert a decode deserves, or `None` when it triggers none.
     ///
     /// The same tests the decode list makes its badges from: addressed-to-us
@@ -340,6 +353,36 @@ mod tests {
         assert!(!s.events.cq.enabled, "directed CQs would beep a hundred times a minute");
         assert!(s.events.called.enabled, "a station calling us is the headline alert");
         assert!(s.events.new_dxcc.enabled);
+    }
+
+    /// The rank is the order `for_decode` settles a single decode in: a
+    /// decode that is all of them at once is a call, then each novelty below
+    /// the one before, and a CQ last.
+    #[test]
+    fn the_rank_is_the_order_a_decode_is_judged_in() {
+        let everything =
+            Novelty { new_dxcc: true, new_dxcc_band: true, new_grid: true, ..Novelty::default() };
+        let d = |to: Option<&str>| {
+            let d = dec(to, Some("OE3ABC"), true, None);
+            Decode { message: "CQ OE3ABC JO63".to_string(), ..d }
+        };
+        let mut seen = vec![AlertEvent::for_decode(&d(Some("DL1ABC")), "DL1ABC", "JO63", everything)];
+        seen.push(AlertEvent::for_decode(&d(None), "DL1ABC", "JO63", everything));
+        seen.push(AlertEvent::for_decode(
+            &d(None),
+            "DL1ABC",
+            "JO63",
+            Novelty { new_dxcc: false, ..everything },
+        ));
+        seen.push(AlertEvent::for_decode(
+            &d(None),
+            "DL1ABC",
+            "JO63",
+            Novelty { new_grid: true, ..Novelty::default() },
+        ));
+        seen.push(AlertEvent::for_decode(&d(None), "DL1ABC", "JO63", Novelty::default()));
+        let ranks: Vec<u8> = seen.iter().map(|e| e.expect("every step matches").rank()).collect();
+        assert_eq!(ranks, [0, 1, 2, 3, 4]);
     }
 
     #[test]

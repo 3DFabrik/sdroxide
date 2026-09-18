@@ -344,6 +344,13 @@ impl AlertRuntime {
         if my_call.is_empty() {
             return;
         }
+        // One alarm per batch. A busy slot carries a dozen decodes and more
+        // than one of them can match — all sixteen ringing one after another
+        // says less than one does, and takes half a minute to say it. That one
+        // is the match that matters most, not the first in the list: the list
+        // is in decode order, and a new grid decoded ahead of a station calling
+        // us must not be what silences the call.
+        let mut best: Option<(AlertEvent, &str)> = None;
         for d in decodes {
             let Some(from) = d.from.as_deref() else { continue };
             let novelty = log.novelty(from, d.grid.as_deref(), band);
@@ -356,13 +363,13 @@ impl AlertRuntime {
             if !self.cooldowns.eligible(from, event) {
                 continue;
             }
+            if best.is_none_or(|(b, _)| event.rank() < b.rank()) {
+                best = Some((event, from));
+            }
+        }
+        if let Some((event, from)) = best {
             self.play(event.rule(&self.settings.events).sound);
             self.cooldowns.mark(from, event);
-            // One alarm per batch. A busy slot carries a dozen decodes and more
-            // than one of them can match — all sixteen ringing one after another
-            // says less than the first one does, and takes half a minute to say
-            // it.
-            break;
         }
     }
 
@@ -585,6 +592,30 @@ mod tests {
     /// A sound card that stops taking samples mid-alarm must not hold the
     /// worker: the stop reaches it inside the wait, which is what lets `Drop`
     /// join it. Before, this wait only watched the ring and never returned.
+    /// The batch's alarm is its most important match, wherever in the list it
+    /// sits: a new entity decoded first must not stand in for a station
+    /// calling us decoded after it.
+    #[test]
+    fn a_call_further_down_the_batch_outranks_a_novelty_above_it() {
+        let mut settings = AlertSettings { enabled: true, ..Default::default() };
+        settings.events.called.enabled = true;
+        settings.events.new_dxcc.enabled = true;
+        // Two other stations working each other, from an entity this empty log
+        // has never had — and then someone calling us.
+        let novelty = dec(Some("W2AAA"), Some("JA1ABC"), false);
+        let call = dec(Some("K1ABC"), Some("DL1ABC"), false);
+
+        // The novelty on its own does ring, so the batch below is a real choice.
+        let mut r = AlertRuntime::new(settings.clone());
+        r.on_ft8(std::slice::from_ref(&novelty), "k1abc", "FN42", &log(), "20m");
+        assert!(r.cooldowns.at.contains_key(&("JA1ABC".to_string(), AlertEvent::NewDxcc)));
+
+        let mut r = AlertRuntime::new(settings);
+        r.on_ft8(&[novelty, call], "k1abc", "FN42", &log(), "20m");
+        assert!(r.cooldowns.at.contains_key(&("DL1ABC".to_string(), AlertEvent::Called)));
+        assert!(!r.cooldowns.at.contains_key(&("JA1ABC".to_string(), AlertEvent::NewDxcc)));
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_card_that_stops_taking_samples_lets_the_worker_go() {
