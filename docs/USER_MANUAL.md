@@ -1879,6 +1879,37 @@ characters as well, or it will drop out between them however the text arrives.
   either way: type `ä`, `ö`, `å` (or `æ`, `ø`, `à`, and the Polish and
   Esperanto letters that share their codes) and the keyer sends the code.
 
+**The keyboard as a straight key.** **KEY**, beside **TX** in the sending row,
+turns the Space bar into a hand key: the carrier is on while you hold it and off
+when you let go, and the timing is entirely yours — **WPM** and Farnsworth do
+not apply. Switching it on drops whatever the keyer still had queued, so a
+half-sent message never surfaces between your elements, and locks the transmit
+box so a space cannot type into it.
+
+- The first press keys the transmitter; there is no need to press **TX**. Between
+  elements the transmitter holds the frequency the way **TX** does, and releases
+  itself after five seconds with the key up.
+- The Space bar is only the key while nothing on screen has the keyboard — a
+  caret in any text field means you are typing — and only on the radio that
+  holds the keyboard, so in a split view the key never reaches the radio beside
+  it. While **KEY** is on, Space is also taken from the key bindings: a
+  hold-to-talk bound to Space ([6.4.1](#641-keyboard)) does not key a carrier
+  under your hand as well.
+- **A key held down for 30 seconds is taken as a lost key-up** — a stuck key, a
+  client that went away — rather than a hand: the carrier drops, transmit
+  switches off, and a yellow **WATCHDOG** chip says why. Press the key again to
+  carry on.
+- Switching to another radio tab or another window lifts the key, and so does a
+  remote client disconnecting. **KEY** itself stays on.
+- A key-down the station refuses — outside a band you may transmit in, another
+  radio already on the air — lifts the key and leaves **KEY** on, so the next
+  press tries again.
+- Changing mode switches **KEY** off.
+
+It works wherever sdroxide makes the CW signal itself: an IQ radio, or a CAT
+radio keyed as MCW audio. A CAT radio sending text through its own keyer has
+nothing a hand key can drive, and **KEY** does nothing there.
+
 > **Transmitting** on an IQ radio (SoapySDR, HPSDR, TCI, SmartSDR) is the
 > keyer building its own sideband signal. On a CAT radio the keyer transmits by
 > the route the **CW keying** setting picks: text handed to the rig's own keyer
@@ -2240,7 +2271,8 @@ changes state. The interlock releases on unkey.
 
 **What is shared and what is per-radio.** Memory channels, memory folders,
 band stacks, the digital-mode operator settings (callsign, grid, templates),
-the logbook, spots and awards belong to the operator, and are shared: save a
+the saved profiles ([6.12](#612-profiles-saved-station-setups)), the logbook,
+spots and awards belong to the operator, and are shared: save a
 memory on one radio and it appears on the others. The dial, mode, filter,
 session restore, scanner setup and the built-in servers (TCI, rigctld,
 WSJT-X) belong to each radio. Each radio's servers have their own
@@ -6082,13 +6114,14 @@ look like.
 
 Everything that configures sdroxide lives in one window, opened with the
 **⚙ SETTINGS** button in the System module (the **⚙ SETUP** button in the SPOTS
-window opens the same dialog on its Spots tab). Twelve tabs run across the top:
+window opens the same dialog on its Spots tab). Fourteen tabs run across the top:
 
 | Tab | What it holds |
 | --- | --- |
 | **General** | Which version this is, your callsign, grid and IARU region, the sound devices, and who may connect remotely. [6.1](#61-general-station-audio-and-remote-access) |
 | **Radio** | Which rig sdroxide talks to, and how. [6.2](#62-radio-choosing-and-configuring-the-rig) |
 | **UI** | Frame rate, waterfall palette, spectrum background, spot label colours, 3D cloud rendering, and the spoken announcements. [6.3](#63-ui-display-preferences-and-voice-announcements) |
+| **Alerts** | Sounds that ring when a decode matters: a station calling you, a new DXCC entity or grid. [Audible alerts](#audible-alerts) |
 | **Controls** | Keyboard, mouse and MIDI bindings. [6.4](#64-controls-keyboard-mouse-and-midi) |
 | **Spots** | DX cluster, POTA, SOTA and PSK Reporter feeds, and the broadcast station list. [6.5](#65-spots-spot-feeds) |
 | **FreeDV** | FreeDV Reporter (qso.freedv.org). [6.6](#66-freedv-freedv-reporter) |
@@ -6098,6 +6131,7 @@ window opens the same dialog on its Spots tab). Twelve tabs run across the top:
 | **T/R switch** | The relay that grounds the SDR's antenna while the station transmits, and the sequencer around it. [6.11](#611-tr-switch-protecting-the-receiver-on-transmit) |
 | **Remote** | The address of an sdroxide server elsewhere, and the button that connects to it. [8.2](#82-connect-a-native-remote-client) |
 | **TLE** | Satellites to track beyond the amateur set, and their frequencies. [6.10](#610-tle-satellites-and-their-frequencies) |
+| **Profiles** | Named snapshots of how the station is set up, put back on in one click. [6.12](#612-profiles-saved-station-setups) |
 
 Most settings take effect the moment you change them. The ones that open or
 rebind a connection — the radio itself, the spot feeds, FreeDV Reporter, and the
@@ -6109,21 +6143,22 @@ Settings are written to the per-user config directory ([§13](#13-configuration-
 display preferences to `config.toml`, the radio to `radio.json`, key/mouse/MIDI
 bindings to `input.json`, feeds and credentials to `net.json`, the two servers
 to `rigctld.json`, `tciserver.json` and `wsjtx.json`, the satellite
-additions to `satellites.json`, and the transmit/receive switch to `relay.json`.
+additions to `satellites.json`, the transmit/receive switch to `relay.json`,
+and the saved setups to `profiles.json`.
 
 Most of those files describe the *station*, not the screen: the feeds it
 connects to, the servers it offers, the satellites it tracks, the radio it has.
 They live on the machine the radio engine runs on, and the engine tells every
 client what they say — so the **Radio**, **Spots**, **FreeDV**, **Uploads**,
-**Winlink**, **Servers** and **TLE** tabs show, and change, the real thing
+**Winlink**, **Servers**, **TLE** and **Profiles** tabs show, and change, the real thing
 whether you are at the shack machine, on a native remote client or in a browser tab. The **T/R switch**
 tab is the same kind of thing — the relay is bolted to the antenna, not to your
 desk — with one difference worth knowing before you use it from away: its
 **TEST** buttons operate real hardware in a room you are not in. (The Radio tab
 keeps back the parts that are about a *machine* rather than about the radio:
 which interface to open, and the buttons that scan a bus or test an address. See
-[8.4](#84-what-to-know).) `input.json` and the `[ui]` half of
-`config.toml` are the exception, and belong to the screen in front of you: a
+[8.4](#84-what-to-know).) `input.json` and the `[ui]`, `[speech]` and `[alerts]`
+tables of `config.toml` are the exception, and belong to the screen in front of you: a
 display preference and a knob on your desk have nothing to do with the radio in
 the other room — and so does the `[remote_server]` address on the **Remote**
 tab, which is where *this* screen goes rather than anything about the station it
@@ -11061,6 +11096,49 @@ sdroxide also exposes its whole window to the platform screen reader — NVDA on
 Windows, Orca on Linux, VoiceOver on macOS — so the controls can be navigated
 and read as well as heard.
 
+#### Audible alerts
+
+The **Alerts** tab is the other half of the same idea, aimed the other way: the
+announcements read out what *changed*, the alerts ring when a *decode matters*.
+They listen to the FT8, FT4, FT2 and JS8 decodes, and they ring whether or not
+sdroxide's window is in front — reaching you while you are looking at something
+else is what they are for. Tick **Sound an alarm when a decode matters** to switch
+them on; they are off until you do, and they need your callsign
+([6.1](#61-general-station-audio-and-remote-access)) to know which calls are for
+you.
+
+- **Volume** — independent of the AF gain.
+- **Output** — the sound device the alarm plays on. It has its own output stream,
+  so it can be a different device from the receiver: the band in the
+  headphones, the alarm in the room.
+- **Test** plays the sound set for a station calling you. Beside it is the
+  device in use, or why it could not be opened.
+
+**What to sound** has a switch and a sound — **Ding**, **Two-tone**, **Triplet**,
+**Warble** or **Digital**, all generated on the spot — for each of five events:
+
+| Event | On by default | Rings for |
+| --- | --- | --- |
+| **A station is calling me** | yes | A decode addressed to your callsign, including a Fox's RR73 to you in Hound mode |
+| **A CQ I could answer** | no | A plain CQ, an activity CQ (`CQ POTA`, `CQ TEST` …), `CQ DX` from another entity, or a CQ aimed at your continent or your country — the same test the decode list uses. Off because a busy band is a hundred of these a minute |
+| **New DXCC entity** | yes | A station from an entity your logbook has never had, on any band |
+| **New entity on this band** | yes | An entity in the log, but not from this band |
+| **New grid square** | yes | A grid square the log has never had |
+
+A decode that is several of these at once rings for the first in that list, in
+the order calling you, new entity, new on the band, new grid, CQ. One batch of
+decodes rings **once**, for the most important match in it wherever it sits in
+the list — a slot full of new stations says no more as sixteen alarms than as
+one. After it rings, that station stays quiet for that event for a while — a
+minute for a call, 45 seconds for a CQ, two minutes for a grid and five for an
+entity — so a new entity calling CQ all evening does not ring all evening.
+
+The settings are stored in `config.toml` under `[alerts]` and belong to the
+screen in front of you, like the announcements. On a station with several radios
+there is one alarm for all of them: every radio tab shares the same settings and
+the same output. A browser client keeps the settings but has no sound for them
+yet.
+
 ### 6.4 Controls: keyboard, mouse and MIDI
 
 Everything sdroxide can be told to do is an **action** — tune, PTT, change band,
@@ -11960,6 +12038,50 @@ J16 open-collector outputs; see [6.2.3](#623-hpsdr-network-radios).
 - **Reporting a fault.** Settings → Radio → the diagnostic report includes what
   the switch was told and what it answered. On these boards there is no other
   record of anything, anywhere.
+
+### 6.12 Profiles: saved station setups
+
+A profile is a named snapshot you take on purpose — *contest*, *DX*, *nets*, a
+band plan — of how the station is set up, and **Apply** puts all of it back in
+one click. Type a name on the **Profiles** tab and press **Save**; the list below
+has **Apply** and **✕** (delete) for each saved one. Saving under a name that
+already exists replaces it (names are matched without regard to case).
+
+What a profile holds:
+
+- **The dials** — both VFOs, which one is in use, and the mode on each. A
+  profile saved on VFO B comes back on VFO B, and a radio with a pair of VFOs of
+  its own is told which one before it is retuned.
+- **The receiver and transmitter levels** — AF volume and mute, RF gain, AGC,
+  squelch, noise reduction, binaural, drive, tune drive, mic gain, CESSB and the
+  transmit EQ, and the repeater settings.
+- **The antennas and gain stages**, including the antenna kept per band — applied
+  the same way a restart restores them, so a port or a stage the radio does not
+  have is skipped rather than refused.
+- **The digital identity and messages** — callsign, grid, the message templates
+  and CW message buttons, and the rest of the digital-mode settings. Three things
+  stay as the station has them, because they follow the band and the mode rather
+  than a way of working: the transmit audio offset per band, the transmit level
+  per mode, and the contest serial number.
+- **The band stacks** — the frequency, mode and filter each band button brings
+  back ([2.4](#24-bands-and-modes)), replaced wholesale, so the bands
+  recall this setup's own frequencies.
+
+What it deliberately leaves out is the hardware: the interface, the sound devices
+and the converters are properties of a radio, not of a way of working it, so a
+profile follows you across the rig you always sit at rather than dragging
+yesterday's sound card behind it. Applying one retunes rather than reopens
+anything.
+
+**Apply** is refused while the station is on the air — by any route, including a
+rig keyed at its own microphone — since it moves the dial and the transmit setup
+under the over. The callsign, messages and band stacks are station-wide, so on a
+station with several radios applying a profile on one changes them for all of
+them, as editing them does.
+
+Profiles are kept in `profiles.json` on the machine the radio engine runs on
+([§13](#13-configuration-files)), shared by every radio of the station, and a
+remote or browser client sees, saves and applies the same list.
 
 ## 7. Solar system 3D view
 
@@ -13856,6 +13978,7 @@ and not the station's.
 | `digi.json` | JSON | Digital-mode operator settings: your callsign and grid, FT8/FT4/FT2 TX period, auto-sequence and message templates, the transmit-frequency hold (`hold_tx_freq`) and the per-band transmit offsets it pins (`tx_audio_hz`), the per-mode transmit-audio levels (`tx_audio_levels`, with `tx_audio_level_fm` / `tx_audio_level_ssb` as the level a mode with no entry of its own inherits), and the WSPR beacon's duty cycle, power and band-hop list. |
 | `memories.json` | JSON | Saved memory channels. |
 | `bandstacks.json` | JSON | Per-band memory of your last frequency/mode/filter (up to three per band). |
+| `profiles.json` | JSON | The saved station setups from Settings → Profiles ([6.12](#612-profiles-saved-station-setups)): each one's name, the remembered radio state (the same fields as `session.json`), the digital-mode settings and the band stacks. Shared by every radio of the station. |
 | `bandplan.json` | JSON | The band plan itself, per IARU region: band edges, the CW/data/phone/beacon/all-modes sub-segments, and the PSK and RTTY skimmer windows — all in MHz. Written from the built-in IARU tables on first start and meant to be edited; narrow a band here and the transmit lockout narrows with it. Which region applies is `region` in `config.toml`. **RELOAD BAND PLAN** on the General tab applies an edit without a restart, and deleting the file restores the defaults. See [§6.1](#61-general-station-audio-and-remote-access). |
 | `digi_presets.json` | JSON | The frequencies you have added to the digital modes' own lists yourself, as `mode` / `dial_hz` / `note` — written by the **＋ Save** button in the **⇵** picker ([§3.1](#31-general-considerations)) and readable and editable by hand, which is where a `note` comes from. Belongs to the station, so every radio and every remote client offers the same list. Absent until you save one. |
 | `session.json` | JSON | Where you left the radio: both VFO dials and which of the two was selected, the mode, the RX/TX antenna ports, the AF volume, RX gain, AGC mode, squelch and noise reduction, the TX drive/tune drive/mic gain, and the front end's own gain stages (the sliders on the Radio tab's device panel), restored the next time you start. Written by the engine as you tune, so `--freq`, `--mode`, `--antenna` and `--tx-antenna` override it for a run without changing it. Gain stages are remembered by name: one your current front end does not have is kept, not thrown away, so switching back to the radio it belongs to brings it back, and a figure past what this device offers is clamped to its range. |
@@ -15225,6 +15348,7 @@ right.
 | V | Flip the waterfall (scroll upwards). |
 | 1 – 9, 0 (numpad) | Transmit voice-keyer slots 1–10 (nothing if the slot is empty). |
 | − (numpad) | Stop a voice-keyer message. |
+| Space (CW, with **KEY** on) | The straight key: carrier while held ([2.14](#214-cw-decoding-and-keyboard-sending)). |
 | F1 | Open this manual (works even while typing). |
 
 Shortcuts are ignored while typing in a text field.
