@@ -320,7 +320,12 @@ impl SdroxideApp {
         // The keyboard as a straight key (issue #322): with the mode on, the
         // Space bar is the key — down while held, up on release — and the
         // box above is locked out so a stray space does not type into it.
-        if self.cw_straight && tx_ok {
+        //
+        // Only on the radio holding the keyboard. In a split view every
+        // visible radio draws this panel, and without the gate one Space bar
+        // would key each of them that has the mode on — and put the key back
+        // down on a radio the frame after losing focus had lifted it.
+        if self.cw_straight && tx_ok && self.focused {
             // The key is the operator's only when nothing on screen holds the
             // keyboard: a caret in some other field is a typist, not a keyer.
             let free = !ui.memory(|m| m.focused().is_some()) && !ui.ctx().egui_wants_keyboard_input();
@@ -333,8 +338,9 @@ impl SdroxideApp {
             // catch-all, does not fire under a keyed hand as well.
             ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space));
         } else if self.cw_key_down {
-            // The mode went off, or the keyboard was taken — either way a key
-            // let go of the rig mid-character would hold the frequency.
+            // The mode went off, the keyboard was taken, or another radio has
+            // it now — either way a key let go of the rig mid-character would
+            // hold the frequency.
             self.cw_key_down = false;
             cmds.push(Command::CwKey(false));
         }
