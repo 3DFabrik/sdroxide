@@ -74,6 +74,11 @@ async fn session(mut socket: WebSocket, shared: Arc<Shared>, station: Arc<Statio
     shared.busy.store(false, Ordering::SeqCst);
     let _ = shared.cmd_tx.send(Command::SetPtt(false));
     let _ = shared.cmd_tx.send(Command::SetTune(false));
+    // The CW straight key is a key of its own, held apart from PTT: a client
+    // that went away with the Space bar down would otherwise leave the carrier
+    // on until the keyer's hold cap ran out, half a minute later. Inert on
+    // any radio that is not being hand-keyed.
+    let _ = shared.cmd_tx.send(Command::CwKey(false));
     info!(radio = shared.id, "remote session ended");
 }
 
