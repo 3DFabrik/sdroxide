@@ -9364,6 +9364,10 @@ impl Engine {
                 if name.is_empty() {
                     return;
                 }
+                // Another radio in the station may have saved or deleted one
+                // since this engine last looked; catch up before rewriting the
+                // file from our own copy, or their change is lost.
+                self.poll_shared_stores();
                 let snapshot = sdroxide_config::Profile {
                     name: name.clone(),
                     session: self.current_session(),
@@ -9382,12 +9386,21 @@ impl Engine {
                     warn!("saving profiles: {e}");
                     self.notice(&format!("Could not save your profiles: {e}"));
                 }
+                self.mark_shared_store_write();
                 self.emit_profile_names();
                 self.notice(&format!("Profile \u{201c}{name}\u{201d} saved."));
                 return;
             }
 
             ProfileApply(name) => {
+                // A profile moves the dial, the mode and the transmit setup
+                // under whatever is on the air, so it waits for the over.
+                if self.tx_active || self.state.tx.ptt {
+                    self.notice(
+                        "Wait for the transmission to finish before putting a profile on.",
+                    );
+                    return;
+                }
                 let Some(profile) =
                     self.profiles.iter().find(|p| p.name.eq_ignore_ascii_case(&name)).cloned()
                 else {
@@ -9403,6 +9416,7 @@ impl Engine {
             }
 
             ProfileDelete(name) => {
+                self.poll_shared_stores();
                 let before = self.profiles.len();
                 self.profiles
                     .retain(|p| !p.name.eq_ignore_ascii_case(&name));
@@ -9416,6 +9430,7 @@ impl Engine {
                     warn!("saving profiles: {e}");
                     self.notice(&format!("Could not save your profiles: {e}"));
                 }
+                self.mark_shared_store_write();
                 self.emit_profile_names();
                 self.notice(&format!("Profile \u{201c}{name}\u{201d} deleted."));
                 return;
@@ -13687,16 +13702,25 @@ impl Engine {
         // recalled against is the profile's own, carried in wholesale above,
         // so the filter offsets come from how this way of working the station
         // heard that band.
+        //
+        // The session's `freq_hz` is VFO A's dial whatever is active (see
+        // `current_session`), so the *active* dial is `vfo_b_hz` when B was the
+        // one in use — reading `freq_hz` there put a profile saved on B onto A's
+        // frequency.
         self.state.active_vfo = s.active_vfo;
+        let active_hz = match s.active_vfo {
+            sdroxide_types::Vfo::A => s.freq_hz,
+            sdroxide_types::Vfo::B => s.vfo_b_hz.unwrap_or(s.freq_hz),
+        };
         let mode = s.vfo_modes.map(|m| m[s.active_vfo.index()]).unwrap_or(s.mode);
-        let band = Band::containing(s.freq_hz);
+        let band = Band::containing(active_hz);
         let (filter_lo, filter_hi) = self
             .stacks
             .get(&band)
             .and_then(|st| st.first())
             .map(|e| (e.filter_lo, e.filter_hi))
-            .unwrap_or_else(|| mode.default_filter_at(s.freq_hz));
-        self.apply_entry(BandStackEntry { freq_hz: s.freq_hz, mode, filter_lo, filter_hi });
+            .unwrap_or_else(|| mode.default_filter_at(active_hz));
+        self.apply_entry(BandStackEntry { freq_hz: active_hz, mode, filter_lo, filter_hi });
 
         // The inactive VFO has no dial of its own to retune; it is placed
         // exactly as it was left — the other dial, the mode and the socket
@@ -13774,12 +13798,17 @@ impl Engine {
         // The radio now describes where the profile left it; the remembered
         // session is replaced so the periodic check compares against what is
         // really running rather than against a stale remembered pre-apply
-        // value and "corrects" the radio back.
-        let now = self.current_session();
-        if let Err(e) = self.store.save_session(&now) {
-            warn!("saving the session after applying a profile: {e}");
+        // value and "corrects" the radio back. Only on an engine that
+        // remembers a session at all: one started without `remember_session`
+        // must not write `session.json` here any more than it does on its
+        // timer.
+        if self.session.is_some() {
+            let now = self.current_session();
+            if let Err(e) = self.store.save_session(&now) {
+                warn!("saving the session after applying a profile: {e}");
+            }
+            self.session = Some(now);
         }
-        self.session = Some(now);
         let _ = self.event_tx.send(RadioEvent::State(self.state.clone()));
     }
 
@@ -13854,6 +13883,14 @@ impl Engine {
             let _ = self.event_tx.send(RadioEvent::MemoryFolders(self.mem_folders.clone()));
         }
         self.stacks = sdroxide_config::load_bandstacks();
+        // The profiles are station-shared too: another radio in the station
+        // saving or deleting one rewrites the file, and this engine's copy is
+        // stale until it is told.
+        let profiles = sdroxide_config::load_profiles();
+        if profiles != self.profiles {
+            self.profiles = profiles;
+            self.emit_profile_names();
+        }
         let digi_config = sdroxide_config::load_digi_config();
         if digi_config != self.digi_config {
             // The same fan-out a SetDigiConfig does, minus the save: the other
