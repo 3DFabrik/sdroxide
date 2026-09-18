@@ -265,6 +265,12 @@ pub struct SdroxideApp {
     /// Empty on a client that has not heard the announcement yet (a browser
     /// client that connects late), or that the announcement is native-only.
     profiles: Vec<String>,
+    /// A profile was put on from this screen and the engine has not answered
+    /// yet. Its answer — the profile list, announced once the apply is done —
+    /// clears [`Self::digi_cfg_seeded`], so the editable digital settings
+    /// re-seed from the next status, which the engine can only send after the
+    /// apply, and the next edit cannot put the old callsign back.
+    profile_apply_pending: bool,
     /// Which logging service the Uploads tab's own strip is showing. Session-only
     /// for the same reason as `settings_tab`: it is where the operator happens to
     /// be in the dialog, not a setting.
@@ -1261,6 +1267,7 @@ impl SdroxideApp {
             settings_tab: SettingsTab::General,
             profile_name_edit: String::new(),
             profiles: Vec::new(),
+            profile_apply_pending: false,
             settings_upload_tab: sdroxide_types::UploadTarget::QrzLogbook,
             ui_settings,
             applied_look: (ui_settings.theme, ui_settings.button_style, ui_settings.window_style),

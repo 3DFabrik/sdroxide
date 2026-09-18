@@ -179,9 +179,9 @@ pub(in crate::app) struct SettingsIo<'a> {
     /// the dialog lives across taps of the tab bar, and a half-typed name is
     /// not a setting.
     profile_name: &'a mut String,
-    /// Set when an action rewrote the digital identity in the engine, so the
-    /// screen's editable copy must be re-seeded from the next status — see
-    /// `SdroxideApp::digi_cfg_seeded`.
+    /// Set when a profile was put on: the engine rewrites the digital
+    /// identity in place, so the screen's editable copy must be re-seeded —
+    /// see `SdroxideApp::profile_apply_pending`.
     digi_reseed: &'a mut bool,
     /// Re-enumerate the USB bus for RTL-SDR dongles. Cheap and non-invasive —
     /// no device is opened — so it cannot disturb a running stream.
@@ -975,7 +975,7 @@ impl SdroxideApp {
         // borrows `&self` and so can't touch `&mut self.ctrl`.
         let mut audio_pick: Option<(bool, Option<String>)> = None;
         let mut profile_name = std::mem::take(&mut self.profile_name_edit);
-        let mut digi_reseed = self.digi_cfg_seeded;
+        let mut digi_reseed = false;
         let mut speech_edit = self.speech.settings().clone();
         let speech_status = self.speech.status();
         let mut speech_test = false;
@@ -1246,7 +1246,12 @@ impl SdroxideApp {
         self.settings_tab = tab;
         self.settings_upload_tab = upload_tab;
         self.profile_name_edit = profile_name;
-        self.digi_cfg_seeded = digi_reseed;
+        // Not `digi_cfg_seeded` itself: that flag is true once the copy *is*
+        // seeded, so writing the request into it marked a stale copy — or,
+        // before any digital status had arrived, an empty default one — as
+        // current. And not cleared here either, or a status already on its way
+        // from before the apply would re-seed the old callsign.
+        self.profile_apply_pending |= digi_reseed;
         // The multi-radio shell drains these after the frame.
         self.radio_tab_requests.append(&mut radio_tab_reqs);
         {

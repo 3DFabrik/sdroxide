@@ -83,9 +83,9 @@ pub(in crate::app) fn settings_profiles_tab(
             .clicked()
             {
                 cmds.push(Command::ProfileApply(name.clone()));
-                // The engine rewrites the digital identity in place; the next
-                // status must re-seed this screen's copy of it, or the next
-                // edit here would put the old callsign back.
+                // The engine rewrites the digital identity in place; its answer
+                // re-seeds this screen's copy of it, or the next edit here
+                // would put the old callsign back.
                 *io.digi_reseed = true;
             }
             if ui.button("✕").on_hover_text(format!("Delete \u{201c}{name}\u{201d}"))

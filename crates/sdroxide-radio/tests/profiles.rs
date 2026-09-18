@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 use sdroxide_radio::{
     AudioParams, Complex32, EngineConfig, EngineHandles, IqSource, Result, rtrb, start_engine,
 };
-use sdroxide_types::{Command, DeviceCaps, Mode, RadioEvent, RadioState, RxId, Vfo};
+use sdroxide_types::{
+    Command, DeviceCaps, DigiConfig, DigiStatus, Mode, RadioEvent, RadioState, RxId, Vfo,
+};
 
 const A_HZ: f64 = 14_074_000.0;
 const B_HZ: f64 = 7_100_000.0;
@@ -62,13 +64,17 @@ fn isolate(name: &str) {
 }
 
 fn start() -> EngineHandles {
+    start_in(Mode::Usb)
+}
+
+fn start_in(mode: Mode) -> EngineHandles {
     let (producer, _consumer) = rtrb::RingBuffer::<f32>::new(48_000);
     start_engine(
         Box::new(Quiet),
         caps(),
         EngineConfig {
             audio: Some(AudioParams { producer, out_rate: 48_000.0 }),
-            initial_mode: Some(Mode::Usb),
+            initial_mode: Some(mode),
             remember_session: true,
             ..Default::default()
         },
@@ -102,6 +108,22 @@ fn wait_for(h: &EngineHandles, what: &str, f: impl Fn(&RadioState) -> bool) -> R
         std::thread::sleep(Duration::from_millis(10));
     }
     panic!("the state never showed {what}; last: {:?}", last.map(|s| (s.active_vfo, s.active_freq_hz())));
+}
+
+/// The first digital status that satisfies `f`.
+fn wait_digi(h: &EngineHandles, what: &str, f: impl Fn(&DigiStatus) -> bool) -> DigiStatus {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        while let Ok(ev) = h.event_rx.try_recv() {
+            if let RadioEvent::Ft8Status(s) = ev
+                && f(&s)
+            {
+                return s;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("no digital status showed {what}");
 }
 
 /// The profile list announcement, which is how the engine answers a save.
@@ -149,6 +171,47 @@ fn a_profile_saved_on_vfo_b_comes_back_on_vfo_b() {
         s.active_freq_hz()
     );
     assert_ne!(s.active_freq_hz(), MOVED_A_HZ);
+
+    stop(h);
+}
+
+/// Putting a profile on rewrites the digital identity, and the screen holding an
+/// editable copy of it re-seeds from the first status after the profile list
+/// comes back. So the list must follow the apply, and the status after it must
+/// carry the profile's callsign — a stale one would put the old callsign back
+/// into the screen's copy, and from there into the next edit.
+#[test]
+fn the_status_after_an_apply_carries_the_profiles_callsign() {
+    let _guard = CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    isolate("profiles-digi-reseed");
+    let h = start_in(Mode::Ft8);
+
+    let cfg = wait_digi(&h, "anything", |_| true).config;
+    send(&h, Command::SetDigiConfig(DigiConfig { my_call: "PA1AAA".into(), ..cfg.clone() }));
+    let _ = wait_digi(&h, "the first callsign", |s| s.config.my_call == "PA1AAA");
+    send(&h, Command::ProfileSave("digital".into()));
+    wait_saved(&h, "digital");
+    send(&h, Command::SetDigiConfig(DigiConfig { my_call: "PA2BBB".into(), ..cfg }));
+    let _ = wait_digi(&h, "the second callsign", |s| s.config.my_call == "PA2BBB");
+
+    send(&h, Command::ProfileApply("digital".into()));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut listed = false;
+    'wait: while Instant::now() < deadline {
+        while let Ok(ev) = h.event_rx.try_recv() {
+            match ev {
+                RadioEvent::Profiles(_) => listed = true,
+                RadioEvent::Ft8Status(s) if listed => {
+                    assert_eq!(s.config.my_call, "PA1AAA", "the status after the list is stale");
+                    break 'wait;
+                }
+                _ => {}
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(listed, "the apply was never answered with the profile list");
+    assert!(Instant::now() < deadline, "no digital status followed the profile list");
 
     stop(h);
 }

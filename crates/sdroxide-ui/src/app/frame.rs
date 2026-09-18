@@ -1231,7 +1231,12 @@ impl SdroxideApp {
                 RadioEvent::Memories(m) => self.memories = m,
                 RadioEvent::MemoryFolders(f) => self.mem_folders = f,
                 RadioEvent::Scanner(c) => self.scanner = c,
-                RadioEvent::Profiles(names) => self.profiles = names,
+                RadioEvent::Profiles(names) => {
+                    self.profiles = names;
+                    if std::mem::take(&mut self.profile_apply_pending) {
+                        self.digi_cfg_seeded = false;
+                    }
+                }
                 RadioEvent::ConnectionLost(e) => {
                     if self.focused {
                         self.speech.announcer.on_error(&e, now);
