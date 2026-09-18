@@ -1323,7 +1323,13 @@ use sdroxide_types::{
 /// `ServerMsg::Hd` carrying `HdRadioStatus`, and `Command::SetHdProgram` for the
 /// HD-2 subchannels, all appended last so no surviving discriminant moved, but a
 /// v147 peer handed any of them fails to decode the message carrying it.
-pub const PROTO_VERSION: u16 = 148;
+///
+/// v149: ACARS, the VHF airband airline datalink (issue #436). It rides the
+/// existing `RadioEvent::Ft8Status` / `ServerMsg::Ft8Status`, so there is no new
+/// variant — but `DigiStatus` gains a trailing `acars` field, and postcard
+/// numbers struct fields by position, so a v148 peer desynchronises on the
+/// tail of every `DigiStatus`. The field is last, so no surviving field moved.
+pub const PROTO_VERSION: u16 = 149;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]

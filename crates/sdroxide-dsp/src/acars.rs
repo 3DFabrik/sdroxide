@@ -293,7 +293,12 @@ impl AcarsRx {
                 // the higher level; the 1200 Hz tone is the lower one.
                 let level = u8::from(self.acc > 0.0);
                 self.acc = 0.0;
-                self.acc_n = 0.0;
+                // Carry the overshoot instead of clearing it. `sps` is
+                // fractional at most rates — 51.2 kHz / 2400 baud is 21.33… —
+                // and dropping the remainder on every symbol walks the sampling
+                // grid off the signal, so the far end of a long frame is read on
+                // the wrong samples and the block check never matches.
+                self.acc_n -= self.sps;
                 if self.levels.len() < 8 * 300 {
                     self.levels.push(level);
                 }
@@ -469,6 +474,41 @@ mod tests {
         assert!(!got.is_empty(), "a synthetic frame must decode");
         assert_eq!(got[0].text, "HELLO FROM ACARS");
         assert!(got[0].crc_ok, "and its block check must verify");
+    }
+
+    /// The symbol clock carries its fractional remainder. At 51.2 kHz a symbol
+    /// is 21.33… samples, and rounding that away each symbol walks the sampling
+    /// grid off a long frame — the far end reads the wrong samples and the
+    /// block check never matches. 48 kHz divides evenly and hid it.
+    #[test]
+    fn a_fractional_symbol_rate_still_decodes() {
+        let levels = encode(&sample());
+        let rate = 51_200.0;
+        // Symbol boundaries at their true fractional positions.
+        let t = std::f64::consts::TAU;
+        let mut phase = 0.0f64;
+        let mut audio = Vec::new();
+        for (k, &l) in levels.iter().enumerate() {
+            let start = (k as f64 * rate / BAUD).round() as usize;
+            let end = (((k + 1) as f64) * rate / BAUD).round() as usize;
+            let f = if l == 1 { 2400.0 } else { 1200.0 };
+            for _ in start..end {
+                audio.push(phase.cos() as f32);
+                phase = (phase + t * f / rate) % t;
+            }
+        }
+        audio.extend(std::iter::repeat_n(0.0f32, 200));
+        let mut rx = AcarsRx::new(rate);
+        let mut events = Vec::new();
+        for chunk in audio.chunks(4096) {
+            rx.process(chunk, &mut events);
+        }
+        let got = events.iter().find_map(|e| match e {
+            AcarsEvent::Message(m) => Some(m),
+            _ => None,
+        });
+        let got = got.expect("a frame at a fractional symbol rate must decode");
+        assert!(got.crc_ok, "and its block check must verify");
     }
 
     #[test]

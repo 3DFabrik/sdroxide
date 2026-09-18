@@ -474,8 +474,6 @@ pub struct DigiStatus {
     /// own "are we in NAVTEX?" test — the rule the modes above follow.
     #[serde(default)]
     pub navtex: Option<NavtexStatus>,
-    /// ACARS status, when that mode is selected.
-    pub acars: Option<AcarsStatus>,
     /// APRS: the stations on the map, the messages, and the channel. `None`
     /// in every other mode, so the panel that draws it is its own "are we in
     /// APRS?" test — the same rule [`DigiStatus::js8`] follows.
@@ -522,6 +520,14 @@ pub struct DigiStatus {
     /// whenever no station is being worked. See [`QsoLive`].
     #[serde(default)]
     pub qso: Option<QsoLive>,
+    /// ACARS status, when that mode is selected. `None` in every other mode,
+    /// as the rest of these are.
+    ///
+    /// Last in the struct for the usual reason: postcard numbers fields by
+    /// position, and a field added in the middle would shift the tail for every
+    /// peer that matches the protocol version but not this build.
+    #[serde(default)]
+    pub acars: Option<AcarsStatus>,
 }
 
 /// The running detail of the contact in progress: when it started and what has
