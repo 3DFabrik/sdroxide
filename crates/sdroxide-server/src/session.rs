@@ -203,6 +203,11 @@ fn drop_stale_sessions_of(shared: &Shared, who: &auth::Identity) {
     }
 }
 
+/// Whether `slot` is the client working this radio.
+fn holds_control(shared: &Shared, slot: u64) -> bool {
+    shared.control.lock().unwrap().holder == Some(slot)
+}
+
 /// Give the control key to `slot`, releasing whoever had it.
 ///
 /// The radio is put down on the way through. Whoever was holding the key may
