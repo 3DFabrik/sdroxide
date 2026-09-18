@@ -102,17 +102,10 @@ impl SdroxideApp {
                                 .color(theme::CYAN_DIM()),
                         );
                         ui.label(
-                            RichText::new(&m.address)
-                                .monospace()
-                                .strong()
-                                .color(theme::CYAN()),
+                            RichText::new(&m.address).monospace().strong().color(theme::CYAN()),
                         );
                         if !m.mode.is_empty() {
-                            ui.label(
-                                RichText::new(format!("mode {}", m.mode))
-                                    .size(9.5)
-                                    .weak(),
-                            );
+                            ui.label(RichText::new(format!("mode {}", m.mode)).size(9.5).weak());
                         }
                         if !m.label.is_empty() {
                             ui.label(RichText::new(&m.label).monospace().size(10.0).weak());
@@ -124,8 +117,12 @@ impl SdroxideApp {
                             ui.label(RichText::new(&m.block_id).size(9.5).weak());
                         }
                         if !m.crc_ok {
-                            ui.label(RichText::new("check failed").size(9.5).color(theme::YELLOW()))
-                                .on_hover_text("The block-check sequence did not match — text may be wrong.");
+                            ui.label(
+                                RichText::new("check failed").size(9.5).color(theme::YELLOW()),
+                            )
+                            .on_hover_text(
+                                "The block-check sequence did not match — text may be wrong.",
+                            );
                         }
                     });
                     if m.text.trim().is_empty() {

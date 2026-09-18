@@ -18,6 +18,7 @@
 //! - [`setup`] — the digimode setup window the panels share
 //! - [`widgets`] — the row and station-card widgets several panels draw
 
+mod acars;
 pub(in crate::app) mod adsb;
 pub(in crate::app) mod ais;
 pub(in crate::app) mod aprs;
@@ -26,7 +27,6 @@ pub(in crate::app) mod cw;
 pub(in crate::app) mod decodes;
 pub(in crate::app) mod fsq;
 pub(in crate::app) mod js8;
-mod acars;
 mod navtex;
 pub(in crate::app) mod packet;
 pub(in crate::app) mod rade;

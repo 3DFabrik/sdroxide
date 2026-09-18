@@ -14,7 +14,7 @@
 
 use std::time::SystemTime;
 
-use sdroxide_dsp::{AcarsEvent, AcarsRx, ACARS_CENTER_HZ};
+use sdroxide_dsp::{ACARS_CENTER_HZ, AcarsEvent, AcarsRx};
 use sdroxide_types::{
     ACARS_MESSAGE_MAX, AcarsMessage, AcarsStatus, DigiConfig, DigiStatus, Mode, QsoStep,
     TranscriptLine,

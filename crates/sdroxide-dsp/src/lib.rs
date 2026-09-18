@@ -86,6 +86,7 @@ pub use navtex::{
 pub mod navtex_test {
     pub use crate::navtex::{encode_bits, synth};
 }
+pub use acars::{AcarsEvent, AcarsRx, CENTER_HZ as ACARS_CENTER_HZ};
 pub use nb::NoiseBlanker;
 pub use nco::Nco;
 pub use nnr::NeuralNr;
@@ -111,7 +112,6 @@ pub use wbddc::{WbDdc, clamp_center_hz, reachable_range_hz};
 pub use wbspectrum::WideSpectrum;
 pub use wefax::{Ioc as WefaxIoc, Lpm as WefaxLpm, WefaxEvent, WefaxRx};
 pub use window::blackman_harris;
-pub use acars::{AcarsEvent, AcarsRx, CENTER_HZ as ACARS_CENTER_HZ};
 
 pub type Complex32 = num_complex::Complex<f32>;
 

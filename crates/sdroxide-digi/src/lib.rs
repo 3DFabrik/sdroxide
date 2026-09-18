@@ -12,6 +12,7 @@
 //! That crate is the only AGPL in the tree; see its manifest for what §13 means
 //! for anything that links it.
 
+pub mod acars_controller;
 pub mod aprs_controller;
 pub mod atchat_controller;
 pub(crate) mod ax25_channel;
@@ -26,7 +27,6 @@ pub mod hell_controller;
 pub mod js8;
 pub mod js8_controller;
 pub mod modem;
-pub mod acars_controller;
 pub mod navtex_controller;
 mod packet_controller;
 pub mod params;
@@ -43,6 +43,7 @@ pub mod wefax_controller;
 pub mod wspr;
 pub mod wspr_controller;
 
+pub use acars_controller::AcarsController;
 pub use aprs_controller::AprsController;
 pub use atchat_controller::AtChatController;
 pub use clock::ClockMonitor;
@@ -53,7 +54,6 @@ pub use fsq_controller::FsqController;
 pub use hell_controller::HellController;
 pub use js8_controller::Js8Controller;
 pub use modem::{ApHints, Ft8Modem};
-pub use acars_controller::AcarsController;
 pub use navtex_controller::NavtexController;
 pub use packet_controller::PacketController;
 pub use params::{DECODE_RATE, DigiParams};

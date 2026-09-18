@@ -331,7 +331,7 @@ impl Mode {
         Mode::Hell,
         Mode::RfPaint,
         Mode::Rade,
-];
+    ];
 
     /// The digital modes handled by a dedicated decode/encode engine (the
     /// slotted FT8/FT4 modes, the continuous keyboard modes, Hell, SSTV, RIFP,
@@ -363,7 +363,7 @@ impl Mode {
         Mode::Packet,
         Mode::PacketHf,
         Mode::Aprs,
-];
+    ];
 
     /// True for modes that use a dedicated decode/QSO layer over USB.
     pub fn is_digital(self) -> bool {
