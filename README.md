@@ -8,6 +8,30 @@ binary, as a **server that streams the same UI to a web browser** over
 WebSocket. It includes an integrated, persistent **logbook**, many digital modes like **FT8/FT4/FT2**
 built-in, and **TCI and Hamlib rigctld servers** so third-party programs like WSJT-X can use it as their radio.
 
+This repository is a GPLv3 fork of
+[dividebysandwich/sdroxide](https://github.com/dividebysandwich/sdroxide),
+kept on the `users` branch. Upstream is the project; what differs here is how a
+station with more than one operator is shared, and how a Hermes Lite 2 reports
+SWR.
+
+- **Named operators.** A roster (`users.toml`; `--add-user` / `--set-password`
+  on a headless box) signs people in by name. One of them holds the radio and
+  may transmit; everyone else on that radio is listening, and the holder can
+  hand the control key over. A named operator who reconnects — laptop off the
+  cable and onto Wi-Fi, a restored browser tab — gets the radio back instead of
+  being left listening to themselves. Screen layout, volume and band stacks
+  follow the name, under `users/<name>/settings.json`.
+- **Per-operator identity.** Callsign, locator, the logbook, and the network
+  logins that hold passwords or API keys (QRZ, LoTW, Club Log, Winlink, …) live
+  under `users/<name>/` as well (`settings.json`, `net.json`, `qso_log.json`),
+  not in the station files. A listener is not shown the holder's secrets. A
+  station with one shared password is unchanged.
+- **Hermes Lite 2 SWR.** With an N2ADR I/O board the HL2 already measures
+  forward and reverse on AIN1/AIN2; this fork draws the SWR meter from that
+  rather than leaving it blank.
+
+The rest of this README is upstream's.
+
 <hr/>
 
 <img width="1496" height="933" alt="image" src="https://github.com/user-attachments/assets/9d88118c-0efe-45c5-9918-8ee2bb91b700" />
