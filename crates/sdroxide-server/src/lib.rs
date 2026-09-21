@@ -139,6 +139,23 @@ pub type LoadUserSettingsFn = Box<dyn Fn(&str) -> sdroxide_types::UserSettings +
 pub type SaveUserSettingsFn =
     Box<dyn Fn(&str, &sdroxide_types::UserSettings) -> Result<(), String> + Send + Sync>;
 
+/// How this station loads one named operator's network credentials. `None`
+/// from the callback means they have never saved any; `None` for the hook
+/// leaves them unsent.
+pub type LoadUserNetworkFn =
+    Box<dyn Fn(&str) -> Option<sdroxide_types::NetworkConfig> + Send + Sync>;
+
+/// How this station writes one named operator's network credentials.
+pub type SaveUserNetworkFn =
+    Box<dyn Fn(&str, &sdroxide_types::NetworkConfig) -> Result<(), String> + Send + Sync>;
+
+/// How this station loads one named operator's logbook.
+pub type LoadUserQsoLogFn = Box<dyn Fn(&str) -> Vec<sdroxide_types::QsoRecord> + Send + Sync>;
+
+/// How this station writes one named operator's logbook.
+pub type SaveUserQsoLogFn =
+    Box<dyn Fn(&str, &[sdroxide_types::QsoRecord]) -> Result<(), String> + Send + Sync>;
+
 /// One radio's engine endpoints. A station hands the server one of these per
 /// radio in its roster, and each gets an address of its own on the socket —
 /// see [`ServerParams::radios`].
@@ -205,6 +222,13 @@ pub struct ServerParams {
     /// exactly how a station without a roster behaves.
     pub load_user_settings: Option<LoadUserSettingsFn>,
     pub save_user_settings: Option<SaveUserSettingsFn>,
+    /// Per-operator network credentials and logbook. Same default as the
+    /// settings hooks: a test that does not wire them leaves those files
+    /// unsent.
+    pub load_user_network: Option<LoadUserNetworkFn>,
+    pub save_user_network: Option<SaveUserNetworkFn>,
+    pub load_user_qso_log: Option<LoadUserQsoLogFn>,
+    pub save_user_qso_log: Option<SaveUserQsoLogFn>,
 }
 
 pub(crate) struct SessionTx {
@@ -378,6 +402,10 @@ pub(crate) struct Station {
     power: Option<RadioPowerFn>,
     load_user: Option<LoadUserSettingsFn>,
     save_user: Option<SaveUserSettingsFn>,
+    load_user_network: Option<LoadUserNetworkFn>,
+    save_user_network: Option<SaveUserNetworkFn>,
+    load_user_qso: Option<LoadUserQsoLogFn>,
+    save_user_qso: Option<SaveUserQsoLogFn>,
     /// One roster edit at a time, across every client on the station. The
     /// callbacks below read `radios.json`, change it and write it back, so two
     /// sessions adding a radio at the same moment would each hand out the id
@@ -719,7 +747,15 @@ impl Shared {
     /// dropped, exactly as it was when there was one client to drop it for.
     pub(crate) fn tell_everyone(&self, m: &ServerMsg) {
         for c in self.clients.lock().unwrap().iter() {
-            if c.tx.reliable.try_send(m.clone()).is_err() {
+            let outgoing = match m {
+                ServerMsg::StationConfig(s) if c.who.named => {
+                    let mut s = s.clone();
+                    s.net = s.net.without_secrets();
+                    ServerMsg::StationConfig(s)
+                }
+                _ => m.clone(),
+            };
+            if c.tx.reliable.try_send(outgoing).is_err() {
                 // Named, for the reason `msg_kind` gives: what a dropped
                 // message costs depends entirely on which one it was.
                 warn!(
@@ -806,6 +842,10 @@ pub async fn serve(params: ServerParams) -> Result<(), ServerError> {
         power: params.radio_power,
         load_user: params.load_user_settings,
         save_user: params.save_user_settings,
+        load_user_network: params.load_user_network,
+        save_user_network: params.save_user_network,
+        load_user_qso: params.load_user_qso_log,
+        save_user_qso: params.save_user_qso_log,
         edit: Mutex::new(()),
     });
 

@@ -347,7 +347,7 @@ impl SdroxideApp {
             }
         }
         if changed {
-            persist_qso_log(&self.qso_log);
+            self.persist_operator_log();
             self.log_content_changed();
         }
         self.push_net_log(format!(
@@ -369,6 +369,17 @@ impl SdroxideApp {
         self.awards_heat = None;
         self.worked_entities_cache = None;
         self.log_index_cache = None;
+    }
+
+    /// Write this operator's logbook. A roster sign-in stores it under their
+    /// name on the station; a local engine or a shared-password station keeps
+    /// the one station file.
+    pub(in crate::app) fn persist_operator_log(&mut self) {
+        if self.user_settings_on {
+            self.ctrl.send_user_qso_log(self.qso_log.clone());
+            return;
+        }
+        persist_qso_log(&self.qso_log);
     }
 
     /// The set of worked DXCC entity names (cached; recomputed when the log
@@ -687,7 +698,7 @@ impl SdroxideApp {
                             *e = rec;
                             self.log_content_changed();
                         }
-                        persist_qso_log(&self.qso_log);
+                        self.persist_operator_log();
                     } else {
                         // Empty callsign — keep the form open for correction.
                         self.log_edit = Some(f);
@@ -958,7 +969,7 @@ impl SdroxideApp {
         match action {
             Some(RowAction::Delete(id)) => {
                 self.qso_log.retain(|q| q.id != id);
-                persist_qso_log(&self.qso_log);
+                self.persist_operator_log();
             }
             Some(RowAction::Edit(id)) => {
                 if let Some(r) = self.qso_log.iter().find(|q| q.id == id) {

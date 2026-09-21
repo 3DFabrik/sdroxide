@@ -13,7 +13,6 @@ use sdroxide_types::{
 };
 
 use crate::app::SdroxideApp;
-use crate::app::persist::persist_qso_log;
 
 /// Least time between two locator lookups driven by a heard list.
 const GRID_LOOKUP_INTERVAL_S: f64 = 1.5;
@@ -192,7 +191,7 @@ impl SdroxideApp {
                 changed = true;
             }
             if changed {
-                persist_qso_log(&self.qso_log);
+                self.persist_operator_log();
                 self.log_content_changed();
             }
         }
@@ -211,7 +210,7 @@ impl SdroxideApp {
                     UploadTarget::HamQth => rec.hamqth_sent = true,
                     UploadTarget::Wrl => rec.wrl_sent = true,
                 }
-                persist_qso_log(&self.qso_log);
+                self.persist_operator_log();
             }
         }
     }
@@ -286,7 +285,7 @@ impl SdroxideApp {
             added += 1;
         }
         if added > 0 {
-            persist_qso_log(&self.qso_log);
+            self.persist_operator_log();
         }
         // Naming the guessed code page is the point of carrying it this far: a
         // name that came out as nonsense is then a code page to report, not a

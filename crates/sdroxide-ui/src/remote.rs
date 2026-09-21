@@ -184,6 +184,8 @@ pub struct RemoteController {
     /// app and then cleared, so a later poll does not re-apply the same
     /// snapshot over a change the operator has just made.
     incoming_user: Option<sdroxide_types::UserSettings>,
+    incoming_net: Option<sdroxide_types::NetworkConfig>,
+    incoming_log: Option<Vec<sdroxide_types::QsoRecord>>,
 }
 
 /// How long an edited interface configuration is held before it goes out.
@@ -275,6 +277,8 @@ impl RemoteController {
             peers_editable: false,
             control: None,
             incoming_user: None,
+            incoming_net: None,
+            incoming_log: None,
         })
     }
 
@@ -467,6 +471,8 @@ impl RemoteController {
             // and an event would have to be remembered somewhere anyway.
             ServerMsg::Control(status) => self.control = Some(status),
             ServerMsg::UserSettings(settings) => self.incoming_user = Some(settings),
+            ServerMsg::UserNetwork(net) => self.incoming_net = Some(net),
+            ServerMsg::UserQsoLog(log) => self.incoming_log = Some(log),
         }
     }
 
@@ -668,6 +674,18 @@ impl RadioController for RemoteController {
 
     fn send_user_settings(&mut self, settings: sdroxide_types::UserSettings) {
         self.send_msg(ClientMsg::SetUserSettings(settings));
+    }
+
+    fn take_user_network(&mut self) -> Option<sdroxide_types::NetworkConfig> {
+        self.incoming_net.take()
+    }
+
+    fn take_user_qso_log(&mut self) -> Option<Vec<sdroxide_types::QsoRecord>> {
+        self.incoming_log.take()
+    }
+
+    fn send_user_qso_log(&mut self, log: Vec<sdroxide_types::QsoRecord>) {
+        self.send_msg(ClientMsg::SetUserQsoLog(log));
     }
 
     fn add_station_radio(&mut self, name: &str) {

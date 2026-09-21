@@ -236,10 +236,13 @@ pub struct ControlStatus {
 ///
 /// The radio's own settings — the interface, the sample rate, the memories —
 /// stay with the station. These are the operator's: how the screen looks, how
-/// the knobs are bound, the volume and squelch they last left, and the band
-/// stacks they work from. A station with a roster keeps one of these per name
-/// under `users/<name>/settings.json` and hands it over on sign-in, so the
-/// same operator at a PC and on a phone sees the same screen.
+/// the knobs are bound, the volume and squelch they last left, the band
+/// stacks they work from, and the callsign and grid they put on the air. A
+/// station with a roster keeps one of these per name under
+/// `users/<name>/settings.json` and hands it over on sign-in, so the same
+/// operator at a PC and on a phone sees the same screen. Network passwords
+/// and the logbook live beside it in that directory, not in this struct:
+/// they must not ride the settings debounce.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UserSettings {
@@ -254,6 +257,13 @@ pub struct UserSettings {
     /// Band stacks, as `(band, entries)` rather than a map so the wire form
     /// does not depend on HashMap iteration order.
     pub bandstacks: Vec<(Band, Vec<BandStackEntry>)>,
+    /// Callsign this operator puts on the air. Empty until they have set one;
+    /// the station then uses the roster name.
+    #[serde(default)]
+    pub my_call: String,
+    /// Maidenhead locator that goes with [`Self::my_call`].
+    #[serde(default)]
+    pub my_grid: String,
 }
 
 impl Default for UserSettings {
@@ -264,6 +274,8 @@ impl Default for UserSettings {
             volume: 0.5,
             squelch_db: SQUELCH_OPEN_DB,
             bandstacks: Vec::new(),
+            my_call: String::new(),
+            my_grid: String::new(),
         }
     }
 }
@@ -603,6 +615,8 @@ mod tests {
         let empty: UserSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(empty.volume, 0.5);
         assert_eq!(empty.squelch_db, SQUELCH_OPEN_DB);
+        assert!(empty.my_call.is_empty());
+        assert!(empty.my_grid.is_empty());
     }
 
     #[test]

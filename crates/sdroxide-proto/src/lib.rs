@@ -1373,7 +1373,14 @@ use sdroxide_types::{
 /// on a radio somebody else is working. That is the reason for the version
 /// rather than a decoding failure: the old client's mistake would be silent and
 /// on the air.
-pub const PROTO_VERSION: u16 = 155;
+///
+/// v156: a named operator's callsign, grid, logbook and network credentials
+/// (passwords, API keys) follow the roster name rather than the station.
+/// `UserSettings` gains `my_call`/`my_grid`, and `ClientMsg`/`ServerMsg` gain
+/// `SetUserQsoLog`/`UserQsoLog` and `UserNetwork`, all appended last. A v155
+/// peer would mis-decode the new fields and would keep showing the station's
+/// QRZ login to every signed-in operator.
+pub const PROTO_VERSION: u16 = 156;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]
@@ -1521,6 +1528,11 @@ pub enum ClientMsg {
     ///
     /// Appended last, for the usual reason.
     SetUserSettings(sdroxide_types::UserSettings),
+    /// Replace this operator's logbook on the station.
+    ///
+    /// Per name, under `users/<name>/qso_log.json`. A station with one shared
+    /// password ignores this and keeps the station file. Appended last.
+    SetUserQsoLog(Vec<sdroxide_types::QsoRecord>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1887,6 +1899,19 @@ pub enum ServerMsg {
     ///
     /// Appended last, for the usual reason.
     UserSettings(sdroxide_types::UserSettings),
+
+    /// This operator's network credentials, replayed on connect after a roster
+    /// sign-in. Never broadcast: a listener must not see the holder's QRZ
+    /// password. Absent when this name has never saved a `net.json`.
+    ///
+    /// Appended last, for the usual reason.
+    UserNetwork(sdroxide_types::NetworkConfig),
+
+    /// This operator's logbook, replayed on connect after a roster sign-in.
+    /// Empty if they have never logged a contact under this name.
+    ///
+    /// Appended last, for the usual reason.
+    UserQsoLog(Vec<sdroxide_types::QsoRecord>),
 }
 
 /// One radio in a station's roster, as a client sees it.
@@ -2628,10 +2653,10 @@ mod tests {
 
     /// The control-key and per-user settings variants live at the end of the
     /// enums so a 154 peer still decodes everything it already knew. They
-    /// still have to round-trip for 155 peers.
+    /// still have to round-trip for 156 peers.
     #[test]
     fn roundtrip_control_and_user_settings() {
-        use sdroxide_types::{ClientInfo, ControlStatus, UserSettings};
+        use sdroxide_types::{ClientInfo, ControlStatus, NetworkConfig, QsoRecord, UserSettings};
 
         for m in [
             ClientMsg::RequestControl,
@@ -2639,6 +2664,7 @@ mod tests {
             ClientMsg::GrantControl { to: 7 },
             ClientMsg::DenyControl { to: 7 },
             ClientMsg::SetUserSettings(UserSettings::default()),
+            ClientMsg::SetUserQsoLog(vec![QsoRecord::default()]),
         ] {
             assert_eq!(decode::<ClientMsg>(&encode(&m).unwrap()).unwrap(), m, "{m:?}");
         }
@@ -2652,7 +2678,12 @@ mod tests {
             ],
             waiting: vec![ClientInfo { slot: 1, name: "dl2b".into(), may_transmit: true }],
         };
-        let tells = [ServerMsg::Control(status), ServerMsg::UserSettings(UserSettings::default())];
+        let tells = [
+            ServerMsg::Control(status),
+            ServerMsg::UserSettings(UserSettings::default()),
+            ServerMsg::UserNetwork(NetworkConfig::default()),
+            ServerMsg::UserQsoLog(Vec::new()),
+        ];
         for m in &tells {
             assert_eq!(decode::<ServerMsg>(&encode(m).unwrap()).unwrap(), *m);
         }

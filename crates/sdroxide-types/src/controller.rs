@@ -1,8 +1,8 @@
 
 use crate::{
     CallsignInfo, Command, ControlStatus, Decode, DeviceCaps, DigiStatus, MemoryChannel,
-    MemoryFolder, Meters, QsoRecord, RadioState, RifpMeta, RifpStatus, SkimmerSpot, SpectrumFrame,
-    Spot, SstvMode, SstvStatus, UploadResult, UserSettings, VoiceStatus,
+    MemoryFolder, Meters, NetworkConfig, QsoRecord, RadioState, RifpMeta, RifpStatus, SkimmerSpot,
+    SpectrumFrame, Spot, SstvMode, SstvStatus, UploadResult, UserSettings, VoiceStatus,
 };
 
 /// Events flowing engine → UI.
@@ -634,6 +634,23 @@ pub trait RadioController {
     /// the caller so a slider does not rewrite the file every frame.
     fn send_user_settings(&mut self, settings: UserSettings) {
         let _ = settings;
+    }
+
+    /// Take this operator's network credentials, if the station sent them
+    /// since last poll. Passwords and API keys belong to the signed-in name,
+    /// not to the radio.
+    fn take_user_network(&mut self) -> Option<NetworkConfig> {
+        None
+    }
+
+    /// Take this operator's logbook, if the station sent it since last poll.
+    fn take_user_qso_log(&mut self) -> Option<Vec<QsoRecord>> {
+        None
+    }
+
+    /// Replace this operator's logbook on the station.
+    fn send_user_qso_log(&mut self, log: Vec<QsoRecord>) {
+        let _ = log;
     }
 
     /// Ask the station at the far end to put another radio in its roster.

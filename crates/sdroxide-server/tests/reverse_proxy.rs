@@ -70,6 +70,10 @@ async fn spawn_server(port: u16) {
         radio_power: None,
         load_user_settings: None,
         save_user_settings: None,
+        load_user_network: None,
+        save_user_network: None,
+        load_user_qso_log: None,
+        save_user_qso_log: None,
     }));
     tokio::time::sleep(Duration::from_millis(400)).await;
 }

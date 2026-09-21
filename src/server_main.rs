@@ -222,6 +222,14 @@ pub fn run(
         save_user_settings: Some(Box::new(|name, settings| {
             sdroxide_config::save_user_settings(name, settings).map_err(|e| e.to_string())
         })),
+        load_user_network: Some(Box::new(|name| sdroxide_config::load_user_network(name))),
+        save_user_network: Some(Box::new(|name, cfg| {
+            sdroxide_config::save_user_network(name, cfg).map_err(|e| e.to_string())
+        })),
+        load_user_qso_log: Some(Box::new(|name| sdroxide_config::load_user_qso_log(name))),
+        save_user_qso_log: Some(Box::new(|name, log| {
+            sdroxide_config::save_user_qso_log(name, log).map_err(|e| e.to_string())
+        })),
     })?;
     Ok(())
 }

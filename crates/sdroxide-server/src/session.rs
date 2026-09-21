@@ -224,6 +224,73 @@ fn give_control_to(shared: &Shared, slot: u64) {
     }
     shared.safe_state();
     announce_control(shared);
+    apply_operator_identity(shared, slot);
+}
+
+/// Put this operator's callsign, grid and network credentials onto the radio.
+///
+/// A named holder is who goes on the air, not whoever last wrote `digi.json`.
+/// A listener's file is left alone; a name that has never saved a `net.json`
+/// does not overwrite the station's feeds with empty defaults.
+fn apply_operator_identity(shared: &Shared, slot: u64) {
+    let Some(roster) = shared.station.upgrade() else { return };
+    let name = {
+        let clients = shared.clients.lock().unwrap();
+        let Some(c) = clients.iter().find(|c| c.slot == slot) else { return };
+        if !c.who.named {
+            return;
+        }
+        c.who.name.clone()
+    };
+    if let Some(load) = roster.load_user.as_ref() {
+        let settings = load(&name);
+        let call = if settings.my_call.trim().is_empty() {
+            name.to_uppercase()
+        } else {
+            settings.my_call
+        };
+        if let Some(d) = shared.latest.lock().unwrap().digi.clone() {
+            let mut cfg = d.config;
+            cfg.my_call = call;
+            if !settings.my_grid.trim().is_empty() {
+                cfg.my_grid = settings.my_grid;
+            }
+            let _ = shared.cmd_tx.send(Command::SetDigiConfig(cfg));
+        }
+    }
+    if let Some(load) = roster.load_user_network.as_ref() {
+        if let Some(net) = load(&name) {
+            let _ = shared.cmd_tx.send(Command::SetNetworkConfig(net));
+        }
+    }
+}
+
+/// Keep this name's callsign and grid in their settings file, without
+/// touching volume or band stacks.
+fn remember_operator_call(roster: &Station, name: &str, call: &str, grid: &str) {
+    let Some(load) = roster.load_user.as_ref() else { return };
+    let Some(save) = roster.save_user.as_ref() else { return };
+    let mut settings = load(name);
+    if settings.my_call == call && settings.my_grid == grid {
+        return;
+    }
+    settings.my_call = call.to_string();
+    settings.my_grid = grid.to_string();
+    if let Err(e) = save(name, &settings) {
+        warn!(who = name, "could not store operator identity: {e}");
+    }
+}
+
+/// A copy of the station bundle this client is allowed to see: passwords and
+/// API keys stay with the named operator they belong to.
+fn station_config_for(
+    who: &auth::Identity,
+    mut cfg: Box<sdroxide_types::StationConfig>,
+) -> Box<sdroxide_types::StationConfig> {
+    if who.named {
+        cfg.net = cfg.net.without_secrets();
+    }
+    cfg
 }
 
 /// Take the control key off `slot`, if it has it, and offer it to whoever has
@@ -458,8 +525,20 @@ async fn run_session(
     // it already had.
     if who.named {
         if let Some(load) = roster.load_user.as_ref() {
-            let settings = load(&who.name);
+            let mut settings = load(&who.name);
+            if settings.my_call.trim().is_empty() {
+                settings.my_call = who.name.to_uppercase();
+            }
             let _ = socket.send(msg(&ServerMsg::UserSettings(settings))).await;
+        }
+        if let Some(load) = roster.load_user_network.as_ref() {
+            if let Some(net) = load(&who.name) {
+                let _ = socket.send(msg(&ServerMsg::UserNetwork(net))).await;
+            }
+        }
+        if let Some(load) = roster.load_user_qso.as_ref() {
+            let log = load(&who.name);
+            let _ = socket.send(msg(&ServerMsg::UserQsoLog(log))).await;
         }
     }
     // The operator config, which the engine announced once at startup. Without
@@ -520,7 +599,7 @@ async fn run_session(
     // defaults for every server-side tab — and applying them would write those
     // defaults over the operator's real configuration.
     if let Some(s) = station {
-        let _ = socket.send(msg(&ServerMsg::StationConfig(s))).await;
+        let _ = socket.send(msg(&ServerMsg::StationConfig(station_config_for(&who, s)))).await;
         let _ = socket.send(msg(&ServerMsg::TleSubStatus(tle_subs))).await;
     }
     // And which interface this machine has open, with every backend's settings.
@@ -584,6 +663,9 @@ async fn run_session(
     // After the lanes are registered either way, so the client is told how the
     // radio is being shared on its own socket rather than having to ask.
     announce_control(shared);
+    if take_control {
+        apply_operator_identity(shared, slot);
+    }
 
     let (mut ws_tx, mut ws_rx) = futures_util::StreamExt::split(socket);
 
@@ -641,6 +723,38 @@ async fn run_session(
             };
             match decode::<ClientMsg>(&bytes) {
                 Ok(ClientMsg::Command(cmd)) => {
+                    // A named operator's callsign, grid and network credentials
+                    // are theirs even while they are only listening: saving them
+                    // must not wait for the control key, and must not reach the
+                    // engine unless they hold it.
+                    let skip_engine = who.named
+                        && match &cmd {
+                            Command::SetNetworkConfig(cfg) => {
+                                if let Some(save) = roster.save_user_network.as_ref() {
+                                    if let Err(e) = save(&who.name, cfg) {
+                                        warn!(
+                                            radio = shared.id,
+                                            who = who.label(),
+                                            "could not store operator network config: {e}"
+                                        );
+                                    }
+                                }
+                                !holds_control(shared, slot)
+                            }
+                            Command::SetDigiConfig(cfg) => {
+                                remember_operator_call(
+                                    roster,
+                                    &who.name,
+                                    &cfg.my_call,
+                                    &cfg.my_grid,
+                                );
+                                !holds_control(shared, slot)
+                            }
+                            _ => false,
+                        };
+                    if skip_engine {
+                        continue;
+                    }
                     // The one gate between a listening client and the hardware.
                     // Past this line a command is a command and the engine has
                     // no idea which socket it arrived on, so nothing further
@@ -770,6 +884,19 @@ async fn run_session(
                                     radio = shared.id,
                                     who = who.label(),
                                     "could not store operator settings: {e}"
+                                );
+                            }
+                        }
+                    }
+                }
+                Ok(ClientMsg::SetUserQsoLog(log)) => {
+                    if who.named {
+                        if let Some(save) = roster.save_user_qso.as_ref() {
+                            if let Err(e) = save(&who.name, &log) {
+                                warn!(
+                                    radio = shared.id,
+                                    who = who.label(),
+                                    "could not store operator logbook: {e}"
                                 );
                             }
                         }

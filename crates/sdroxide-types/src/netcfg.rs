@@ -324,6 +324,26 @@ pub struct NetworkConfig {
     pub auto_upload_wrl: bool,
 }
 
+impl NetworkConfig {
+    /// A copy that can be shown to somebody else: every password and API key
+    /// is blank. Cluster hosts, feed switches and the rest stay, so a listener
+    /// still sees how the station is wired without learning the holder's
+    /// QRZ, LoTW or Winlink login.
+    pub fn without_secrets(&self) -> Self {
+        let mut n = self.clone();
+        n.qrz = Credentials::default();
+        n.hamqth = Credentials::default();
+        n.eqsl = Credentials::default();
+        n.clublog = Credentials::default();
+        n.lotw = Credentials::default();
+        n.qrz_logbook_key.clear();
+        n.clublog_api_key.clear();
+        n.wrl_api_key.clear();
+        n.winlink.password.clear();
+        n
+    }
+}
+
 impl Default for NetworkConfig {
     fn default() -> Self {
         NetworkConfig {
@@ -354,5 +374,30 @@ impl Default for NetworkConfig {
             wrl_api_key: String::new(),
             auto_upload_wrl: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn without_secrets_keeps_hosts_and_clears_passwords() {
+        let mut n = NetworkConfig::default();
+        n.cluster.host = "cluster.example".into();
+        n.qrz.user = "dl1a".into();
+        n.qrz.password = "secret".into();
+        n.qrz_logbook_key = "key".into();
+        n.wrl_api_key = "wrl".into();
+        n.winlink.callsign = "DL1A".into();
+        n.winlink.password = "cms".into();
+        let stripped = n.without_secrets();
+        assert_eq!(stripped.cluster.host, "cluster.example");
+        assert!(stripped.qrz.password.is_empty());
+        assert!(stripped.qrz.user.is_empty());
+        assert!(stripped.qrz_logbook_key.is_empty());
+        assert!(stripped.wrl_api_key.is_empty());
+        assert_eq!(stripped.winlink.callsign, "DL1A");
+        assert!(stripped.winlink.password.is_empty());
     }
 }

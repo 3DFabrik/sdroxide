@@ -13,7 +13,6 @@ use crate::widgets::spectrum_view;
 
 use crate::app::SdroxideApp;
 use crate::app::net::auto_upload_adif;
-use crate::app::persist::persist_qso_log;
 use crate::app::settings::servers::TciServerStatus;
 use crate::app::spectrum::CFG_DEBOUNCE_S;
 use crate::control::ControlAction;
@@ -1328,6 +1327,14 @@ impl SdroxideApp {
                     // value once (later edits are UI-owned so typing sticks).
                     if !self.digi_cfg_seeded {
                         self.digi_cfg_edit = s.config.clone();
+                        if let Some(u) = &self.last_user_settings {
+                            if !u.my_call.is_empty() {
+                                self.digi_cfg_edit.my_call = u.my_call.clone();
+                            }
+                            if !u.my_grid.is_empty() {
+                                self.digi_cfg_edit.my_grid = u.my_grid.clone();
+                            }
+                        }
                         self.digi_cfg_seeded = true;
                     }
                     if self.focused {
@@ -1336,9 +1343,15 @@ impl SdroxideApp {
                     self.digi_status = Some(s);
                 }
                 RadioEvent::Ft8QsoLogged(mut r) => {
+                    // A named listener must not take the holder's contact into
+                    // their own log. A shared-password station still shares one
+                    // logbook, as it always did.
+                    if self.user_settings_on && self.ctrl.control().is_some_and(|c| !c.i_hold()) {
+                        continue;
+                    }
                     // Another tab may have logged since this copy was read;
                     // appending to a stale copy would write its QSOs away.
-                    if self.shared_log {
+                    if self.shared_log && !self.user_settings_on {
                         self.qso_log = crate::app::persist::load_qso_log(None);
                     }
                     r.id = self.next_log_id();
@@ -1346,7 +1359,7 @@ impl SdroxideApp {
                     let adif = auto_upload_adif(&self.net_cfg_edit, &r);
                     self.qso_log.push(r);
                     self.session_qsos += 1;
-                    persist_qso_log(&self.qso_log);
+                    self.persist_operator_log();
                     // Enrich + optionally upload the freshly logged QSO.
                     self.queue_lookup(call);
                     if let Some((qso_id, adif, targets)) = adif {

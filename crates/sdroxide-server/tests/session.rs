@@ -98,6 +98,10 @@ async fn spawn_server_with(
         radio_power: None,
         load_user_settings,
         save_user_settings,
+        load_user_network: None,
+        save_user_network: None,
+        load_user_qso_log: None,
+        save_user_qso_log: None,
     }));
     tokio::time::sleep(Duration::from_millis(400)).await;
 }

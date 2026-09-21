@@ -586,6 +586,63 @@ pub fn save_user_settings(
     store.save("settings.json", settings)
 }
 
+/// One named operator's network credentials (`users/<name>/net.json`), or
+/// `None` if they have never saved any. Missing is not the station's
+/// `net.json`: copying that would hand every new operator the last holder's
+/// passwords.
+pub fn load_user_network(name: &str) -> Option<sdroxide_types::NetworkConfig> {
+    let store = Store::user(name)?;
+    let dir = store.dir().ok()?;
+    if !dir.join("net.json").exists() {
+        return None;
+    }
+    Some(store.load("net.json"))
+}
+
+/// Write one named operator's network credentials. The file is left readable
+/// only by its owner: it holds other people's QRZ, LoTW and Winlink passwords.
+pub fn save_user_network(
+    name: &str,
+    cfg: &sdroxide_types::NetworkConfig,
+) -> Result<(), ConfigError> {
+    let Some(store) = Store::user(name) else {
+        return Err(ConfigError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "that name is not a usable operator",
+        )));
+    };
+    store.save("net.json", cfg)?;
+    if let Ok(dir) = store.dir() {
+        restrict_to_owner(&dir.join("net.json"));
+    }
+    Ok(())
+}
+
+/// One named operator's logbook (`users/<name>/qso_log.json`), or empty if
+/// they have never logged a contact under this name.
+pub fn load_user_qso_log(name: &str) -> Vec<sdroxide_types::QsoRecord> {
+    let Some(store) = Store::user(name) else { return Vec::new() };
+    store.load("qso_log.json")
+}
+
+/// Write one named operator's logbook.
+pub fn save_user_qso_log(
+    name: &str,
+    log: &[sdroxide_types::QsoRecord],
+) -> Result<(), ConfigError> {
+    let Some(store) = Store::user(name) else {
+        return Err(ConfigError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "that name is not a usable operator",
+        )));
+    };
+    store.save("qso_log.json", &log)?;
+    if let Ok(dir) = store.dir() {
+        restrict_to_owner(&dir.join("qso_log.json"));
+    }
+    Ok(())
+}
+
 /// Take away every permission but the owner's, where the platform has them.
 ///
 /// Best effort: a roster on a filesystem that cannot express this is still a
@@ -3063,6 +3120,16 @@ mod tests {
             "a path-shaped name must not read or write outside users/"
         );
         assert!(save_user_settings("...", &prefs).is_err());
+
+        let mut net = sdroxide_types::NetworkConfig::default();
+        net.qrz.password = "secret".into();
+        save_user_network("oe1test", &net).unwrap();
+        assert_eq!(load_user_network("oe1test").unwrap().qrz.password, "secret");
+        assert!(load_user_network("nobody").is_none());
+        let rec = sdroxide_types::QsoRecord { call: "W1AW".into(), ..Default::default() };
+        save_user_qso_log("oe1test", &[rec.clone()]).unwrap();
+        assert_eq!(load_user_qso_log("oe1test")[0].call, "W1AW");
+        assert!(load_user_qso_log("nobody").is_empty());
 
         // A scoped write lands in the scope, resolves on read, and leaves the
         // root's file alone.

@@ -194,6 +194,10 @@ async fn a_client_adds_renames_switches_and_closes_the_stations_radios() {
         })),
         load_user_settings: None,
         save_user_settings: None,
+        load_user_network: None,
+        save_user_network: None,
+        load_user_qso_log: None,
+        save_user_qso_log: None,
     }));
     tokio::time::sleep(Duration::from_millis(400)).await;
 

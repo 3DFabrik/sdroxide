@@ -1649,6 +1649,8 @@ impl SdroxideApp {
                 last.map(|s| s.squelch_db).unwrap_or(self.state.rx[0].squelch_db)
             },
             bandstacks: last.map(|s| s.bandstacks.clone()).unwrap_or_default(),
+            my_call: self.digi_cfg_edit.my_call.clone(),
+            my_grid: self.digi_cfg_edit.my_grid.clone(),
         }
     }
 
@@ -1672,9 +1674,15 @@ impl SdroxideApp {
             });
         }
         self.last_user_settings = Some(incoming.clone());
-        self.last_pushed_user_settings = Some(incoming);
+        self.last_pushed_user_settings = Some(incoming.clone());
         self.user_settings_on = true;
         self.user_settings_dirty_at = None;
+        if !incoming.my_call.is_empty() {
+            self.digi_cfg_edit.my_call = incoming.my_call;
+        }
+        if !incoming.my_grid.is_empty() {
+            self.digi_cfg_edit.my_grid = incoming.my_grid;
+        }
     }
 
     /// Apply a snapshot the station just sent, then push local edits back
@@ -1686,6 +1694,16 @@ impl SdroxideApp {
     ) {
         if let Some(incoming) = self.ctrl.take_user_settings() {
             self.apply_user_settings(incoming, cmds);
+        }
+        if let Some(net) = self.ctrl.take_user_network() {
+            self.net_cluster_cmds = net.cluster.commands.join("\n");
+            self.net_rbn_cmds = net.rbn.commands.join("\n");
+            self.net_cfg_edit = net;
+            self.net_cfg_seeded = true;
+        }
+        if let Some(log) = self.ctrl.take_user_qso_log() {
+            self.qso_log = log;
+            self.log_content_changed();
         }
         if !self.user_settings_on {
             return;
