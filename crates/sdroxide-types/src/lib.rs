@@ -276,8 +276,8 @@ pub use station::StationConfig;
 pub use tciserver::TciServerConfig;
 pub use tone::{CTCSS_TONES, SubTone};
 pub use ui::{
-    BandplanKind, ChromeStyle, FontSize, LayoutMode, SmeterStyle, SpectrumDetail, Speed,
-    UiSettings, UiTheme,
+    BandplanKind, ChromeStyle, FontSize, LayoutMode, SmeterStyle, Solar3dWindow, SpectrumDetail,
+    Speed, UiSettings, UiTheme,
 };
 pub use vdl2::{
     VDL2_ALL_CHANNELS, VDL2_CHANNEL_LABELS, VDL2_CHANNEL_SPACING_HZ, VDL2_CHANNELS_HZ, VDL2_CSC_HZ,
