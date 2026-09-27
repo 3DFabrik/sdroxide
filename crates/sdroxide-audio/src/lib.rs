@@ -515,6 +515,18 @@ fn alsa_card_id(pcm_id: &str) -> Option<String> {
     (!id.is_empty()).then(|| id.to_string())
 }
 
+/// The ALSA PCM *device* index (`DEV=n`) a cpal pcm id opens. `None` when the
+/// name leaves it to the default (`sysdefault:CARD=X`) or is not an ALSA PCM.
+/// One USB card can expose several devices — a mono demod and a stereo I/Q —
+/// and each has its own `/proc/asound/cardN/streamM`, so this is what selects
+/// the right one.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn alsa_dev_index(pcm_id: &str) -> Option<u32> {
+    let rest = pcm_id.split("DEV=").nth(1)?;
+    let end = rest.find([',', ':']).unwrap_or(rest.len());
+    rest[..end].trim().parse().ok()
+}
+
 /// Trim the "at usb-…, full speed" tail off an ALSA longname, leaving the
 /// readable "manufacturer model" part.
 fn prettify_longname(long: &str) -> String {
@@ -591,37 +603,48 @@ fn device_card_id(device: &cpal::Device) -> Option<String> {
     alsa_card_id(device.description().ok()?.driver()?)
 }
 
+/// Highest capture channel count in the text of an ALSA `streamN` file. Zero
+/// when the file has no capture section at all.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn capture_channels_in(text: &str) -> u16 {
+    let mut in_capture = false;
+    let mut max = 0u16;
+    for line in text.lines() {
+        let t = line.trim();
+        match t {
+            "Capture:" => in_capture = true,
+            "Playback:" => in_capture = false,
+            _ if in_capture => {
+                let channels = t.strip_prefix("Channels:").and_then(|r| r.trim().parse::<u16>().ok());
+                if let Some(n) = channels {
+                    max = max.max(n);
+                }
+            }
+            _ => {}
+        }
+    }
+    max
+}
+
 /// Linux: the true maximum hardware capture channel count for a card, read from
-/// `/proc/asound/cardN/stream0`. This sees past ALSA's plug/dmix layer, which
+/// `/proc/asound/cardN/streamM`. This sees past ALSA's plug/dmix layer, which
 /// upmixes a mono microphone to a fake stereo config — so it's the only
 /// reliable way to tell that a "stereo" capture is really mono (no good for
-/// I/Q). `None` off-Linux or when the file is absent.
-fn hw_capture_channels(index: &str) -> Option<u16> {
+/// I/Q). `pcm_id` picks the stream: a USB card can carry several, a mono demod
+/// on stream0 and a stereo I/Q on stream1, and reading stream0 regardless
+/// called the stereo input mono (issue #582). `None` off-Linux or when the
+/// file is absent.
+fn hw_capture_channels(index: &str, pcm_id: &str) -> Option<u16> {
     #[cfg(target_os = "linux")]
     {
-        let text = std::fs::read_to_string(format!("/proc/asound/card{index}/stream0")).ok()?;
-        let mut in_capture = false;
-        let mut max = 0u16;
-        for line in text.lines() {
-            let t = line.trim();
-            match t {
-                "Capture:" => in_capture = true,
-                "Playback:" => in_capture = false,
-                _ if in_capture => {
-                    if let Some(rest) = t.strip_prefix("Channels:") {
-                        if let Ok(n) = rest.trim().parse::<u16>() {
-                            max = max.max(n);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        return (max > 0).then_some(max);
+        let dev = alsa_dev_index(pcm_id).unwrap_or(0);
+        let text = std::fs::read_to_string(format!("/proc/asound/card{index}/stream{dev}")).ok()?;
+        let n = capture_channels_in(&text);
+        (n > 0).then_some(n)
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = index;
+        let _ = (index, pcm_id);
         None
     }
 }
@@ -1052,11 +1075,15 @@ pub fn start_input_stereo(
         });
     // Report the TRUE hardware channel count, not cpal's — the ALSA plug layer
     // upmixes a mono mic to a fake 2-channel config, which would otherwise slip
-    // past the caller's mono-for-IQ guard. Fall back to cpal's count when the
-    // hardware count is unknown (non-Linux, or a virtual device).
-    let hw_channels = alsa_cards()
-        .get(&device_card_id(&device).unwrap_or_default())
-        .and_then(|c| hw_capture_channels(&c.index));
+    // past the caller's mono-for-IQ guard. The PCM's own device index picks the
+    // stream file, so a card's stereo I/Q is not judged by its mono demod.
+    // Fall back to cpal's count when the hardware count is unknown (non-Linux,
+    // or a virtual device).
+    let pcm_id = device.description().ok().and_then(|d| d.driver().map(str::to_string));
+    let hw_channels = pcm_id.as_deref().and_then(|p| {
+        let card = alsa_cards().get(alsa_card_id(p)?.as_str()).cloned()?;
+        hw_capture_channels(&card.index, p)
+    });
     let mut last = AudioError::NoConfig;
     for (config, fmt) in config_candidates(picked, device.default_input_config()) {
         let rate = config.sample_rate;
@@ -1177,8 +1204,8 @@ pub fn start_output(
 #[cfg(test)]
 mod tests {
     use super::{
-        CAPTURE_BUFFER_MS, GLITCH_REPORT_EVERY, NameAssigner, PendingInput, Say,
-        capture_period_frames, config_candidates,
+        CAPTURE_BUFFER_MS, GLITCH_REPORT_EVERY, NameAssigner, PendingInput, Say, alsa_dev_index,
+        capture_channels_in, capture_period_frames, config_candidates,
     };
     use std::time::{Duration, Instant};
 
@@ -1265,6 +1292,25 @@ mod tests {
         let ins = super::input_device_names();
         eprintln!("outputs: {outs:?}");
         eprintln!("inputs:  {ins:?}");
+    }
+
+    /// One USB card can carry two PCM devices — a mono demod on stream0 and a
+    /// stereo I/Q on stream1 (issue #582). Reading stream0 regardless called
+    /// the stereo input mono and refused it for I/Q, so the PCM's own `DEV=`
+    /// has to pick the stream file.
+    #[test]
+    fn the_iq_channel_probe_reads_the_pcm_devices_own_stream() {
+        assert_eq!(alsa_dev_index("hw:CARD=reciever,DEV=1"), Some(1));
+        assert_eq!(alsa_dev_index("plughw:CARD=reciever,DEV=0"), Some(0));
+        assert_eq!(alsa_dev_index("sysdefault:CARD=reciever"), None);
+
+        let demod = "Playback:\n  Interface 4\n    Channels: 1\n\
+                     Capture:\n  Interface 5\n    Channels: 1\n";
+        let iq = "Capture:\n  Interface 5\n    Channels: 2\n";
+        assert_eq!(capture_channels_in(demod), 1);
+        assert_eq!(capture_channels_in(iq), 2);
+        // A playback-only stream is not a capture device at all.
+        assert_eq!(capture_channels_in("Playback:\n    Channels: 2\n"), 0);
     }
 
     /// ALSA reaches one card through several PCMs. They are one device and have
