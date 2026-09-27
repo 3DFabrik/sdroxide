@@ -247,7 +247,17 @@ impl Ft8Modem {
                     SYNC_MIN,
                     MAX_CAND,
                 )
-                .osd(true);
+                .osd(true)
+                // FT8 runs the WSJT-X decode architecture, not mfsk-core's
+                // single-pass default: a plain `DecodeRequest::new(…).decode()`
+                // does *no* signal subtraction, while real `jt9`/WSJT-X run a
+                // multi-pass by default — so FT4 above already calls
+                // `.sic_rounds(2)` and FT8 was left on the weaker path.
+                // `sic_early` is mfsk-core's port of `ft8_decode.f90`'s
+                // checkpointed `ndec_early` decode (a recall superset of flat
+                // SIC), so a weak signal inside a stronger neighbour's 50 Hz
+                // occupied bandwidth is still decoded.
+                .sic_early();
                 let req = match hint.as_ref() {
                     Some(h) => req.ap_hint(h),
                     None => req,
@@ -2319,5 +2329,52 @@ mod tests {
         let d = decodes.iter().find(|d| d.message.contains("DL/W1AW")).expect("decoded");
         assert!(d.is_cq);
         assert_eq!(d.from.as_deref(), Some("DL/W1AW"));
+    }
+
+    /// A weak FT8 signal buried *inside* a strong neighbour's occupied
+    /// bandwidth still decodes — the whole reason FT8 runs signal subtraction.
+    ///
+    /// This is the one thing a one-signal sensitivity test cannot show: put a
+    /// strong CQ at 2310 Hz and a weak one 10–30 Hz away and, without the
+    /// checkpointed subtraction on the FT8 request (mfsk-core's default is a
+    /// bare single pass), only the strong signal comes back. Deterministic, so
+    /// it is a real gate rather than a measurement.
+    #[test]
+    fn a_weak_signal_under_a_strong_neighbour_is_recovered() {
+        let slot = |weak_hz: f32| {
+            let modem = Ft8Modem::new(Mode::Ft8);
+            let (strong, _) = modem.encode_burst_12k("CQ AB1CD FN42", 2310.0, 0.5).unwrap();
+            let weak_amp = 0.5 * 10f32.powf(-14.0 / 20.0);
+            let (weak, _) = modem.encode_burst_12k("CQ W9XYZ EN52", weak_hz, weak_amp).unwrap();
+            let mut out = vec![0.0f32; 180_000];
+            for (i, &x) in strong.iter().enumerate() {
+                out[6_000 + i] += x;
+            }
+            for (i, &x) in weak.iter().enumerate() {
+                out[6_000 + i] += x;
+            }
+            out.iter().map(|&x| (x * 12_000.0) as i16).collect::<Vec<i16>>()
+        };
+        let decode = |buf: &[i16]| {
+            Ft8Modem::new(Mode::Ft8)
+                .decode_slot(buf, 0, &ApHints::default(), 2310.0)
+                .into_iter()
+                .map(|d| d.message)
+                .collect::<Vec<_>>()
+        };
+
+        // Weak inside the strong signal's bandwidth: both must come back.
+        for weak_hz in [2300.0f32, 2320.0] {
+            let got = decode(&slot(weak_hz));
+            assert!(
+                got.iter().any(|m| m == "CQ AB1CD FN42"),
+                "the strong signal must decode at {weak_hz} Hz: {got:?}"
+            );
+            assert!(
+                got.iter().any(|m| m == "CQ W9XYZ EN52"),
+                "signal subtraction must recover the weak signal under the strong \
+                 one at {weak_hz} Hz: {got:?}"
+            );
+        }
     }
 }
