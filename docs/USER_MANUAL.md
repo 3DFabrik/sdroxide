@@ -2888,6 +2888,15 @@ configured it says so rather than recording silence. It stops by itself if the
 audio output device is changed under it, and one still running when you quit is
 closed properly, so there is never a half-written file to repair.
 
+**Quick clip.** The **Quick clip** row is for a short sample rather than a
+session: press **30 s** or **1 min** and the recording starts by itself and
+stops at the end of that span — small enough to attach to a reception report,
+with no second press to stop it. Pressing the lit clip again starts the span
+over. The **Stop after** row is the other way to end a recording — **15**
+through **90 min**, or **no stop**, with a countdown beside the chips — and a
+clip and a timer are two answers to when a recording ends, so arming one clears
+the other. Both are session settings, not stored preferences.
+
 #### Recording the spectrum
 
 **I/Q WAV**, the second row of the REC picker, records the whole span the

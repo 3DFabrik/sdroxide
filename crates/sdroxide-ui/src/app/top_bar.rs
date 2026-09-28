@@ -3215,14 +3215,22 @@ impl SdroxideApp {
     /// Stop the MP3 recording when its "stop after" deadline passes. Runs once
     /// a frame; the deadline itself is armed by the REC popup's chips.
     pub(in crate::app) fn poll_recording_timer(&mut self, cmds: &mut Vec<Command>) {
+        let now = crate::time::now_unix();
+        // A quick clip asked for while idle is armed the first frame the
+        // recording is actually running ([`rec_clip_tick`]). It has to be
+        // armed after the start, not at the press: a deadline whose recording
+        // is not running is dropped just below, so arming it early would clear
+        // it before the recorder came up.
+        let (clip, arm) = rec_clip_tick(now, self.rec_clip, self.state.recording);
+        self.rec_clip = clip;
+        if let Some((at, secs)) = arm {
+            self.recording_stop_at = Some((at, secs));
+        }
         // The preset rides along untouched: `rec_timer_tick` decides only
         // whether the deadline still stands, so keeping it out of the helper
         // keeps that decision the one pure thing it has to get right.
-        let (stop_at, stop) = rec_timer_tick(
-            crate::time::now_unix(),
-            self.recording_stop_at.map(|(at, _)| at),
-            self.state.recording,
-        );
+        let (stop_at, stop) =
+            rec_timer_tick(now, self.recording_stop_at.map(|(at, _)| at), self.state.recording);
         if stop_at.is_none() {
             self.recording_stop_at = None;
         }
@@ -3302,6 +3310,56 @@ impl SdroxideApp {
             ui.label(RichText::new(f).size(9.5).color(crate::theme::CYAN_DIM()));
         }
 
+        // Quick clip: one press records a fixed short span and stops, for a
+        // sample to attach to a reception report. A separate row from "Stop
+        // after" because the intent is different — a clip *starts* a recording
+        // (the operator need not have one running), while the timer below only
+        // gives a running recording an end. A clip asked for while idle is
+        // armed by `poll_recording_timer` once the recorder has come up, so a
+        // start that has not taken yet is not cleared before it runs.
+        crate::chrome::menu_caption(ui, "Quick clip");
+        ui.horizontal_wrapped(|ui| {
+            let now = crate::time::now_unix();
+            for secs in [30u16, 60] {
+                let armed = self.recording_stop_at.is_some_and(|(_, s)| s == secs);
+                let pending = self.rec_clip.is_some_and(|(_, s)| s == secs);
+                let label = clip_label(secs);
+                let hint = if armed || pending {
+                    format!("Clipping {} — press again to start it over", clip_label(secs))
+                } else {
+                    format!(
+                        "Record {} and stop — a clip to attach to a reception report",
+                        clip_label(secs)
+                    )
+                };
+                if crate::chrome::chip(ui, armed || pending, label)
+                    .on_hover_text(hint)
+                    .clicked()
+                {
+                    // A clip is one span; it replaces any longer deadline.
+                    // Running already, the span starts now; idle, the recording
+                    // is asked for and the span is armed once it is up.
+                    if audio {
+                        self.recording_stop_at = Some((now + i64::from(secs), secs));
+                        self.rec_clip = None;
+                    } else {
+                        self.recording_stop_at = None;
+                        self.rec_clip = Some((now, secs));
+                        cmds.push(Command::SetRecording(true));
+                    }
+                    crate::repaint::schedule_ms(ui.ctx(), 1_000);
+                }
+            }
+        });
+        if let Some((_, secs)) = self.rec_clip {
+            ui.label(
+                RichText::new(format!("starting a {} clip…", clip_label(secs)))
+                    .size(9.5)
+                    .color(crate::theme::CYAN_DIM()),
+            );
+            crate::repaint::schedule_ms(ui.ctx(), 250);
+        }
+
         // Auto-stop: "record for the next N minutes". The deadline is armed
         // here and ticked once a frame by `poll_recording_timer` — it never
         // rides the engine's SetRecording, so a stop armed for one recording
@@ -3313,16 +3371,19 @@ impl SdroxideApp {
                 let mut arm: Option<(i64, u16)> = None;
                 let mut cancel = false;
                 for minutes in [15u16, 30, 45, 60, 90] {
+                    // The deadline is stored in seconds (a quick clip is 30 s
+                    // long); these presets are whole minutes.
+                    let secs = minutes * 60;
                     // Which chip reads as armed is the preset the operator
                     // pressed, held for as long as the deadline stands — not
                     // whichever preset happens to match what is left of it,
                     // which is only its own for the first second.
-                    let armed = self.recording_stop_at.is_some_and(|(_, m)| m == minutes);
+                    let armed = self.recording_stop_at.is_some_and(|(_, s)| s == secs);
                     if crate::chrome::chip(ui, armed, format!("{minutes} min"))
                         .on_hover_text(format!("Stop the MP3 recording after {minutes} minutes"))
                         .clicked()
                     {
-                        arm = Some((now + i64::from(minutes) * 60, minutes));
+                        arm = Some((now + i64::from(secs), secs));
                     }
                 }
                 if self.recording_stop_at.is_some()
@@ -3332,10 +3393,13 @@ impl SdroxideApp {
                 }
                 if let Some(armed) = arm {
                     self.recording_stop_at = Some(armed);
+                    // A longer timer also drops a clip still waiting to start.
+                    self.rec_clip = None;
                     // The countdown label below has to keep being redrawn.
                     crate::repaint::schedule_ms(ui.ctx(), 1_000);
                 } else if cancel {
                     self.recording_stop_at = None;
+                    self.rec_clip = None;
                 }
                 if let Some((at, _)) = self.recording_stop_at {
                     let left = (at - now).max(0);
@@ -5626,6 +5690,50 @@ fn rec_timer_tick(now: i64, stop_at: Option<i64>, recording: bool) -> (Option<i6
     if now >= at { (None, true) } else { (Some(at), false) }
 }
 
+/// The label for a quick-clip span: seconds under a minute, whole minutes at
+/// and above it, so "30 s" and "1 min" read as what they are.
+fn clip_label(secs: u16) -> String {
+    if secs < 60 {
+        format!("{secs} s")
+    } else {
+        format!("{} min", secs / 60)
+    }
+}
+
+/// How long a requested clip start is waited for before it is judged failed,
+/// so a recorder that will not come up is not left waiting on a span that
+/// never begins.
+const REC_CLIP_START_TIMEOUT_S: i64 = 3;
+
+/// Arm a quick clip's deadline once its recording is actually running.
+///
+/// A clip pressed while idle sends `SetRecording(true)` and remembers the
+/// request here as `ask = (asked_at, secs)`. The deadline cannot be armed at
+/// the press because [`rec_timer_tick`] drops any deadline whose recording is
+/// not running, so an early one would be cleared on the next frame before the
+/// recorder came up. Instead the request waits: the first frame the recording
+/// is seen running the deadline is armed, measured from that frame so the
+/// clip is a full span, and the request is cleared. A start that never takes —
+/// the recorder refused, or something else owns it — is dropped after
+/// [`REC_CLIP_START_TIMEOUT_S`] rather than waited on forever.
+///
+/// Returns the request to carry and, when the recording has come up, the
+/// `(stop_at, secs)` deadline to arm.
+fn rec_clip_tick(
+    now: i64,
+    ask: Option<(i64, u16)>,
+    recording: bool,
+) -> (Option<(i64, u16)>, Option<(i64, u16)>) {
+    let Some((asked_at, secs)) = ask else { return (None, None) };
+    if recording {
+        return (None, Some((now + i64::from(secs), secs)));
+    }
+    if now - asked_at >= REC_CLIP_START_TIMEOUT_S {
+        return (None, None);
+    }
+    (Some((asked_at, secs)), None)
+}
+
 fn tx_rows_w_for(ui: &egui::Ui, keyer: bool, side_col_w: f32) -> f32 {
     let (row1, row2) = tx_rows_fixed_w(ui, keyer);
     row1.max(row2)
@@ -6577,6 +6685,32 @@ mod tests {
         // so an armed stop can never kill a later recording it was not set
         // for.
         assert_eq!(rec_timer_tick(2000, Some(1060), false), (None, false));
+    }
+
+    /// A quick clip armed while idle waits for its recording to come up,
+    /// then arms a full span from that frame; a start that never takes is
+    /// dropped at the timeout rather than waited on forever.
+    #[test]
+    fn rec_clip_waits_for_the_recording_to_start() {
+        // Idle: the request is carried, with nothing armed yet.
+        assert_eq!(rec_clip_tick(100, Some((100, 30)), false), (Some((100, 30)), None));
+        // Still not up, inside the timeout: still carried.
+        assert_eq!(rec_clip_tick(102, Some((100, 30)), false), (Some((100, 30)), None));
+        // The recorder came up: a full span is armed from now and the request
+        // is spent, so the deadline rides the ordinary timer from here.
+        let (ask, arm) = rec_clip_tick(103, Some((100, 30)), true);
+        assert_eq!((ask, arm), (None, Some((133, 30))));
+        assert_eq!(rec_timer_tick(103, arm.map(|(at, _)| at), true), (Some(133), false));
+        assert_eq!(rec_timer_tick(133, arm.map(|(at, _)| at), true), (None, true));
+        // A start that never takes is given up on at the timeout.
+        assert_eq!(rec_clip_tick(103, Some((100, 30)), false), (None, None));
+        // No request, nothing to do, running or not.
+        assert_eq!(rec_clip_tick(100, None, true), (None, None));
+        assert_eq!(rec_clip_tick(100, None, false), (None, None));
+
+        // The chip labels are the seconds and the whole minute.
+        assert_eq!(clip_label(30), "30 s");
+        assert_eq!(clip_label(60), "1 min");
     }
 
     /// Walk a chip through a sequence of pointer edges, collecting the PTT
