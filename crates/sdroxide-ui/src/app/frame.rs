@@ -1332,25 +1332,22 @@ impl SdroxideApp {
                     }
                     // Prepend newest-slot decodes; keep a rolling window.
                     let dial = self.state.rx_freq_hz();
-                    // ...and fold them into the propagation field, so the 3D
-                    // globe's BANDS OPEN chart and the flat maps show this
-                    // station's own paths. The other source of the field is the
-                    // RBN skimmer feed, which does not carry every band a
-                    // station works; `observe_decodes` places a station by its
-                    // grid when it has one and by its country when it does not,
-                    // so those decodes count too.
-                    {
+                    // ...and fold them into the propagation field as they
+                    // arrive, so the 3D globe's BANDS OPEN chart and the flat
+                    // maps show this station's own paths whether or not a
+                    // panel with a map is on screen — until now only
+                    // `prop_texture` folded them, and only while one was.
+                    // Under the mode's own source, the same one `prop_texture`
+                    // uses, so the store's de-duplication sees one decode
+                    // once; and not at all for meteor scatter and moonbounce.
+                    // A decode is placed by the grid in its message, so a
+                    // station that sent none is skipped.
+                    if let Some(src) = super::panels::prop_source_for(self.state.rx[0].mode) {
                         let v = self.view.solar3d;
                         self.prop.set_halflife_min(v.prop_halflife_min);
                         self.prop.set_sources(crate::prop_map::PropSources(v.prop_sources));
                         let grid = self.my_grid();
-                        self.prop.observe_decodes(
-                            &d,
-                            sdroxide_types::PropSource::Ft8,
-                            dial,
-                            &grid,
-                            crate::time::now_unix(),
-                        );
+                        self.prop.observe_decodes(&d, src, dial, &grid, crate::time::now_unix());
                     }
                     for dec in d.into_iter().rev() {
                         self.digi_decodes.insert(0, dec);

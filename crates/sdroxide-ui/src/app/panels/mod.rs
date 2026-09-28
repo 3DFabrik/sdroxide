@@ -120,6 +120,24 @@ pub(in crate::app) fn panel_panes(mode: Mode) -> &'static [&'static str] {
     }
 }
 
+/// Which propagation source a mode's own decodes are filed under, or `None`
+/// for a mode whose decodes are not evidence of an ionospheric path.
+///
+/// Every slotted HF mode's decodes are observations of a path; which mode they
+/// came from only changes the decode floor they are measured against, so each
+/// keeps its own source. Meteor scatter and moonbounce are not skip at all,
+/// and a meteor ping or an echo off the Moon filed here would paint a band as
+/// open that is not.
+pub(in crate::app) fn prop_source_for(mode: Mode) -> Option<sdroxide_types::PropSource> {
+    match mode {
+        Mode::Ft8 => Some(sdroxide_types::PropSource::Ft8),
+        Mode::Ft4 => Some(sdroxide_types::PropSource::Ft4),
+        Mode::Ft2 => Some(sdroxide_types::PropSource::Ft2),
+        Mode::Js8 => Some(sdroxide_types::PropSource::Js8),
+        _ => None,
+    }
+}
+
 impl SdroxideApp {
     /// Fold everything this frame knows into the propagation field, and hand
     /// back the texture the map should paint under itself.
@@ -147,18 +165,10 @@ impl SdroxideApp {
         if !my_grid.trim().is_empty() {
             self.prop.set_home(&my_grid);
 
-            // Every slotted mode's decodes are observations of a path; which
-            // mode they came from only changes the decode floor they are
-            // measured against.
-            let mode = self.state.rx[0].mode;
-            let src = match mode {
-                Mode::Ft8 => Some(sdroxide_types::PropSource::Ft8),
-                Mode::Ft4 => Some(sdroxide_types::PropSource::Ft4),
-                Mode::Ft2 => Some(sdroxide_types::PropSource::Ft2),
-                Mode::Js8 => Some(sdroxide_types::PropSource::Js8),
-                _ => None,
-            };
-            if let Some(src) = src {
+            // The rolling decode list again. Each batch was folded as it
+            // arrived (see `frame.rs`); the store keys what it has seen, so
+            // this adds only what a source switched on since then had missed.
+            if let Some(src) = prop_source_for(self.state.rx[0].mode) {
                 let decodes = std::mem::take(&mut self.digi_decodes);
                 self.prop.observe_decodes(&decodes, src, dial_hz, &my_grid, now);
                 self.digi_decodes = decodes;
@@ -1253,6 +1263,21 @@ impl SdroxideApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// This station's decodes are filed under their own mode — FT4 is not
+    /// FT8, and filing it as FT8 counted it twice — and meteor scatter and
+    /// moonbounce not at all: a ping or an echo is not a band that is open.
+    #[test]
+    fn own_decodes_file_under_their_own_mode_and_never_meteor_or_moon() {
+        use sdroxide_types::PropSource;
+        assert_eq!(prop_source_for(Mode::Ft8), Some(PropSource::Ft8));
+        assert_eq!(prop_source_for(Mode::Ft4), Some(PropSource::Ft4));
+        assert_eq!(prop_source_for(Mode::Ft2), Some(PropSource::Ft2));
+        assert_eq!(prop_source_for(Mode::Js8), Some(PropSource::Js8));
+        for m in [Mode::Msk144, Mode::Fsk441, Mode::Jt65, Mode::Q65] {
+            assert_eq!(prop_source_for(m), None, "{m:?}");
+        }
+    }
 
     /// The waterfall is the tab one past the mode's own panes — that is how
     /// `App::ui` tells "show the panadapter" from "show the panel", so a mode
