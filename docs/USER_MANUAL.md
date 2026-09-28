@@ -3298,6 +3298,26 @@ of each band is an all-modes segment). The DX will be there and so will everyone
 chasing it — but check your own band plan before you key, because sdroxide will
 not stop you.
 
+#### Saving what a panel has decoded
+
+The text and message panels carry a **SAVE** chip, next to **CLEAR RX** where
+the panel has one. It writes what the panel holds to a file, through the same
+save dialog the logbook and the ADIF export use, and the suggested file name
+carries the mode. With nothing decoded yet the chip is greyed out rather than
+saving an empty file. What goes in the file depends on the mode:
+
+| Panel | What is saved |
+| --- | --- |
+| CW and the keyboard modes (RTTY, PSK, Olivia, THOR, …) | The receive text as it stands, as a `.txt` file |
+| FSQ | One line per message: whether it was for you, sender, addressee and text. FSQ messages carry no time, so there is no time column |
+| ACARS, packet, JS8 and APRS | A `.csv` file, one row per message or frame, with its UTC time |
+| NAVTEX, VDL2 and HFDL | A tab-separated `.txt` file, one line per message, with its UTC time |
+| WSPR and PI4 | The reception list as a `.csv` file, in the **RECEPTIONS** header |
+| The CW/RTTY skimmer | Its spot list, from the **Spots** row of the skimmer's settings |
+
+The FT8/FT4/FT2 decode list has its own **CSV** and **ADIF** buttons instead
+([3.2.2](#322-the-operating-panel)).
+
 ### 3.2 FT8, FT4 and FT2
 
 **FT8**, **FT4** and **FT2** are the automatic modes: timeslot-based, with QSO
@@ -3434,14 +3454,6 @@ The panel has two halves:
   rather than a contact, with no report sent or received; a decode that names
   no sender (free text, a hashed call not yet resolved) has no call to log and
   is left out.
-- **Saving decoded text** — every text mode's panel carries a **SAVE** chip
-  beside its **CLEAR RX** (issue #533): CW and the keyboard modes write the
-  receive text as it stands, and the message modes — ACARS, NAVTEX, VDL2, HFDL,
-  FSQ, packet, JS8 and APRS — write their log, one line per message with the
-  UTC time; WSPR, PI4 and the skimmer write their spot lists. The suggested name
-  carries the mode, and the dialog is the same one the logbook and the ADIF
-  export use, so the file lands wherever you choose. A mode with nothing decoded
-  yet greys the chip rather than opening an empty file.
 - **QSO** (right) — a **⇵** frequency button listing every band's agreed FT8/FT4
   frequency ([3.1](#31-general-considerations)), a world map
   (your location, the station you are working, and
