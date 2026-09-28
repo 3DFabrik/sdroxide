@@ -1303,7 +1303,22 @@ impl SdroxideApp {
                         // the whole app, and the runtime needs `&mut self` to
                         // arm its cooldowns.
                         let log = self.log_index().clone();
-                        self.alerts.on_ft8(&d, &st.config.my_call, &st.config.my_grid, &log, band);
+                        if let Some(fired) =
+                            self.alerts.on_ft8(&d, &st.config.my_call, &st.config.my_grid, &log, band)
+                            && fired.reply.speaks()
+                        {
+                            // Spoken from the alarm path, deliberately not the
+                            // focus-gated `on_ft8` above: an alarm is to be
+                            // heard when the operator is looking elsewhere.
+                            let country = sdroxide_types::entity_name(&fired.call);
+                            self.speech.announcer.on_alert(
+                                fired.event,
+                                &fired.call,
+                                band,
+                                country,
+                                now,
+                            );
+                        }
                     }
                     // Prepend newest-slot decodes; keep a rolling window.
                     let dial = self.state.rx_freq_hz();
