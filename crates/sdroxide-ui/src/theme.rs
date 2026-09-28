@@ -2795,7 +2795,7 @@ mod tests {
         // The darkest cell of the real texture: somewhere is always in full
         // night, and its colour is the night ink.
         let px = sdroxide_solar::night_shade_rgba(72, 36, 1_790_000_000);
-        let night = px.chunks_exact(4).max_by_key(|p| p[3]).expect("a texture");
+        let night = px.as_chunks::<4>().0.iter().max_by_key(|p| p[3]).expect("a texture");
         for (i, map) in MAP_PALETTES.iter().enumerate() {
             let a = map.night_max.min(f32::from(night[3]) / 255.0);
             let mix = |s: u8, n: u8| (f32::from(s) * (1.0 - a) + f32::from(n) * a).round() as u8;

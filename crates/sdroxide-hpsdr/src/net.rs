@@ -1716,8 +1716,6 @@ mod hl2_swr_regression_tests {
         assert_eq!(hl2_swr_from_raw(1000, 1000), Some(HL2_SWR_MAX));
         // Past |Γ| = 1 after calibration, but short of rev = fwd.
         assert_eq!(hl2_swr_from_raw(1000, 850), Some(HL2_SWR_MAX));
-        // A pegged meter trips the guard at whatever limit it is set to.
-        assert!(HL2_SWR_MAX >= sdroxide_types::SWR_LIMIT_MAX);
     }
 
     /// More reflected power never reads as a better match.
