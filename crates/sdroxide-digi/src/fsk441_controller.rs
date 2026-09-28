@@ -93,9 +93,14 @@ pub struct Fsk441Controller {
     /// Transmit is on. Held by the operator, as the mode is worked — the message
     /// loops for as long as this stands.
     tx_active: bool,
-    /// The operator has asked to transmit and the box had nothing to send, so
-    /// the panel can say so rather than looking armed and doing nothing.
-    tx_latched: bool,
+    /// A key was refused because the box had nothing to send. This is a notice
+    /// that stands on its own, **not** a latched transmit request: the request
+    /// is dropped as well as refused (see [`Self::poll`]), because a request
+    /// that is merely refused is still a request, and a request still standing
+    /// is what keys the radio on the next keystroke with nobody having pressed
+    /// anything. The next press clears it — that press is the operator
+    /// acknowledging the notice.
+    tx_refused: bool,
     /// The radio has been keyed for the over in progress.
     keyed: bool,
     /// A whole over has had text in it, so the end of the pass can unkey.
@@ -147,7 +152,7 @@ impl Fsk441Controller {
             tx_pass: Vec::new(),
             tx_pass_pos: 0,
             tx_active: false,
-            tx_latched: false,
+            tx_refused: false,
             keyed: false,
             over_had_text: false,
             tx48: VecDeque::new(),
@@ -189,9 +194,10 @@ impl Fsk441Controller {
         s.transmitting = self.keyed;
         s.tx_pending_msg = (!self.tx_text.is_empty()).then(|| self.tx_text.clone());
         // Armed with nothing to send: the panel shows the empty-box reason rather
-        // than a key that appears to be doing nothing.
-        s.tx_refused =
-            (self.tx_active && self.tx_latched).then(|| "type a message to transmit".to_string());
+        // than a key that appears to be doing nothing. It outlives the press
+        // that caused it, because the mode is worked by holding the key and the
+        // release would otherwise take the explanation with it.
+        s.tx_refused = self.tx_refused.then(|| "type a message to transmit".to_string());
         s
     }
 }
@@ -244,18 +250,24 @@ impl DigiEngine for Fsk441Controller {
         // worked by sending the message continuously, so there is no slot
         // boundary to key on — the over lasts as long as the operator holds it.
         //
-        // `tx_latched` is the moment the operator asked to transmit, kept even
-        // while the box is empty so the panel can say there is nothing to send:
-        // the key is refused, and it is not left armed to spring into life on
-        // the first keystroke.
+        // A key with nothing in the box is **refused and dropped**, not refused
+        // and left standing. Refusing alone is not enough: `tx_active` is the
+        // request, so leaving it set leaves the mode armed, and the first
+        // keystroke after a press that visibly did nothing would then key the
+        // radio and loop that one character until the operator noticed and
+        // unkeyed. The operator pressed the key once, for nothing, and the rig
+        // went out anyway. So the request goes with the refusal, and sending
+        // takes a fresh press — which is also the only way to be sure the
+        // operator knows there is now something to send.
         if self.tx_active && !self.keyed {
             if self.pass_ready() {
                 self.keyed = true;
                 self.over_had_text = true;
                 self.status_dirty = true;
                 actions.push(DigiAction::KeyTx);
-            } else if !self.tx_latched {
-                self.tx_latched = true;
+            } else {
+                self.tx_active = false;
+                self.tx_refused = true;
                 self.status_dirty = true;
             }
         }
@@ -345,11 +357,12 @@ impl DigiEngine for Fsk441Controller {
     }
 
     fn abort_tx(&mut self) {
-        // A refused key-up must not leave the latch set, or nothing can key
-        // again.
+        // An aborted over leaves nothing standing: a refusal in particular must
+        // not survive, or the next press would not clear it and the reason
+        // would outlive the message it was about.
         self.keyed = false;
         self.tx_active = false;
-        self.tx_latched = false;
+        self.tx_refused = false;
         self.tx48.clear();
         self.tx_scratch11.clear();
         self.over_had_text = false;
@@ -364,17 +377,20 @@ impl DigiEngine for Fsk441Controller {
         if !self.keyed {
             self.rebuild_tx_pass();
         }
-        if self.pass_ready() {
-            self.tx_latched = false;
-        }
+        // Typing clears nothing. A refusal stays on screen while the operator
+        // fills the box in — it is the answer to the press they just made — and
+        // typing into it must not be what keys the radio.
         self.status_dirty = true;
     }
 
     fn set_tx_active(&mut self, on: bool) {
         self.tx_active = on;
-        if !on {
+        if on {
+            // A fresh press is the operator acknowledging whatever the last one
+            // said, so the notice goes with it.
+            self.tx_refused = false;
+        } else {
             self.over_had_text = false;
-            self.tx_latched = false;
         }
         self.status_dirty = true;
     }
@@ -462,7 +478,18 @@ mod tests {
     }
 
     /// A key with an empty box must not key the radio and sit on an empty
-    /// carrier.
+    /// A key with an empty box is refused, **and dropped**.
+    ///
+    /// The sequence the maintainer reported: press TX with nothing in the box,
+    /// nothing happens, and then the first keystroke keys the radio and loops
+    /// that one character until the operator notices and unkeys. The press was
+    /// for nothing, and the rig went out anyway — on a mode whose over lasts as
+    /// long as the key is held, that is an unrequested transmission.
+    ///
+    /// The empty press used to be asserted as keying on the next keystroke
+    /// ("arming with an empty box then typing must key on the text"), which is
+    /// the behaviour being reported. It is the notice, not a latch, that
+    /// survives; the request does not.
     #[test]
     fn an_empty_message_does_not_key() {
         let mut c = Fsk441Controller::new(cfg(), 48_000.0);
@@ -475,13 +502,44 @@ mod tests {
         // nothing.
         assert!(c.digi_status().tx_refused.is_some(), "an empty armed box must say so");
 
-        // The first keystroke with the box still armed keys the radio — the
-        // empty arm is not left waiting to spring into life.
-        c.set_tx_text("W1ABC".into());
+        // The first keystroke after a press that did nothing must still not
+        // key: nobody has pressed anything since, and a single character looping
+        // the length of the over is not what anyone asked for.
+        c.set_tx_text("W".into());
         let keyed =
             c.poll(SystemTime::now(), 0.0).into_iter().any(|a| matches!(a, DigiAction::KeyTx));
-        assert!(keyed, "arming with an empty box then typing must key on the text");
-        assert!(c.digi_status().tx_refused.is_none());
+        assert!(!keyed, "typing into a refused box must not key the radio");
+        assert!(!c.tx_burst_active());
+        // The notice is still the answer to the press that was made.
+        assert!(c.digi_status().tx_refused.is_some(), "the reason outlives the press");
+
+        // Only a fresh press sends, and it clears the notice.
+        c.set_tx_active(true);
+        let keyed =
+            c.poll(SystemTime::now(), 0.0).into_iter().any(|a| matches!(a, DigiAction::KeyTx));
+        assert!(keyed, "a fresh press with something to send must key");
+        assert!(c.digi_status().tx_refused.is_none(), "the fresh press acknowledged it");
+    }
+
+    /// The reported symptom in full: once the radio is out there, the over loops
+    /// the message for as long as the key is held — so a single character sent
+    /// unbidden is a single character on the air over and over.
+    ///
+    /// This is why the empty press is dropped rather than left armed. The loop
+    /// itself is the mode working as intended; the fault is only ever reaching
+    /// it without a press, so the test pins the sequence and not the loop.
+    #[test]
+    fn the_over_loops_the_message_while_held() {
+        let mut c = Fsk441Controller::new(cfg(), 48_000.0);
+        c.set_tx_text("W1ABC".into());
+        c.set_tx_active(true);
+        c.poll(SystemTime::now(), 0.0);
+        assert!(c.tx_burst_active(), "a held key with a message is an over");
+        // More than the message's own length, so the loop has demonstrably come
+        // back round rather than the pass simply being longer than the test.
+        let mut block = vec![0.0f32; 48_000 * 2];
+        c.fill_tx_block(&mut block);
+        assert!(block.iter().any(|s| *s != 0.0), "a held over keeps going");
     }
 
     /// A keystroke during an over must not restart the message mid-flight.
