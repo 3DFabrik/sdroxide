@@ -696,6 +696,20 @@ impl Mode {
         )
     }
 
+    /// True for the modes whose decode list is a list of stations to *work* —
+    /// FT8, FT4, FT2 and JS8 — as opposed to one the operator can only read.
+    /// Drives REPLY, QUEUE and the transmit-frequency chips in that list: an
+    /// FSK441 decode is free text with nobody to answer, and the receive-only
+    /// slotted modes have no sequencer at all, so neither offers a control that
+    /// would do nothing.
+    ///
+    /// This is not [`Mode::is_rx_only`], which is the capability — whether the
+    /// mode can key the radio. FSK441 can transmit, but it is worked by ear and
+    /// by hand and has no QSO to sequence.
+    pub fn has_qso_sequencer(self) -> bool {
+        matches!(self, Mode::Ft8 | Mode::Ft4 | Mode::Ft2 | Mode::Js8)
+    }
+
     /// How much spectrum this mode's signal occupies, in Hz, for the modes whose
     /// answer is a property of the waveform rather than of a filter setting.
     ///
@@ -2378,6 +2392,22 @@ mod tests {
         let ft2 = Mode::Ft2.slot_timing().unwrap();
         assert_eq!(ft8.slot_s, 2.0 * ft4.slot_s);
         assert_eq!(ft4.slot_s, 2.0 * ft2.slot_s);
+    }
+
+    /// REPLY and QUEUE are the sequencer's promise to transmit, so only the
+    /// modes that have one may offer them. FSK441 is the case that separates
+    /// this from `is_rx_only`: it can key the radio, but its decodes are free
+    /// text and there is no station in one to answer.
+    #[test]
+    fn only_the_qso_modes_offer_to_work_a_station() {
+        let qso = [Mode::Ft8, Mode::Ft4, Mode::Ft2, Mode::Js8];
+        for mode in Mode::ALL {
+            assert_eq!(mode.has_qso_sequencer(), qso.contains(&mode), "{mode:?}");
+            // Whatever offers to work a station must be able to key one.
+            assert!(!(mode.has_qso_sequencer() && mode.is_rx_only()), "{mode:?}");
+        }
+        assert!(Mode::Fsk441.takes_digi_tx_audio(), "FSK441 transmits");
+        assert!(!Mode::Fsk441.has_qso_sequencer(), "…but has no QSO to sequence");
     }
 
     /// SSTV and RADE follow phone practice: the low bands are LSB, everything

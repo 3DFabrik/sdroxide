@@ -1140,14 +1140,13 @@ impl SdroxideApp {
         }
     }
 
-    /// The FSK441 panel: the period chip row, the slot clock and the decode
-    /// list, and nothing else.
+    /// The FSK441 panel: the period chip row, the slot clock, the decode list
+    /// and the transmit row.
     ///
     /// An FSK441 decode is an ordinary [`sdroxide_types::Decode`], so the list
-    /// is the one the FT8 modes share. What is missing is the QSO area — a
-    /// meteor-scatter exchange this build does not sequence (it is receive-only)
-    /// — so the sequencer, the transmit pane and the call queue have nothing to
-    /// drive.
+    /// is the one the FT8 modes share — but with no QSO controls, since a
+    /// meteor-scatter exchange this build does not sequence has no station to
+    /// answer and nothing to queue.
     pub(in crate::app) fn fsk441_panel(&mut self, ui: &mut egui::Ui, cmds: &mut Vec<Command>) {
         // FSK441's T/R period is the one thing about it an operator chooses,
         // and it decides the slot length the ping search runs over — so it gets
