@@ -34,7 +34,7 @@ use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::SystemTime;
 
-use sdroxide_dsp::{FSK441_RATE, MonoResampler, fsk441_encode_tones, fsk441_generate_audio};
+use sdroxide_dsp::{FSK441_RATE, MonoResampler, fsk441_generate_audio, fsk441_tx_tones};
 use sdroxide_types::{Decode, DigiConfig, DigiStatus, Fsk441Period, Mode, QsoStep};
 
 use crate::DigiEngine;
@@ -176,7 +176,7 @@ impl Fsk441Controller {
             self.tx_pass_pos = 0;
             return;
         }
-        self.tx_pass = fsk441_generate_audio(&fsk441_encode_tones(text));
+        self.tx_pass = fsk441_generate_audio(&fsk441_tx_tones(text));
         self.tx_pass_pos = 0;
     }
 

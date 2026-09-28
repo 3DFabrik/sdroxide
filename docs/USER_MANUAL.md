@@ -6100,9 +6100,11 @@ hold transmit and the message repeats for the length of the over, so a meteor's
 brief trail catches whatever part of it is passing. The **TX** row under the
 decode list is a single line — type the message (`W1ABC W9XYZ FN42`, or one of
 the shorthand words `R26`/`R27`/`RRR`/`73`) and press **TX**; **CALL CQ** fills
-the box with a CQ and starts it. The message loops until you unkey. There is no
-automatic sequencing and no station being called: a meteor-scatter contact is
-arranged by ear and by the shorthand, which is what the mode has always been.
+the box with a CQ and starts it. The message loops until you unkey, with a space
+sent between repeats so one pass' last word does not run into the next one's
+first. There is no automatic sequencing and no station being called: a
+meteor-scatter contact is arranged by ear and by the shorthand, which is what
+the mode has always been.
 
 ## 4. Skimmers
 
