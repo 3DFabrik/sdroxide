@@ -412,8 +412,7 @@ impl QsoMachine {
         // DX repeating the report that was not answered must not move us back
         // to answering it. Any other pick releases that hold — the operator is
         // steering the exchange again rather than ending it.
-        self.manual_signoff =
-            matches!(step, QsoStep::TxRr73 | QsoStep::Tx73).then_some(step);
+        self.manual_signoff = matches!(step, QsoStep::TxRr73 | QsoStep::Tx73).then_some(step);
         self.operator_acted();
         self.step = step;
         true

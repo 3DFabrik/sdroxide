@@ -28,7 +28,9 @@ pub mod settle;
 pub mod swr;
 pub mod tail;
 
-use sdroxide_types::{AlertEvent, Band, Decode, DigiStatus, Meters, Mode, RadioState, SpeechSettings};
+use sdroxide_types::{
+    AlertEvent, Band, Decode, DigiStatus, Meters, Mode, RadioState, SpeechSettings,
+};
 
 use crate::queue::{Gag, Key, Priority, Push, SpeechQueue, Utterance};
 use crate::sink::{NullSink, SpeechSink};

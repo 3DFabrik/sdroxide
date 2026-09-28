@@ -615,7 +615,8 @@ fn capture_channels_in(text: &str) -> u16 {
             "Capture:" => in_capture = true,
             "Playback:" => in_capture = false,
             _ if in_capture => {
-                let channels = t.strip_prefix("Channels:").and_then(|r| r.trim().parse::<u16>().ok());
+                let channels =
+                    t.strip_prefix("Channels:").and_then(|r| r.trim().parse::<u16>().ok());
                 if let Some(n) = channels {
                     max = max.max(n);
                 }

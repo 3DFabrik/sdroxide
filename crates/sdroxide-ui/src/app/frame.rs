@@ -1322,9 +1322,13 @@ impl SdroxideApp {
                         // the whole app, and the runtime needs `&mut self` to
                         // arm its cooldowns.
                         let log = self.log_index().clone();
-                        if let Some(fired) =
-                            self.alerts.on_ft8(&d, &st.config.my_call, &st.config.my_grid, &log, band)
-                            && fired.reply.speaks()
+                        if let Some(fired) = self.alerts.on_ft8(
+                            &d,
+                            &st.config.my_call,
+                            &st.config.my_grid,
+                            &log,
+                            band,
+                        ) && fired.reply.speaks()
                         {
                             if self.focused {
                                 // Spoken from the alarm path rather than the
