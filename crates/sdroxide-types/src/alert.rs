@@ -53,6 +53,46 @@ impl AlertSound {
     }
 }
 
+/// How an alert is answered: the alarm tone, a spoken phrase, or both.
+///
+/// The phrase is read by the spoken-announcement voice (Settings → UI → Voice
+/// announcements) at the decode's callsign and band — "Juliett Alfa One,
+/// calling you" — so an alert can be understood without looking at the screen,
+/// which is the whole point of one. Anything but [`AlertReply::Tone`] needs
+/// speech switched on; with it off, the tone is all there is to hear.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AlertReply {
+    /// The alarm tone only.
+    #[default]
+    Tone,
+    /// The spoken phrase only.
+    Voice,
+    /// The tone, then the phrase.
+    Both,
+}
+
+impl AlertReply {
+    pub const ALL: [AlertReply; 3] = [AlertReply::Tone, AlertReply::Voice, AlertReply::Both];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            AlertReply::Tone => "Tone",
+            AlertReply::Voice => "Voice",
+            AlertReply::Both => "Tone + voice",
+        }
+    }
+
+    /// Whether the alarm tone sounds for this reply.
+    pub fn plays_tone(self) -> bool {
+        matches!(self, AlertReply::Tone | AlertReply::Both)
+    }
+
+    /// Whether a phrase is spoken for this reply.
+    pub fn speaks(self) -> bool {
+        matches!(self, AlertReply::Voice | AlertReply::Both)
+    }
+}
+
 /// What one kind of alert is answered with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -61,11 +101,13 @@ pub struct AlertRule {
     pub enabled: bool,
     /// The sound it plays.
     pub sound: AlertSound,
+    /// Whether it plays the tone, speaks a phrase, or both.
+    pub reply: AlertReply,
 }
 
 impl Default for AlertRule {
     fn default() -> Self {
-        AlertRule { enabled: true, sound: AlertSound::Ding }
+        AlertRule { enabled: true, sound: AlertSound::Ding, reply: AlertReply::Tone }
     }
 }
 
@@ -73,7 +115,7 @@ impl AlertRule {
     /// A rule that never fires, for the events that would be noise if on by
     /// default — a directed CQ on a busy band repeats every slot.
     fn off() -> Self {
-        AlertRule { enabled: false, sound: AlertSound::default() }
+        AlertRule { enabled: false, sound: AlertSound::default(), reply: AlertReply::default() }
     }
 }
 
@@ -392,5 +434,15 @@ mod tests {
             assert!(e.cooldown_s() > 0);
             assert_eq!(AlertEvent::ALL.iter().filter(|x| **x == e).count(), 1);
         }
+    }
+
+    /// A rule with no reply chosen is the plain tone, so an older config (or a
+    /// fresh one) is unchanged, and the two halves of a reply are distinct.
+    #[test]
+    fn a_rule_defaults_to_the_tone_and_the_reply_halves_are_distinct() {
+        assert_eq!(AlertRule::default().reply, AlertReply::Tone);
+        assert!(AlertReply::Tone.plays_tone() && !AlertReply::Tone.speaks());
+        assert!(!AlertReply::Voice.plays_tone() && AlertReply::Voice.speaks());
+        assert!(AlertReply::Both.plays_tone() && AlertReply::Both.speaks());
     }
 }

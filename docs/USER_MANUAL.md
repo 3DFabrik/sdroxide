@@ -11664,8 +11664,9 @@ you.
 - **Test** plays the sound set for a station calling you. Beside it is the
   device in use, or why it could not be opened.
 
-**What to sound** has a switch and a sound — **Ding**, **Two-tone**, **Triplet**,
-**Warble** or **Digital**, all generated on the spot — for each of five events:
+**What to sound** has a switch, a sound — **Ding**, **Two-tone**, **Triplet**,
+**Warble** or **Digital**, all generated on the spot — and a reply for each of
+five events:
 
 | Event | On by default | Rings for |
 | --- | --- | --- |
@@ -11682,6 +11683,18 @@ the list — a slot full of new stations says no more as sixteen alarms than as
 one. After it rings, that station stays quiet for that event for a while — a
 minute for a call, 45 seconds for a CQ, two minutes for a grid and five for an
 entity — so a new entity calling CQ all evening does not ring all evening.
+
+**Tone, voice or both.** Each event's reply is **Tone** (the alarm sound above,
+and the default), **Voice**, or **Tone + voice**. **Voice** reads the alert
+through the spoken-announcement voice (Settings → UI → Voice announcements) —
+"Juliett Alfa One, calling you", "Juliett Alfa One, new DXCC, Japan",
+"Juliett Alfa One, new one on 20 metres", "Juliett Alfa One, new grid". The
+callsign leads every phrase, so the one thing you act on is never the part that
+is clipped, and the spoken alert fires from the alarm path, so it too is heard
+whether or not sdroxide's window is in front. With the voice switched off a
+**Voice** reply is silent — there is no tone to fall back on — so pick **Tone +
+voice** if you would rather hear something either way; the sound is greyed on a
+voice-only row because it is not used.
 
 The settings are stored in `config.toml` under `[alerts]` and belong to the
 screen in front of you, like the announcements. On a station with several radios

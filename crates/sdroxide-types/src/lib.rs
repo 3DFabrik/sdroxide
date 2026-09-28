@@ -89,7 +89,7 @@ pub use ais::{
     AisChannelStatus, AisKind, AisSettings, AisStatus, AisVessel, MMSI_MID_MAX, MMSI_MID_MIN,
     aid_type_label, mmsi_is_identity, nav_status_label, ship_type_hazard, ship_type_label,
 };
-pub use alert::{AlertEvent, AlertEvents, AlertRule, AlertSettings, AlertSound};
+pub use alert::{AlertEvent, AlertEvents, AlertReply, AlertRule, AlertSettings, AlertSound};
 pub use aprs::{
     APRS_MESSAGE_MAX, APRS_MSG_RETRIES, APRS_STATION_MAX, APRS_TRACK_MAX, APRS_TRAFFIC_MAX,
     AprsEntryKind, AprsMessage, AprsMsgState, AprsPosition, AprsStation, AprsStatus, AprsSymbol,
