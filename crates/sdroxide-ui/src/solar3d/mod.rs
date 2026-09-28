@@ -65,17 +65,22 @@ fn viewport_id(salt: u32) -> egui::ViewportId {
 }
 
 /// The size and position the solar-system window opens at: the operator's last
-/// geometry if there is one, otherwise 1180×760, either way shrunk to fit and
-/// moved fully onto the monitor it is about to open on.
+/// geometry if there is one, otherwise 1180×760, either way shrunk to fit the
+/// monitor it is about to open on.
 ///
 /// A window wider than the screen loses the controls along its right edge, and
 /// on some Linux systems a window larger than the monitor crashes the toolkit —
 /// the same bargain [`crate::layout::fit_inner_size`] strikes for the floating
 /// windows. The frame around the drawing area is not known before the window
 /// exists, so a title bar and borders are guessed. Never grows a window: an
-/// operator who has sized theirs is not asking for it back. The position comes
-/// back only where the platform gave one (not Wayland) and is clamped so no edge
-/// lands off the screen.
+/// operator who has sized theirs is not asking for it back.
+///
+/// The position comes back as it was given, only where the platform gave one
+/// (not Wayland), and is not clamped. It is in desktop coordinates, and a
+/// second monitor starts wherever the desktop puts it — often at x = 1920, or
+/// at a negative x left of the primary — while `monitor` is only a size. A
+/// clamp to `0..monitor` put a window left on the second screen back on the
+/// first; the window manager already keeps a window on some screen.
 #[cfg(not(target_arch = "wasm32"))]
 fn solar3d_geometry(
     monitor: Option<egui::Vec2>,
@@ -86,13 +91,10 @@ fn solar3d_geometry(
         return (want, seed.and_then(|s| s.pos).map(egui::Pos2::from));
     };
     let chrome = egui::vec2(16.0, 40.0);
-    let size = crate::layout::fit_inner_size(monitor, want + chrome, want, egui::vec2(520.0, 340.0))
-        .unwrap_or(want);
-    let pos = seed.and_then(|s| s.pos).map(egui::Pos2::from).map(|p| {
-        let room = (monitor - size).max(egui::Vec2::ZERO);
-        egui::pos2(p.x.clamp(0.0, room.x), p.y.clamp(0.0, room.y))
-    });
-    (size, pos)
+    let size =
+        crate::layout::fit_inner_size(monitor, want + chrome, want, egui::vec2(520.0, 340.0))
+            .unwrap_or(want);
+    (size, seed.and_then(|s| s.pos).map(egui::Pos2::from))
 }
 
 // Scene units are gigametres (10⁶ km): 1 AU ≈ 149.6, the Sun ≈ 0.696, the Earth
@@ -463,22 +465,36 @@ mod tests {
     }
 
     /// A geometry the operator gave the window is honoured, but never grown
-    /// past a screen that has since become smaller, and never parked with an
-    /// edge off the screen.
+    /// past a screen that has since become smaller.
     #[test]
-    fn a_remembered_geometry_is_honoured_and_still_clamped() {
+    fn a_remembered_geometry_is_honoured_and_its_size_still_fits() {
         let seed = sdroxide_types::Solar3dWindow { size: [900.0, 600.0], pos: Some([100.0, 80.0]) };
-        assert_eq!(solar3d_geometry(Some(egui::vec2(2560.0, 1440.0)), Some(seed)), (
-            egui::vec2(900.0, 600.0),
-            Some(egui::pos2(100.0, 80.0))
-        ));
-        // A shrunken screen clamps both the size and the place it is drawn at.
-        let (size, pos) = solar3d_geometry(
+        assert_eq!(
+            solar3d_geometry(Some(egui::vec2(2560.0, 1440.0)), Some(seed)),
+            (egui::vec2(900.0, 600.0), Some(egui::pos2(100.0, 80.0)))
+        );
+        // A shrunken screen shrinks the window to fit it.
+        let (size, _) = solar3d_geometry(
             Some(egui::vec2(800.0, 600.0)),
-            Some(sdroxide_types::Solar3dWindow { size: [1600.0, 1200.0], pos: Some([700.0, 500.0]) }),
+            Some(sdroxide_types::Solar3dWindow {
+                size: [1600.0, 1200.0],
+                pos: Some([700.0, 500.0]),
+            }),
         );
         assert!(size.x <= 800.0 && size.y <= 600.0, "{size:?} does not fit 800x600");
-        let pos = pos.expect("a seen position is kept");
-        assert!(pos.x + size.x <= 800.0 && pos.y + size.y <= 600.0, "{pos:?} is off-screen");
+    }
+
+    /// The position is in desktop coordinates, and `monitor` is only a size:
+    /// a window left on a second screen — right of a 1920-wide primary, or
+    /// left of it at a negative x — comes back there rather than being pulled
+    /// onto the first.
+    #[test]
+    fn a_window_on_a_second_monitor_comes_back_there() {
+        let screen = Some(egui::vec2(1920.0, 1080.0));
+        for at in [[2100.0, 120.0], [-1500.0, 200.0]] {
+            let seed = sdroxide_types::Solar3dWindow { size: [900.0, 600.0], pos: Some(at) };
+            let (_, pos) = solar3d_geometry(screen, Some(seed));
+            assert_eq!(pos, Some(egui::Pos2::from(at)), "moved off the monitor it was left on");
+        }
     }
 }
