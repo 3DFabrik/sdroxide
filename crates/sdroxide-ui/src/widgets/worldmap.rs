@@ -363,6 +363,25 @@ pub(crate) fn draw_base(
     lat_span: f64,
     map: &theme::MapPalette,
 ) -> f32 {
+    let dot_r = draw_ground(p, rect, clat, clon, lon_span, lat_span, map);
+    if theme::map_cities() {
+        draw_cities(p, rect, clat, clon, lon_span, lat_span, dot_r, map);
+    }
+    dot_r
+}
+
+/// [`draw_base`] without the cities: land, rivers and borders. Apart for the
+/// map that shades the night side, where the ground goes under the grey line
+/// and the cities — marks and names to be read — go over it.
+fn draw_ground(
+    p: &eframe::egui::Painter,
+    rect: eframe::egui::Rect,
+    clat: f64,
+    clon: f64,
+    lon_span: f64,
+    lat_span: f64,
+    map: &theme::MapPalette,
+) -> f32 {
     let cols = ((rect.width() / DOT_PITCH) as usize).max(24);
     let rows = ((rect.height() / DOT_PITCH) as usize).max(12);
     let cell_w = rect.width() / cols as f32;
@@ -416,9 +435,6 @@ pub(crate) fn draw_base(
             let a = base + spread * (f32::from(rank - 1) / 12.0).min(1.0);
             p.circle_filled(at(i % cols, i / cols), dot_r, alpha(ink, weight * a));
         }
-    }
-    if theme::map_cities() {
-        draw_cities(p, rect, clat, clon, lon_span, lat_span, dot_r, map);
     }
     dot_r
 }
@@ -506,7 +522,9 @@ fn draw_cities(
 ///
 /// The projection is linear in latitude and longitude, so the whole world is an
 /// axis-aligned rectangle here and the texture's own bilinear filtering is what
-/// turns its cells into soft shapes with no visible edges.
+/// turns its cells into soft shapes with no visible edges. `tint` multiplies
+/// the texture — [`Color32::WHITE`] paints it as it is.
+#[allow(clippy::too_many_arguments)]
 fn paint_world_texture(
     p: &eframe::egui::Painter,
     rect: eframe::egui::Rect,
@@ -515,6 +533,7 @@ fn paint_world_texture(
     lon_span: f64,
     lat_span: f64,
     tex: eframe::egui::TextureId,
+    tint: Color32,
 ) {
     let lon_to_x = |lon: f64| rect.left() + (0.5 + ((lon - clon) / lon_span) as f32) * rect.width();
     let lat_to_y = |lat: f64| rect.top() + (0.5 - ((lat - clat) / lat_span) as f32) * rect.height();
@@ -533,7 +552,7 @@ fn paint_world_texture(
     for k in first..=last {
         let r = world.translate(vec2(k as f32 * world_w, 0.0));
         if r.intersects(rect) {
-            p.image(tex, r, uv, Color32::WHITE);
+            p.image(tex, r, uv, tint);
         }
     }
 }
@@ -569,8 +588,10 @@ pub fn show(
     heat: Option<eframe::egui::TextureId>,
     // The grey line — night and twilight — as an equirectangular RGBA image of
     // the whole world (see `crate::prop_map::NightShade`). Painted over the
-    // heat, so a band that is dead because the Sun is down reads that way, but
-    // under the continents, so the geography stays legible.
+    // heat and the continents, so a band that is dead because the Sun is down
+    // reads that way and the terminator reads across land as well as sea; the
+    // cities and every station mark go over it. How dark it gets is the map
+    // palette's `night_max`.
     night: Option<eframe::egui::TextureId>,
     tx_active: bool,
     max_h: f32,
@@ -640,16 +661,25 @@ pub fn show(
     // sideways to cover a view that straddles the antimeridian; the painter's
     // clip rectangle trims what falls outside.
     if let Some(tex) = heat {
-        paint_world_texture(&p, rect, clat, clon, lon_span, lat_span, tex);
+        paint_world_texture(&p, rect, clat, clon, lon_span, lat_span, tex, Color32::WHITE);
     }
 
-    let dot_r = draw_base(&p, rect, clat, clon, lon_span, lat_span, map);
+    let dot_r = draw_ground(&p, rect, clat, clon, lon_span, lat_span, map);
 
     // The grey line, over the heat and the continents: both darken on the night
-    // side, so the terminator reads across land as well as sea. The station and
-    // spot marks are drawn after it and keep their light.
+    // side, so the terminator reads across land as well as sea. The cities and
+    // the station and spot marks are drawn after it and keep their light.
+    //
+    // At the palette's strength rather than the texture's: a light map's marks
+    // are dark ink, and a full-strength night would put them ink on ink. A
+    // premultiplied tint scales colour and alpha together, which is opacity.
     if let Some(tex) = night {
-        paint_world_texture(&p, rect, clat, clon, lon_span, lat_span, tex);
+        let strength = (map.night_max / sdroxide_solar::NIGHT_MAX_ALPHA).clamp(0.0, 1.0);
+        let tint = Color32::WHITE.gamma_multiply(strength);
+        paint_world_texture(&p, rect, clat, clon, lon_span, lat_span, tex, tint);
+    }
+    if theme::map_cities() {
+        draw_cities(&p, rect, clat, clon, lon_span, lat_span, dot_r, map);
     }
 
     // Project (lat, lon) to screen using the current view; longitude wraps.

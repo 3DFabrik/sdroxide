@@ -3472,7 +3472,10 @@ Sun is down, with the twilight between as a graded band, so the grey line shows
 on the map. Low bands go long and high bands close on the night side, and the
 terminator itself is where DX often turns up. It follows the clock, not the
 decodes, so it works with nothing heard yet; it is off by default and is the
-same switch on the FT8/FT4/FT2 and WSPR maps.
+same switch on the FT8/FT4/FT2 and WSPR maps. The shade darkens land and sea
+alike, while the cities and the station marks stay on top of it at full
+strength. On a light theme it is lighter, because there the station marks are
+dark and would vanish into a dark night.
 
 Drag (or one finger) to pan, wheel or pinch to zoom about the pointer, and
 double-click to hand the view back to the auto-fit.

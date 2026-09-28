@@ -42,8 +42,8 @@ pub use clouds::{Band, CloudField, ConvCell};
 pub use data::{SolarData, Source, SourceStatus};
 pub use donki::{CmeAnalysis, CmeEvent, FlareEvent};
 pub use ephem::{
-    AU, EARTH_R, MOON_R, SUN_R, SunFrame, is_daylight_at, night_shade, night_shade_rgba,
-    solar_elevation_deg,
+    AU, EARTH_R, MOON_R, NIGHT_MAX_ALPHA, SUN_R, SunFrame, is_daylight_at, night_shade,
+    night_shade_rgba, solar_elevation_deg,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use feed::{FeedCmd, RawUpdate, SolarFeed, band_conditions_cached};
