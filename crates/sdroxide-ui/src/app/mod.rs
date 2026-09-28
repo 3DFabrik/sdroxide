@@ -511,11 +511,16 @@ pub struct SdroxideApp {
     /// Whether the band/mode selector is docked beside the panadapter rather
     /// than opened from the top-bar chip, and whether the docked column is
     /// currently shown. Session UI state: hiding the column leaves it docked,
-    /// so the band chip brings it straight back. `band_docked` is also cleared
-    /// when the window narrows to a phone, where a column would leave the
-    /// waterfall nothing to draw in.
+    /// so the band chip brings it straight back. A window too narrow for the
+    /// column (see `band_dock_room`) leaves both alone and simply does not draw
+    /// it, so widening the window again brings it back.
     band_docked: bool,
     band_dock_visible: bool,
+    /// How wide the docked column may be this frame, or `None` where it cannot
+    /// dock — see [`top_bar::band_dock_room`]. Settled at the top of the frame
+    /// from this app's own column, before the top bar draws the chip that
+    /// shows and hides it.
+    band_dock_room: Option<f32>,
     /// The layout in force last frame, so a change can re-apply the style
     /// metrics (chip padding, text sizes) exactly once instead of every frame.
     tier: crate::layout::Tier,
@@ -1413,6 +1418,7 @@ impl SdroxideApp {
             rpt_tone_popup_since: None,
             band_docked: false,
             band_dock_visible: false,
+            band_dock_room: None,
             // Corrected on the first frame, once the viewport size is known.
             tier: crate::layout::Tier::Desktop,
             ptt: Default::default(),

@@ -128,6 +128,9 @@ impl eframe::App for SdroxideApp {
         // two are the same rect.
         let tier = crate::layout::tier_for(ui.max_rect().size(), self.ui_settings.layout);
         crate::layout::set_tier(&ctx, tier);
+        // Whether the band selector can dock beside the waterfall, from the
+        // same column: the top bar's chip reads it before the column is drawn.
+        self.band_dock_room = super::top_bar::band_dock_room(tier, ui.max_rect().width());
         // …and the two questions the tier does not answer, published the same
         // way and for the same reason — the operator's override lives in
         // settings the context cannot see. `Small screen` asked for on a tall

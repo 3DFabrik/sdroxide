@@ -333,8 +333,11 @@ On a desktop or tablet layout the popup carries a **DOCK** chip. It moves the
 selector into a resizable column beside the waterfall so it stays open while you
 tune, instead of closing after every choice. **UNDOCK** in the column's header
 returns it to the popup, and **×** hides the column — the Band / Mode button then
-shows and hides it. Docking is desktop and tablet only; a phone-width window
-keeps the popup, because a column would leave the waterfall nothing to draw in.
+shows and hides it. The column is 180 to 320 points wide and always leaves the
+waterfall at least 600, so docking needs a window of about 780 points or more,
+and never happens on a phone layout. In a narrower window the column is hidden
+and the Band / Mode button opens the popup again; widen the window and the
+column comes back.
 
 ![The band and mode selector popup](images/04-band-mode-popup.jpg)
 

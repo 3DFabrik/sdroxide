@@ -2339,7 +2339,7 @@ impl SdroxideApp {
             size,
         );
 
-        let can_dock = band_dock_allowed(crate::layout::tier(ui.ctx()));
+        let can_dock = self.band_dock_room.is_some();
         if self.band_docked && can_dock {
             if btn
                 .on_hover_text(if self.band_dock_visible {
@@ -2387,15 +2387,18 @@ impl SdroxideApp {
     /// The band/mode selector docked as a column beside the panadapter: the
     /// same [`band_mode_menu`] the popup draws, with its own UNDOCK and hide.
     pub(in crate::app) fn band_dock_panel(&mut self, ui: &mut egui::Ui, cmds: &mut Vec<Command>) {
-        if !band_dock_allowed(crate::layout::tier(ui.ctx())) {
-            self.band_docked = false;
-            self.band_dock_visible = false;
-            return;
-        }
+        // No room this frame — a phone, or a window too narrow to spare the
+        // waterfall its share. Hidden rather than undocked: the band chip
+        // opens the popup meanwhile, and widening the window brings the column
+        // back where it was.
+        let Some(max_w) = self.band_dock_room else { return };
         let mut visible = true;
         egui::Panel::right(crate::layout::salted_id(ui.ctx(), "band-dock"))
             .resizable(true)
-            .default_size((ui.available_width() * 0.4).clamp(180.0, 280.0))
+            .default_size((ui.available_width() * 0.4).clamp(BAND_DOCK_MIN_W, 280.0))
+            // Re-applied every frame, so a column dragged wide on a big window
+            // gives the width back when the window narrows.
+            .size_range(BAND_DOCK_MIN_W..=max_w)
             .frame(
                 egui::Frame::new()
                     .fill(crate::theme::PANEL())
@@ -2430,10 +2433,8 @@ impl SdroxideApp {
                     .id_salt("band-dock-scroll")
                     .show(ui, |ui| {
                         let mode = self.state.rx[0].mode;
-                        let stated = self
-                            .radio_cfg
-                            .as_ref()
-                            .is_some_and(|c| !c.freq_ranges_rx.is_empty());
+                        let stated =
+                            self.radio_cfg.as_ref().is_some_and(|c| !c.freq_ranges_rx.is_empty());
                         band_mode_menu(
                             ui,
                             mode,
@@ -6243,13 +6244,32 @@ fn vfo_offsets_w(ui: &egui::Ui, tx_capable: bool) -> f32 {
     }
 }
 
-/// Whether the band/mode selector may dock as a column beside the panadapter.
+/// The docked band column's narrowest width: below it the band chips go one
+/// to a row.
+const BAND_DOCK_MIN_W: f32 = 180.0;
+/// The docked band column's widest: past it the column only takes width from
+/// the waterfall, with nothing more to show for it.
+const BAND_DOCK_MAX_W: f32 = 320.0;
+/// What the docked column must leave the waterfall and the operating panel
+/// under it: the narrowest window the undocked layout is laid out for, the
+/// tablet tier's floor in [`crate::layout::tier_for`]. The panels below the
+/// waterfall are built for that width and no less — with the column at its
+/// default share of a 730 pt window, the FT8 QSO pane ran on under it.
+const BAND_DOCK_WATERFALL_MIN_W: f32 = 600.0;
+
+/// How wide the band/mode selector may be docked beside the panadapter in a
+/// column `avail_w` points wide, or `None` where it cannot dock at all.
 ///
-/// Desktop and tablet only: a column beside a phone's waterfall would leave the
-/// picture nothing to draw in, and the phone's chip keeps its popup. A window
-/// shrunk to a phone undocks on the same rule.
-fn band_dock_allowed(tier: crate::layout::Tier) -> bool {
-    tier != crate::layout::Tier::Phone
+/// Never on a phone, where the chip keeps its popup; and only where the column
+/// can have [`BAND_DOCK_MIN_W`] and still leave the waterfall
+/// [`BAND_DOCK_WATERFALL_MIN_W`]. A window that narrows past that hides the
+/// column until it widens again.
+pub(in crate::app) fn band_dock_room(tier: crate::layout::Tier, avail_w: f32) -> Option<f32> {
+    if tier == crate::layout::Tier::Phone {
+        return None;
+    }
+    let room = (avail_w - BAND_DOCK_WATERFALL_MIN_W).min(BAND_DOCK_MAX_W);
+    (room >= BAND_DOCK_MIN_W).then_some(room)
 }
 
 /// How tall the band/mode chip is drawn: a plain chip plus
@@ -8455,9 +8475,26 @@ mod tests {
     #[test]
     fn the_band_selector_docks_on_desktop_layouts_only() {
         use crate::layout::Tier;
-        assert!(band_dock_allowed(Tier::Desktop));
-        assert!(band_dock_allowed(Tier::Tablet));
-        assert!(!band_dock_allowed(Tier::Phone));
+        assert!(band_dock_room(Tier::Desktop, 1600.0).is_some());
+        assert!(band_dock_room(Tier::Tablet, 1024.0).is_some());
+        assert!(band_dock_room(Tier::Phone, 1024.0).is_none());
+    }
+
+    /// The column never takes the waterfall below the width the undocked
+    /// layout is built for, and never grows past its own maximum. The 730 pt
+    /// window is the one where the FT8 QSO pane ran on under the column.
+    #[test]
+    fn the_docked_band_column_leaves_the_waterfall_its_width() {
+        use crate::layout::Tier;
+        for w in [600.0f32, 700.0, 730.0, 779.0] {
+            assert_eq!(band_dock_room(Tier::Tablet, w), None, "{w} pt docks");
+        }
+        for w in [780.0f32, 900.0, 1024.0, 1399.0, 1920.0, 3840.0] {
+            let tier = if w < 1400.0 { Tier::Tablet } else { Tier::Desktop };
+            let max = band_dock_room(tier, w).expect("room to dock");
+            assert!((BAND_DOCK_MIN_W..=BAND_DOCK_MAX_W).contains(&max), "{w} pt: {max} pt column");
+            assert!(w - max >= BAND_DOCK_WATERFALL_MIN_W, "{w} pt leaves {} pt", w - max);
+        }
     }
 
     /// Lay the condensed RX box's two rows out with the real widgets at
