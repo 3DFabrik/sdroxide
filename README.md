@@ -10,7 +10,7 @@ built-in, and **TCI and Hamlib rigctld servers** so third-party programs like WS
 
 <hr/>
 
-<img width="1496" height="933" alt="image" src="https://github.com/user-attachments/assets/9d88118c-0efe-45c5-9918-8ee2bb91b700" />
+<img width="2560" height="1600" alt="image" src="https://github.com/user-attachments/assets/d4b29901-3e84-4c49-a987-ffec795017f2" />
 
 <hr/>
 
