@@ -3332,10 +3332,7 @@ impl SdroxideApp {
                         clip_label(secs)
                     )
                 };
-                if crate::chrome::chip(ui, armed || pending, label)
-                    .on_hover_text(hint)
-                    .clicked()
-                {
+                if crate::chrome::chip(ui, armed || pending, label).on_hover_text(hint).clicked() {
                     // A clip is one span; it replaces any longer deadline.
                     // Running already, the span starts now; idle, the recording
                     // is asked for and the span is armed once it is up.
@@ -5693,17 +5690,17 @@ fn rec_timer_tick(now: i64, stop_at: Option<i64>, recording: bool) -> (Option<i6
 /// The label for a quick-clip span: seconds under a minute, whole minutes at
 /// and above it, so "30 s" and "1 min" read as what they are.
 fn clip_label(secs: u16) -> String {
-    if secs < 60 {
-        format!("{secs} s")
-    } else {
-        format!("{} min", secs / 60)
-    }
+    if secs < 60 { format!("{secs} s") } else { format!("{} min", secs / 60) }
 }
 
 /// How long a requested clip start is waited for before it is judged failed,
 /// so a recorder that will not come up is not left waiting on a span that
 /// never begins.
 const REC_CLIP_START_TIMEOUT_S: i64 = 3;
+
+/// A Unix second and the span, in seconds, it belongs to: a clip request's
+/// `(asked_at, secs)`, or an armed deadline's `(stop_at, secs)`.
+type RecSpan = (i64, u16);
 
 /// Arm a quick clip's deadline once its recording is actually running.
 ///
@@ -5721,9 +5718,9 @@ const REC_CLIP_START_TIMEOUT_S: i64 = 3;
 /// `(stop_at, secs)` deadline to arm.
 fn rec_clip_tick(
     now: i64,
-    ask: Option<(i64, u16)>,
+    ask: Option<RecSpan>,
     recording: bool,
-) -> (Option<(i64, u16)>, Option<(i64, u16)>) {
+) -> (Option<RecSpan>, Option<RecSpan>) {
     let Some((asked_at, secs)) = ask else { return (None, None) };
     if recording {
         return (None, Some((now + i64::from(secs), secs)));
