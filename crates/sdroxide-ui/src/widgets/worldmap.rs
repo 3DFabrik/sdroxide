@@ -642,13 +642,15 @@ pub fn show(
     if let Some(tex) = heat {
         paint_world_texture(&p, rect, clat, clon, lon_span, lat_span, tex);
     }
-    // The grey line, over the heat and under the continents: on the night side
-    // the map is visibly darker, so the terminator reads even under the heat.
+
+    let dot_r = draw_base(&p, rect, clat, clon, lon_span, lat_span, map);
+
+    // The grey line, over the heat and the continents: both darken on the night
+    // side, so the terminator reads across land as well as sea. The station and
+    // spot marks are drawn after it and keep their light.
     if let Some(tex) = night {
         paint_world_texture(&p, rect, clat, clon, lon_span, lat_span, tex);
     }
-
-    let dot_r = draw_base(&p, rect, clat, clon, lon_span, lat_span, map);
 
     // Project (lat, lon) to screen using the current view; longitude wraps.
     let project = |lat: f64, lon: f64| -> Pos2 {

@@ -546,9 +546,10 @@ const NIGHT_DAY_TOP_DEG: f64 = 2.0;
 /// the sky is dark to the eye. The band between this and [`NIGHT_DAY_TOP_DEG`]
 /// is the twilight the grey line is drawn in.
 const NIGHT_FULL_DEG: f64 = -14.0;
-/// Alpha of the darkest shade, as a fraction. Not opaque: the coastlines,
-/// borders and any propagation heat stay readable underneath it.
-const NIGHT_MAX_ALPHA: f32 = 0.62;
+/// Alpha of the darkest shade, as a fraction. Strong enough that the terminator
+/// reads across land as well as sea, but not opaque: the coastlines, borders and
+/// any propagation heat stay readable under it.
+const NIGHT_MAX_ALPHA: f32 = 0.78;
 /// Night ink — a deep dusk blue rather than black, so the map is shaded rather
 /// than erased.
 const NIGHT_INK: [u8; 3] = [8, 12, 28];
