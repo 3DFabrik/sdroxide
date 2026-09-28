@@ -66,7 +66,8 @@ pub(in crate::app) fn alerts_settings(
             for event in AlertEvent::ALL {
                 let rule = event.rule_mut(&mut cfg.events);
                 let tone = rule.reply.plays_tone();
-                ui.horizontal(|ui| {
+                // Wrapped: a checkbox and two combos are wider than a phone.
+                ui.horizontal_wrapped(|ui| {
                     crate::chrome::checkbox(ui, &mut rule.enabled, event.label());
                     // The sound only matters when the reply makes one; a
                     // voice-only rule greys it rather than hiding it, so the

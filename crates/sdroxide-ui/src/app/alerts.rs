@@ -101,13 +101,15 @@ enum Job {
 ///
 /// The tone is played inside the runtime, but the spoken half is not: speech is
 /// the [`crate::app::speech::SpeechRuntime`]'s, and saying the phrase through it
-/// is the caller's job. This is left unfocused on purpose — the alarm path does
-/// not wait for focus, so neither should the voice.
+/// is the caller's job — and only the focused tab's, since a background radio's
+/// phrase would queue up and be read out late. `sound` is the rule's tone, for
+/// the caller to [`AlertRuntime::ring`] instead when it cannot speak.
 #[derive(Debug, Clone)]
 pub struct AlertFired {
     pub event: AlertEvent,
     pub call: String,
     pub reply: AlertReply,
+    pub sound: AlertSound,
 }
 
 /// The alarms themselves, as a radio tab holds them: a handle on an
@@ -326,6 +328,12 @@ impl AlertRuntime {
         self.core().test();
     }
 
+    /// Sound one alarm tone — a voice-only alert's stand-in where it cannot be
+    /// spoken. See [`AlertFired`].
+    pub fn ring(&self, sound: AlertSound) {
+        self.core().play(sound);
+    }
+
     /// Feed one WSJT-style decode batch — see [`AlertCore::on_ft8`].
     pub fn on_ft8(
         &mut self,
@@ -451,7 +459,7 @@ impl AlertCore {
                 self.play(sound);
             }
             self.cooldowns.mark(from, event);
-            return Some(AlertFired { event, call: from.to_string(), reply });
+            return Some(AlertFired { event, call: from.to_string(), reply, sound });
         }
         None
     }

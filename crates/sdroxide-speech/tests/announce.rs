@@ -7,8 +7,8 @@
 use sdroxide_speech::announce::Announcer;
 use sdroxide_speech::sink::{RecordingSink, SpeechLog};
 use sdroxide_types::{
-    AgcMode, Band, CwStatus, Decode, DigiConfig, DigiStatus, Meters, Mode, QsoStep, RadioState,
-    SpeechSettings, TxMeters, Vfo,
+    AgcMode, AlertEvent, Band, CwStatus, Decode, DigiConfig, DigiStatus, Meters, Mode, QsoStep,
+    RadioState, SpeechSettings, TxMeters, Vfo,
 };
 
 fn harness() -> (Announcer, SpeechLog, RadioState) {
@@ -324,6 +324,28 @@ fn the_alarm_speaks_through_the_transmit_gag() {
         a.tick(&s, Some(&m), now);
     }
     assert!(log.any("high S W R"), "the gag swallowed the alarm: {:?}", log.all());
+}
+
+/// A spoken alert is news, not a fault: the gag the SWR alarm gets through
+/// keeps it off the air, where it would reach the microphone.
+#[test]
+fn a_spoken_alert_stays_behind_the_transmit_gag() {
+    let (mut a, log, mut s) = harness();
+    step(&mut a, &s, 0.0);
+    s.tx.ptt = true;
+    step(&mut a, &s, 1.0);
+    log.take();
+    a.on_alert(AlertEvent::Called, "K1ABC", "20m", None, 2.0);
+    a.tick(&s, None, 2.0);
+    assert!(log.all().is_empty(), "spoke while transmitting: {:?}", log.all());
+
+    // Unkeyed, the next one is heard.
+    s.tx.ptt = false;
+    step(&mut a, &s, 3.0);
+    log.take();
+    a.on_alert(AlertEvent::Called, "K1ABC", "20m", None, 4.0);
+    a.tick(&s, None, 4.0);
+    assert!(log.any("calling you"), "{:?}", log.all());
 }
 
 #[test]

@@ -267,9 +267,11 @@ impl Announcer {
     /// Distinct from [`Self::on_ft8`]: that reads out whatever is addressed to
     /// us, while this speaks only the alerts the operator asked to *hear* about
     /// — a new country, a new one on the band, a new grid, a call. It is fed by
-    /// the alert runtime, which is why it can fire while this tab is not the
-    /// focused one: reaching the operator in another window is the point of an
-    /// alert.
+    /// the alert runtime, for the focused radio only.
+    ///
+    /// [`Priority::Notable`], not `Alert`: an alert phrase is news, not a
+    /// fault, and must not get through the transmit gag — speech reaches the
+    /// operator's speakers, and therefore the microphone.
     pub fn on_alert(
         &mut self,
         event: AlertEvent,
@@ -283,7 +285,7 @@ impl Announcer {
         }
         let sp = self.speaker();
         let text = alert::phrase(event, &sp.callsign(call), band, country);
-        self.push(Utterance::new(text, Priority::Alert, now));
+        self.push(Utterance::new(text, Priority::Notable, now));
     }
 
     /// Fresh FT8/FT4 decodes.

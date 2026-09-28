@@ -1307,17 +1307,27 @@ impl SdroxideApp {
                             self.alerts.on_ft8(&d, &st.config.my_call, &st.config.my_grid, &log, band)
                             && fired.reply.speaks()
                         {
-                            // Spoken from the alarm path, deliberately not the
-                            // focus-gated `on_ft8` above: an alarm is to be
-                            // heard when the operator is looking elsewhere.
-                            let country = sdroxide_types::entity_name(&fired.call);
-                            self.speech.announcer.on_alert(
-                                fired.event,
-                                &fired.call,
-                                band,
-                                country,
-                                now,
-                            );
+                            if self.focused {
+                                // Spoken from the alarm path rather than the
+                                // decode read-out above, which is its own
+                                // switch: an alarm is to be heard when the
+                                // operator is looking at another window.
+                                let country = sdroxide_types::entity_name(&fired.call);
+                                self.speech.announcer.on_alert(
+                                    fired.event,
+                                    &fired.call,
+                                    band,
+                                    country,
+                                    now,
+                                );
+                            } else if !fired.reply.plays_tone() {
+                                // A radio in a background tab does not speak:
+                                // its phrase would queue behind the one in
+                                // front and be read out late, as news that is
+                                // no longer so. A voice-only alert rings its
+                                // tone instead, so it is not lost.
+                                self.alerts.ring(fired.sound);
+                            }
                         }
                     }
                     // Prepend newest-slot decodes; keep a rolling window.

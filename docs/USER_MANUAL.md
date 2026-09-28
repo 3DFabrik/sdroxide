@@ -11694,7 +11694,10 @@ is clipped, and the spoken alert fires from the alarm path, so it too is heard
 whether or not sdroxide's window is in front. With the voice switched off a
 **Voice** reply is silent — there is no tone to fall back on — so pick **Tone +
 voice** if you would rather hear something either way; the sound is greyed on a
-voice-only row because it is not used.
+voice-only row because it is not used. A phrase is not spoken while you
+transmit, because it would go out through the microphone. With several radios,
+only the radio tab in front speaks: a background radio's phrase would be read
+out late, so a **Voice** alert from there plays its tone instead.
 
 The settings are stored in `config.toml` under `[alerts]` and belong to the
 screen in front of you, like the announcements. On a station with several radios
