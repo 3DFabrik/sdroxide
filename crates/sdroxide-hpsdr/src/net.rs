@@ -684,6 +684,11 @@ pub const POWER_UNKNOWN: u16 = u16::MAX;
 /// Applied to |Gamma| = REV/FWD before converting to SWR.
 const HL2_SWR_GAMMA_CAL: f32 = 1.23;
 
+/// The SWR an HL2 reports once the reflected reading reaches the forward one:
+/// the top of the range the SWR guard can be set to, so a pegged bridge trips
+/// it at any limit. The same ceiling the Icom meter curve ends at.
+const HL2_SWR_MAX: f32 = sdroxide_types::SWR_LIMIT_MAX;
+
 /// What every stream of one connection shares. Dropping the last handle stops
 /// the stream and shuts the network thread down.
 struct DevInner {
@@ -1107,18 +1112,23 @@ impl Drop for HpsdrRx {
 }
 
 /// Calculate Hermes-Lite 2 SWR from Protocol-1 detector ADC amplitudes.
-fn hl2_swr_from_raw(mut fwd: u16, mut rev: u16) -> Option<f32> {
-    if rev > fwd {
-        std::mem::swap(&mut fwd, &mut rev);
-    }
+///
+/// `None` only with no forward drive to measure against. A reflected reading
+/// at or above the forward one (after calibration) is the worst the bridge can
+/// say, not an unreadable one: an open or a shorted feed reads exactly that,
+/// and reporting nothing there left the SWR guard blind to the fault it exists
+/// for. So it pegs at [`HL2_SWR_MAX`]. Nor are the two ever swapped: a
+/// reflected reading larger than the forward one is a bad load, and reading
+/// it the other way round made it a good one.
+fn hl2_swr_from_raw(fwd: u16, rev: u16) -> Option<f32> {
     if fwd <= 6 {
         return None;
     }
     let gamma = (rev as f32 / fwd as f32) * HL2_SWR_GAMMA_CAL;
     if gamma >= 1.0 {
-        return None;
+        return Some(HL2_SWR_MAX);
     }
-    Some((1.0 + gamma) / (1.0 - gamma))
+    Some(((1.0 + gamma) / (1.0 - gamma)).min(HL2_SWR_MAX))
 }
 
 impl HpsdrRx {
@@ -1688,7 +1698,7 @@ mod tests {
 
 #[cfg(test)]
 mod hl2_swr_regression_tests {
-    use super::hl2_swr_from_raw;
+    use super::{HL2_SWR_MAX, hl2_swr_from_raw};
 
     #[test]
     fn known_hl2_reading_is_about_1_30_to_1() {
@@ -1696,11 +1706,30 @@ mod hl2_swr_regression_tests {
         assert!((swr - 1.30).abs() < 0.01, "SWR was {swr}");
     }
 
+    /// An open or a short reflects about what goes forward. That is the
+    /// reading the SWR guard exists for, so it pegs the meter rather than
+    /// reporting nothing — and a reflection larger than the forward reading is
+    /// never read the other way round as a good match.
     #[test]
-    fn forward_and_reverse_may_be_swapped() {
-        let a = hl2_swr_from_raw(1803, 192).expect("valid SWR");
-        let b = hl2_swr_from_raw(192, 1803).expect("valid SWR");
-        assert!((a - b).abs() < f32::EPSILON);
+    fn a_reflection_at_or_above_forward_pegs_the_meter() {
+        assert_eq!(hl2_swr_from_raw(192, 1803), Some(HL2_SWR_MAX));
+        assert_eq!(hl2_swr_from_raw(1000, 1000), Some(HL2_SWR_MAX));
+        // Past |Γ| = 1 after calibration, but short of rev = fwd.
+        assert_eq!(hl2_swr_from_raw(1000, 850), Some(HL2_SWR_MAX));
+        // A pegged meter trips the guard at whatever limit it is set to.
+        assert!(HL2_SWR_MAX >= sdroxide_types::SWR_LIMIT_MAX);
+    }
+
+    /// More reflected power never reads as a better match.
+    #[test]
+    fn swr_rises_with_the_reflected_reading() {
+        let mut last = 1.0f32;
+        for rev in (0..=1200).step_by(10) {
+            let swr = hl2_swr_from_raw(1000, rev).expect("driven");
+            assert!(swr >= last, "rev {rev}: {swr} fell below {last}");
+            last = swr;
+        }
+        assert_eq!(last, HL2_SWR_MAX);
     }
 
     #[test]
