@@ -1744,10 +1744,12 @@ mod tests {
         q.start_qso("W9XYZ".into(), Some("EM48".into()), -10, false, 100);
         q.on_rx(&[decode("AB1CD W9XYZ -13")], 115);
         q.set_step(QsoStep::Tx73);
-        // Back to answering them: their next report moves us as it always did.
+        // Back to answering them: their next message moves us as it always did.
+        // An RR73 is one that *moves* the step — a report would leave us on
+        // R+report held or not, and prove nothing.
         q.set_step(QsoStep::TxRReport);
-        q.on_rx(&[decode("AB1CD W9XYZ -05")], 130);
-        assert_eq!(q.step(), QsoStep::TxRReport);
+        q.on_rx(&[decode("AB1CD W9XYZ RR73")], 130);
+        assert_eq!(q.step(), QsoStep::Tx73, "the released hold let their RR73 move the exchange");
     }
 
     #[test]
