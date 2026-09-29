@@ -1924,6 +1924,9 @@ characters of the text.
   with the rest of the digital-mode configuration, so they survive a restart,
   they reach a remote client with everything else, and Settings → General
   **EXPORT** carries them to another machine.
+- The keyboard modes — PSK, RTTY, Olivia, THOR — have the same **MSG** row and
+  editor, on a list of their own, so a CW abbreviation and a PSK sentence each
+  stay where they belong ([3.3](#33-psk31-and-rtty)).
 
 It is off by default, because sending as you type is how a CW operator sends:
 the first letter of a callsign is on the air while the rest is still being
@@ -3866,6 +3869,11 @@ panel is a live **messaging area** instead of a QSO sequencer.
   watch the transmission catch up when you pause.
 - **CALL CQ** loads a CQ macro and starts sending it; **CLEAR** empties the
   buffer and stops; pressing **TX** again unkeys.
+- **MSG** opens the message editor: up to ten buttons of your own text — working
+  conditions, the weather, a standard reply — each sending its whole line in one
+  press, with **F1–F9** for the first nine. It is the same control the CW panel
+  carries, on a list of its own, and it is saved with the station's
+  configuration ([2.14](#214-cw-decoding-and-keyboard-sending)).
 - **SEND ON RETURN** changes that to a line at a time: nothing leaves the box
   until you press **Return**, and then the whole line goes out and the over
   starts on its own. Type at your own pace, read it back, correct it, and commit

@@ -1492,7 +1492,15 @@ use sdroxide_types::{
 /// `Command::SetDigiConfig` and `DigiStatus` whole, so a v169 peer reads the
 /// extra bytes as the start of the next field and fails to decode every
 /// digital status — the same break as v162's appended CW settings.
-pub const PROTO_VERSION: u16 = 170;
+///
+/// v171: editable message buttons for the keyboard modes (PSK / RTTY / Olivia
+/// / Thor — issue #463). `DigiConfig` gains `text_macros` (`Vec<CwMacro>`) on
+/// its tail: the same label-and-text buttons the CW panel has, on a list of
+/// their own. `DigiConfig` rides `Command::SetDigiConfig` and `DigiStatus`
+/// whole, so a v170 peer reads the extra bytes as the start of the next field
+/// and fails to decode every digital status — the same break as v170's appended
+/// FSK441 period.
+pub const PROTO_VERSION: u16 = 171;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]
