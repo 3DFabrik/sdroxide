@@ -6,7 +6,7 @@
 use mfsk_core::msg::decode_request::DecodeRequest;
 use mfsk_core::msg::hash_table::CallsignHashTable;
 use mfsk_core::msg::wsjt77;
-use sdroxide_types::{Decode, Mode};
+use sdroxide_types::{Decode, Ft8Depth, Mode};
 
 use crate::params::{AUDIO_MAX_HZ, AUDIO_MIN_HZ};
 
@@ -144,15 +144,29 @@ pub struct Ft8Modem {
     /// The same callsigns again, hashed the way the EU VHF contest layout
     /// needs them — see [`eu_vhf::Hashes`].
     eu_hashes: eu_vhf::Hashes,
+    /// How hard the FT8 decoder works for weak signals — see
+    /// [`Ft8Depth`]. Only the FT8 path reads it.
+    ft8_depth: Ft8Depth,
 }
 
 impl Ft8Modem {
     pub fn new(mode: Mode) -> Self {
-        Ft8Modem { mode, hashes: CallsignHashTable::new(), eu_hashes: eu_vhf::Hashes::default() }
+        Ft8Modem {
+            mode,
+            hashes: CallsignHashTable::new(),
+            eu_hashes: eu_vhf::Hashes::default(),
+            ft8_depth: Ft8Depth::default(),
+        }
     }
 
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    /// How hard the FT8 decoder works — see [`Ft8Depth`]. Set from
+    /// [`crate::DigiConfig::ft8_depth`] on every config change.
+    pub fn set_ft8_depth(&mut self, depth: Ft8Depth) {
+        self.ft8_depth = depth;
     }
 
     /// Register callsigns we already know (ours, and the station we're
@@ -240,19 +254,32 @@ impl Ft8Modem {
                 // with one, every candidate that fails an ordinary decode gets a
                 // second attempt with our two callsigns' bits locked.
                 let hint = ap.ft8();
-                let req = DecodeRequest::<mfsk_core::Ft8>::new(
-                    audio_12k,
-                    AUDIO_MIN_HZ,
-                    AUDIO_MAX_HZ,
-                    SYNC_MIN,
-                    MAX_CAND,
-                )
-                .osd(true);
-                let req = match hint.as_ref() {
-                    Some(h) => req.ap_hint(h),
-                    None => req,
+                // The operator's chosen depth — see `Ft8Depth`. `Fast` is the
+                // plain single pass below; `Normal` and `Deep` add subtraction,
+                // `Deep` the more thorough checkpointed pass. Deep is the most
+                // decodes and the slowest; on a busy slot it is ~1.2 s, which is
+                // why it is a choice and not forced.
+                let req = |depth: Ft8Depth| {
+                    let r = DecodeRequest::<mfsk_core::Ft8>::new(
+                        audio_12k,
+                        AUDIO_MIN_HZ,
+                        AUDIO_MAX_HZ,
+                        SYNC_MIN,
+                        MAX_CAND,
+                    )
+                    .osd(true);
+                    let r = match depth {
+                        Ft8Depth::Fast => r,
+                        Ft8Depth::Normal => r.sic_rounds(2),
+                        Ft8Depth::Deep => r.sic_early(),
+                    };
+                    match hint.as_ref() {
+                        Some(h) => r.ap_hint(h),
+                        None => r,
+                    }
                 };
-                req.decode()
+                req(self.ft8_depth)
+                    .decode()
                     .results
                     .into_iter()
                     .filter_map(|r| {

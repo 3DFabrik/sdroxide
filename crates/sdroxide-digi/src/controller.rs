@@ -161,6 +161,10 @@ struct DecodeJob {
     ap: ApHints,
     /// Where we are listening, for FT4's targeted a-priori pass.
     audio_hz: f32,
+    /// The FT8 decode depth in force when the slot completed — see
+    /// [`sdroxide_types::Ft8Depth`]. Read off the config here rather than held
+    /// on the worker's modem, which the job is the only thing that updates.
+    ft8_depth: sdroxide_types::Ft8Depth,
 }
 
 pub struct DigiController {
@@ -309,6 +313,7 @@ impl DigiController {
             .spawn(move || {
                 let mut modem = Ft8Modem::new(worker_mode);
                 while let Ok(job) = job_rx.recv() {
+                    modem.set_ft8_depth(job.ft8_depth);
                     modem.seed_hashes(&job.ap.calls());
                     let decodes =
                         modem.decode_slot(&job.audio, job.slot_utc, &job.ap, job.audio_hz);
@@ -320,13 +325,17 @@ impl DigiController {
             .expect("spawn ft8 decode worker");
 
         let tx_even = cfg.tx_even;
-        let qso = QsoMachine::new(params.mode, cfg);
+        let qso = QsoMachine::new(params.mode, cfg.clone());
 
         DigiController {
             params,
             scheduler: SlotScheduler::for_mode(mode),
             qso,
-            modem: Ft8Modem::new(params.mode),
+            modem: {
+                let mut m = Ft8Modem::new(params.mode);
+                m.set_ft8_depth(cfg.ft8_depth);
+                m
+            },
             resampler,
             slot_buf: Vec::with_capacity(params.slot_samples()),
             tap_scratch: Vec::new(),
@@ -362,6 +371,7 @@ impl DigiController {
         if cfg.dxped_mode == sdroxide_types::DxpedMode::Fox {
             self.tx_even = cfg.tx_even;
         }
+        self.modem.set_ft8_depth(cfg.ft8_depth);
         self.qso.set_config(cfg);
         self.status_dirty = true;
     }
@@ -854,7 +864,14 @@ impl DigiController {
                     };
                     if self
                         .job_tx
-                        .send(DecodeJob { audio, slot_idx, slot_utc, ap, audio_hz: self.audio_hz })
+                        .send(DecodeJob {
+                            audio,
+                            slot_idx,
+                            slot_utc,
+                            ap,
+                            audio_hz: self.audio_hz,
+                            ft8_depth: self.qso.status(false).config.ft8_depth,
+                        })
                         .is_ok()
                     {
                         self.decoding += 1;

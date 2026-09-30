@@ -215,6 +215,32 @@ pub const NAVTEX_TONE_HZ: f32 = 1700.0;
 /// something else (issue #223).
 ///
 /// One entry so far. WSJT-X offers six, and each is its own 77-bit message
+/// How hard the FT8 decoder works for weak signals, and what it costs.
+///
+/// FT8's recall comes from signal subtraction, and the most thorough pass —
+/// WSJT-X's checkpointed multi-pass (mfsk-core's `.sic_early()`, a recall
+/// superset of the flat `.sic_rounds(n)`) — is **sequential by construction**,
+/// so it can neither be spread across cores nor made cheap. It was measured at
+/// ~1.2 s on a busy slot against FT8's 0.5 s transmit offset, so an operator who
+/// wants the reply to go out on time should be able to trade a few weak decodes
+/// for it. That trade is this setting.
+///
+/// Measured on mfsk-core's `qso3_busy.wav`, `.osd(true)`, 16 cores:
+/// - [`Fast`](Self::Fast) — one pass, no subtraction: ~30 ms, ~16 stations.
+/// - [`Normal`](Self::Normal) — flat multi-pass SIC: ~0.4 s, ~19–20.
+/// - [`Deep`](Self::Deep) — the checkpointed pass: ~1.2 s, ~22.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Ft8Depth {
+    /// One pass, no subtraction. Fastest, least sensitive.
+    Fast,
+    /// Flat multi-pass SIC: a little quicker than [`Deep`](Self::Deep), a
+    /// little less thorough.
+    Normal,
+    /// The checkpointed multi-pass. The most decodes.
+    #[default]
+    Deep,
+}
+
 /// layout with its own sequence and its own log fields — ARRL Field Day
 /// (`i3.n3 = 0.3`/`0.4`), the ARRL RTTY Roundup (`i3 = 3`), NA VHF and WW Digi
 /// (standard messages carrying a grid where the report goes). Naming the enum
@@ -2142,6 +2168,11 @@ pub struct DigiConfig {
     /// is a setting here. See [`crate::Fsk441Period`].
     #[serde(default)]
     pub fsk441_period: crate::Fsk441Period,
+    /// FT8: how hard the decoder works for weak signals — see [`Ft8Depth`].
+    /// The plain single-pass result is always emitted first whatever this says,
+    /// so it governs only the extra, subtracting batch.
+    #[serde(default)]
+    pub ft8_depth: Ft8Depth,
 }
 
 fn cw_default_tx_idle_s() -> f32 {
@@ -2333,6 +2364,7 @@ impl Default for DigiConfig {
             fst4_period: crate::Fst4Period::P60,
             q65_mode: crate::Q65Mode::A30,
             fsk441_period: crate::Fsk441Period::P30,
+            ft8_depth: Ft8Depth::default(),
         }
     }
 }
