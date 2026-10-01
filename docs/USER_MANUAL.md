@@ -8038,6 +8038,14 @@ panel's text to the radio and lets the radio's own keyer send it, which is the
 only route that puts CW on the air from a rig that is *in* CW. There is no PTT
 around it: the rig switches to transmit for the length of the message itself.
 
+That route needs the control link, so it is only taken when there is one. With
+no serial port set (or, for rigctld and flrig, no address) — a CAT profile used
+for a VOX rig, say — `Rig keyer (CAT)` falls back to `Sound card (MCW)` while
+the setting itself stays as it is: the CW panel's key, a paddle, typed text and
+the message buttons all go out as a tone through the sound card, at the CW
+transmit level, and VOX keys the rig. Set a port and the rig's keyer is used
+again.
+
 What that needs on the radio:
 
 - **Break-in on.** sdroxide asserts it on Yaesu (`BI1`) with every message,
