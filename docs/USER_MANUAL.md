@@ -14196,6 +14196,14 @@ back. A key in the bottom-right corner gives the counts. It follows the same ban
 filter as this window, so switching to `20m` here repaints the globe as "what is
 missing on twenty".
 
+**The grid tracker** — the **GRID** button (System box) opens the worked squares on their
+own map: each 4-character Maidenhead square in the log is filled on the flat world map,
+**amber** where worked and **green** where a QSL has come back, with your own locator marked
+on top. Drag to pan and wheel to zoom; the square under the pointer is named. The **HEARD**
+layer shades, in cyan, the squares on the live decode list rather than the log — what is on
+the air right now — so the map shows activity as it happens. A square that is both heard and
+worked reads as worked.
+
 ### 10.5 FreeDV Reporter (qso.freedv.org)
 
 [FreeDV Reporter](https://qso.freedv.org/) is where FreeDV operators announce

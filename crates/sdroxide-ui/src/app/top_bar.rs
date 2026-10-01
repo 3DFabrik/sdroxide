@@ -5473,7 +5473,7 @@ impl SdroxideApp {
 
     /// The remaining window chips — the condensed System box's bottom row.
     fn system_chips_bottom(&mut self, ui: &mut egui::Ui, extra: f32, cmds: &mut Vec<Command>) {
-        let [mail, mem, scan_label, hfdl_label, settings, help] = SYSTEM_CHIPS_BOTTOM;
+        let [mail, mem, scan_label, hfdl_label, grid_label, settings, help] = SYSTEM_CHIPS_BOTTOM;
         if chip_stretched(ui, self.mail.open, mail, extra)
             .on_hover_text("Winlink radio email")
             .clicked()
@@ -5550,6 +5550,14 @@ impl SdroxideApp {
                 vfo: self.state.active_vfo,
                 hz: self.state.hfdl.frequency_hz,
             });
+        }
+        // Grid tracker: the worked squares on a map, with a HEARD layer for
+        // what is on the air now.
+        if chip_stretched(ui, self.show_grid, grid_label, extra)
+            .on_hover_text("Grid tracker — worked Maidenhead squares on a map, with what is heard")
+            .clicked()
+        {
+            self.show_grid = !self.show_grid;
         }
         if chip_stretched(ui, self.show_settings, settings, extra)
             .on_hover_text("Settings — device gains, antennas, audio devices")
@@ -5693,7 +5701,8 @@ impl PttPress {
 const SYSTEM_CHIPS_TOP: [&str; 7] = ["LOG", "SPOTS", "AWARDS", "BANDS", "SAT", "ISM", "PUBLIC SDR"];
 
 /// The rest of them. See [`SYSTEM_CHIPS_TOP`].
-const SYSTEM_CHIPS_BOTTOM: [&str; 6] = ["MAIL", "MEM", "SCAN", "HFDL", "⚙ SETTINGS", "? HELP"];
+const SYSTEM_CHIPS_BOTTOM: [&str; 7] =
+    ["MAIL", "MEM", "SCAN", "HFDL", "GRID", "⚙ SETTINGS", "? HELP"];
 
 /// The Display box's top row: the solar view, then the chips that choose what
 /// the panadapter draws — the last of those only on a front end with a

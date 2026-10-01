@@ -146,7 +146,7 @@ pub use fsk441::Fsk441Period;
 pub use fst4::Fst4Period;
 pub use geo::{
     bearing_deg, distance_km, great_circle_points, grid_bearing, grid_distance_km, grid_to_latlon,
-    latlon_to_grid,
+    grid4, latlon_to_grid,
 };
 pub use hd::{HdAudioService, HdRadioStatus};
 pub use hfdl::{
