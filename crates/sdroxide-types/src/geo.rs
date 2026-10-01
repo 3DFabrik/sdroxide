@@ -42,8 +42,10 @@ pub fn grid_to_latlon(grid: &str) -> Option<(f64, f64)> {
 /// is the shape check; the rest of the characters are trusted, as the awards
 /// tally does.
 pub fn grid4(grid: &str) -> Option<String> {
-    let g = grid.trim();
-    (g.len() >= 4 && g.as_bytes()[0].is_ascii_alphabetic()).then(|| g[..4].to_ascii_uppercase())
+    // `get`, not an index: a locator mistyped with a multi-byte character in
+    // its first four bytes is not a square, and must not panic.
+    let g = grid.trim().get(..4)?;
+    g.as_bytes()[0].is_ascii_alphabetic().then(|| g.to_ascii_uppercase())
 }
 
 /// The 6-character Maidenhead locator a position falls in.
@@ -194,6 +196,9 @@ mod tests {
         // The awards tally's own rule: only the leading letter is checked, so
         // the two helpers agree about what a grid is.
         assert_eq!(grid4("JO5x"), Some("JO5X".to_string()));
+        // A multi-byte character inside the first four bytes is not a square.
+        assert_eq!(grid4("JOxé"), None);
+        assert_eq!(grid4("éé"), None);
     }
 
     #[test]

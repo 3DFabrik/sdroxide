@@ -35,6 +35,9 @@ pub struct GridTracker {
     pub view: MapView,
     /// Shade the squares heard but not worked, from the live decode list.
     pub show_heard: bool,
+    /// `(log length, (square, confirmed))`: every band's squares, tallied once
+    /// per log change rather than every frame.
+    worked: Option<(usize, Vec<(String, bool)>)>,
 }
 
 /// Draw the map into `rect`. Returns the grid square under the pointer, for a
@@ -189,21 +192,24 @@ impl SdroxideApp {
         if !self.show_grid {
             return;
         }
-        self.ensure_awards();
-        let worked: Vec<(String, bool)> = self
-            .awards_cache
-            .as_ref()
-            .map(|(_, _, a)| a.grids.iter().map(|(g, s)| (g.clone(), s.confirmed)).collect())
-            .unwrap_or_default();
+        // Every band, whatever the AWARDS window's filter is set to: the map
+        // has no band picker of its own, so following that one would hide
+        // squares with nothing on screen to say why.
+        let len = self.qso_log.len();
+        if self.grid_tracker.worked.as_ref().is_none_or(|(l, _)| *l != len) {
+            let awards = sdroxide_types::compute_awards(&self.qso_log, None, None);
+            let squares = awards.grids.iter().map(|(g, s)| (g.clone(), s.confirmed)).collect();
+            self.grid_tracker.worked = Some((len, squares));
+        }
+        let worked = self.grid_tracker.worked.as_ref().map(|(_, w)| w.clone()).unwrap_or_default();
         let confirmed = worked.iter().filter(|(_, c)| *c).count();
-        let heard: HashSet<String> = if self.grid_tracker.show_heard {
-            self.digi_decodes
-                .iter()
-                .filter_map(|d| d.grid.as_deref().and_then(sdroxide_types::grid4))
-                .collect()
-        } else {
-            HashSet::new()
-        };
+        // Counted whether or not the layer is shown, so the toggle says how
+        // many it would add before it is switched on.
+        let heard: HashSet<String> = self
+            .digi_decodes
+            .iter()
+            .filter_map(|d| d.grid.as_deref().and_then(sdroxide_types::grid4))
+            .collect();
         let home = {
             let g = self.my_grid();
             sdroxide_types::grid_to_latlon(&g)
@@ -250,7 +256,9 @@ impl SdroxideApp {
                 });
                 ui.separator();
                 let h = ui.available_height();
-                draw(ui, tracker, &worked, &heard, home, h);
+                let none = HashSet::new();
+                let shade = if tracker.show_heard { &heard } else { &none };
+                draw(ui, tracker, &worked, shade, home, h);
                 ui.separator();
                 ui.label(
                     egui::RichText::new(
