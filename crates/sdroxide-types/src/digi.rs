@@ -1331,8 +1331,13 @@ impl HellVariant {
     }
 }
 
-/// One of the operator's CW message buttons — what the chip says, and what it
-/// sends (issue #374).
+/// One of the operator's message buttons — what the chip says, and what it
+/// sends (issues #374, #463).
+///
+/// Shared by the CW panel (through [`DigiConfig::cw_macros`]) and the keyboard
+/// modes (through [`DigiConfig::text_macros`]): the same label-and-text shape,
+/// drawn by the same control, kept in two lists because the two kinds of
+/// message differ.
 ///
 /// The label is kept apart from the text because a chip has to be readable at a
 /// glance and the text it sends is a sentence: a button showing
@@ -1804,6 +1809,14 @@ pub struct DigiConfig {
     /// configuration, and it is in the directory Settings → General exports.
     #[serde(default)]
     pub cw_macros: Vec<CwMacro>,
+    /// The same message buttons for the keyboard modes — PSK, RTTY, Olivia,
+    /// Thor: the working conditions or the weather an operator sends over and
+    /// over, typed once and kept across sessions (issue #463). A list of its
+    /// own rather than shared with the CW row above, because a CW abbreviation
+    /// and a PSK sentence are not the same message; identical in shape and
+    /// behaviour otherwise.
+    #[serde(default)]
+    pub text_macros: Vec<CwMacro>,
     /// CW: pin the decoder's speed search to `cw_wpm` instead of reading the
     /// speed off the signal. Worth having for a signal too weak for the search
     /// to settle when you already know how fast the other station sends.
@@ -2244,6 +2257,7 @@ impl Default for DigiConfig {
             cw_wpm: cw_default_wpm(),
             cw_farnsworth_wpm: 0.0,
             cw_macros: Vec::new(),
+            text_macros: Vec::new(),
             cw_speed_lock: false,
             cw_engine: crate::CwEngine::default(),
             send_on_enter: false,

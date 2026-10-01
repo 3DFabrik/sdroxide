@@ -576,6 +576,9 @@ pub struct SdroxideApp {
     /// Screen state, not the operator's: the buttons themselves live in
     /// `DigiConfig`.
     cw_macro_edit: bool,
+    /// The keyboard-mode message editor (`DigiConfig::text_macros`), the same
+    /// window on its own list.
+    text_macro_edit: bool,
     /// Whether the CW panel's keyboard-as-straight-key mode is engaged (issue
     /// #322). Screen state: the keyer's engagement lives in the controller,
     /// and this is the toggle's face and where the key is read.
@@ -1495,6 +1498,7 @@ impl SdroxideApp {
             aprs_lon_buf: String::new(),
             digi_cfg_seeded: false,
             cw_macro_edit: false,
+            text_macro_edit: false,
             cw_straight: false,
             cw_key_down: false,
             digi_tx_hz_edit: String::new(),

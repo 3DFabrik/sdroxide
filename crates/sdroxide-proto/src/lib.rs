@@ -1500,7 +1500,15 @@ use sdroxide_types::{
 /// bytes as the start of the next field and fails to decode every digital
 /// status. No new wire type: FSK441's transmit runs through the ordinary digi
 /// engine seam (`DigiTxText`/`DigiTxActive`).
-pub const PROTO_VERSION: u16 = 171;
+///
+/// v172: editable message buttons for the keyboard modes (PSK / RTTY / Olivia
+/// / Thor — issue #463). `DigiConfig` gains `text_macros` (`Vec<CwMacro>`) on
+/// its tail: the same label-and-text buttons the CW panel has, on a list of
+/// their own. `DigiConfig` rides `Command::SetDigiConfig` and `DigiStatus`
+/// whole, so a v171 peer reads the extra bytes as the start of the next field
+/// and fails to decode every digital status — the same break as v170's appended
+/// FSK441 period.
+pub const PROTO_VERSION: u16 = 172;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]

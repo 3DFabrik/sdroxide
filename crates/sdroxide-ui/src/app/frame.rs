@@ -930,6 +930,7 @@ impl eframe::App for SdroxideApp {
         self.ism_window(&ctx, &mut cmds);
         self.adsb_setup_window(&ctx, &mut cmds);
         self.cw_macro_window(&ctx, &mut cmds);
+        self.text_macro_window(&ctx, &mut cmds);
         self.ais_setup_window(&ctx, &mut cmds);
         self.vdl2_setup_window(&ctx, &mut cmds);
         self.rds_window(&ctx);
