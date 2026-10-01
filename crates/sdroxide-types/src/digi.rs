@@ -1809,14 +1809,6 @@ pub struct DigiConfig {
     /// configuration, and it is in the directory Settings → General exports.
     #[serde(default)]
     pub cw_macros: Vec<CwMacro>,
-    /// The same message buttons for the keyboard modes — PSK, RTTY, Olivia,
-    /// Thor: the working conditions or the weather an operator sends over and
-    /// over, typed once and kept across sessions (issue #463). A list of its
-    /// own rather than shared with the CW row above, because a CW abbreviation
-    /// and a PSK sentence are not the same message; identical in shape and
-    /// behaviour otherwise.
-    #[serde(default)]
-    pub text_macros: Vec<CwMacro>,
     /// CW: pin the decoder's speed search to `cw_wpm` instead of reading the
     /// speed off the signal. Worth having for a signal too weak for the search
     /// to settle when you already know how fast the other station sends.
@@ -2161,6 +2153,14 @@ pub struct DigiConfig {
     /// is a setting here. See [`crate::Fsk441Period`].
     #[serde(default)]
     pub fsk441_period: crate::Fsk441Period,
+    /// The same message buttons for the keyboard modes — PSK, RTTY, Olivia,
+    /// Thor: the working conditions or the weather an operator sends over and
+    /// over, typed once and kept across sessions (issue #463). A list of its
+    /// own rather than shared with the CW row above, because a CW abbreviation
+    /// and a PSK sentence are not the same message; identical in shape and
+    /// behaviour otherwise.
+    #[serde(default)]
+    pub text_macros: Vec<CwMacro>,
 }
 
 fn cw_default_tx_idle_s() -> f32 {

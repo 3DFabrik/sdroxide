@@ -2,7 +2,7 @@
 //!
 //! Both the CW panel and the keyboard-mode (PSK / RTTY / Olivia / Thor) panel
 //! offer the same control: a row of chips under the send buttons, each sending
-//! a pre-written line in one piece, with F1–F9 firing the first nine and a
+//! a pre-written line in one piece, with F2–F10 firing the first nine and a
 //! small window to write them. The two lists are separate — a CW abbreviation
 //! and a PSK sentence are not the same message, and a station that works both
 //! wants each where it belongs — but the control is one thing, so it lives here
@@ -13,13 +13,13 @@ use sdroxide_types::{Command, CwMacro};
 
 use crate::app::tx_gated;
 
-/// The message row: one chip per filled-in button, F1–F9 for the first nine.
+/// The message row: one chip per filled-in button, F2–F10 for the first nine.
 ///
 /// A press does the same three steps CALL CQ takes — abandon whatever is going
 /// out, show the text in the box, send it as one piece — so a whole line is one
 /// hand-off to the radio instead of one per word.
 ///
-/// **F1–F9 fire only while nothing on screen holds the keyboard.** That
+/// **F2–F10 fire only while nothing on screen holds the keyboard.** That
 /// exclusion is the point: an operator part-way through typing has the caret in
 /// the transmit box, and a function key that fired a message from under them
 /// would put the wrong thing on the air. A function key that does nothing is
@@ -36,8 +36,9 @@ pub(in crate::app) fn macro_row(
     let typing = ui.memory(|m| m.focused().is_some());
     let mut fire: Option<usize> = None;
     if !typing && tx_ok {
+        // F1 is the manual's, everywhere and always, so the buttons start at
+        // F2: a press for help must never put a message on the air.
         const KEYS: [egui::Key; 9] = [
-            egui::Key::F1,
             egui::Key::F2,
             egui::Key::F3,
             egui::Key::F4,
@@ -46,6 +47,7 @@ pub(in crate::app) fn macro_row(
             egui::Key::F7,
             egui::Key::F8,
             egui::Key::F9,
+            egui::Key::F10,
         ];
         for (i, key) in KEYS.iter().enumerate().take(macros.len()) {
             if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, *key)) {
@@ -60,7 +62,7 @@ pub(in crate::app) fn macro_row(
         // nothing for a chip on the panel to send.
         for (i, m) in macros.iter().enumerate().filter(|(_, m)| !m.text.trim().is_empty()) {
             let hint = if i < 9 {
-                format!("F{}: sends “{}”", i + 1, m.text.trim())
+                format!("F{}: sends “{}”", i + 2, m.text.trim())
             } else {
                 format!("Sends “{}”", m.text.trim())
             };
@@ -94,12 +96,15 @@ pub(in crate::app) fn macro_row(
 /// the case an operator setting these up on a laptop is in.
 ///
 /// `title` and `id` name the window and its grid, so the two lists (CW and the
-/// keyboard modes) can be open at once without sharing state. Returns whether
+/// keyboard modes) can be open at once without sharing state; `example` is the
+/// placeholder in an empty text box, so each list shows a message of its own
+/// kind. Returns whether
 /// anything was edited, so the caller can persist its own config.
 pub(in crate::app) fn macro_window(
     ctx: &egui::Context,
     title: &str,
     id: &str,
+    example: &str,
     open: &mut bool,
     macros: &mut Vec<CwMacro>,
 ) -> bool {
@@ -124,7 +129,7 @@ pub(in crate::app) fn macro_window(
             ui.set_min_width(crate::layout::window_w(ctx, 520.0));
             ui.label(
                 RichText::new(
-                    "Each button sends its whole text in one go. F1–F9 press the first \
+                    "Each button sends its whole text in one go. F2–F10 press the first \
                      nine, so long as nothing on screen has the keyboard.",
                 )
                 .size(10.5)
@@ -142,7 +147,7 @@ pub(in crate::app) fn macro_window(
                     for (i, m) in macros.iter_mut().enumerate() {
                         ui.label(
                             RichText::new(if i < 9 {
-                                format!("F{}", i + 1)
+                                format!("F{}", i + 2)
                             } else {
                                 String::new()
                             })
@@ -162,8 +167,7 @@ pub(in crate::app) fn macro_window(
                         changed |= crate::chrome::field_sized(
                             ui,
                             [320.0, 22.0],
-                            egui::TextEdit::singleline(&mut m.text)
-                                .hint_text("{MYCALL} DE {MYCALL}"),
+                            egui::TextEdit::singleline(&mut m.text).hint_text(example),
                         )
                         .changed();
                         if crate::chrome::chip(ui, false, "×")
@@ -188,11 +192,9 @@ pub(in crate::app) fn macro_window(
                     changed = true;
                 }
                 ui.label(
-                    RichText::new(
-                        "{MYCALL} and {MYGRID} are filled in as the message goes out.",
-                    )
-                    .size(10.5)
-                    .color(crate::theme::gray(140)),
+                    RichText::new("{MYCALL} and {MYGRID} are filled in as the message goes out.")
+                        .size(10.5)
+                        .color(crate::theme::gray(140)),
                 );
             });
         });

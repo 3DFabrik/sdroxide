@@ -1907,7 +1907,7 @@ characters of the text.
 - One press sends the whole message in one piece, exactly as **SEND ON RETURN**
   does for a typed line — which is the point of them on a transceiver that keys
   itself from text: one hand-off to the rig's keyer instead of one per word.
-- **F1–F9** press the first nine, so long as nothing on screen has the keyboard
+- **F2–F10** press the first nine, so long as nothing on screen has the keyboard
   — no caret in the transmit box, no field being typed into anywhere else. That
   exclusion is deliberate: an operator part-way through a callsign has a key down
   in a text field, and a function key firing a message from under them would put
@@ -3871,7 +3871,7 @@ panel is a live **messaging area** instead of a QSO sequencer.
   buffer and stops; pressing **TX** again unkeys.
 - **MSG** opens the message editor: up to ten buttons of your own text — working
   conditions, the weather, a standard reply — each sending its whole line in one
-  press, with **F1–F9** for the first nine. It is the same control the CW panel
+  press, with **F2–F10** for the first nine. It is the same control the CW panel
   carries, on a list of its own, and it is saved with the station's
   configuration ([2.14](#214-cw-decoding-and-keyboard-sending)).
 - **SEND ON RETURN** changes that to a line at a time: nothing leaves the box

@@ -230,7 +230,9 @@ impl eframe::App for SdroxideApp {
             // F1 toggles the manual — handled here (not in
             // `keyboard_shortcuts`) so it works even while a text field has
             // focus.
-            if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
+            // Consumed, so nothing later in the frame (the message buttons'
+            // function keys) sees the same press.
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F1)) {
                 self.help.open = !self.help.open;
             }
             // An open manual takes the scrolling keys before the bindings run,

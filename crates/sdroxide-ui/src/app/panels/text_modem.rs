@@ -76,7 +76,17 @@ impl SdroxideApp {
         let input_h = 56.0; // fixed-height, internally-scrolling TX box
         let gap = 5.0;
         let bottom_pad = 12.0; // clear space below the button row
-        let rx_h = (content_bottom - ui.cursor().top() - btn_h - input_h - 2.0 * gap - bottom_pad)
+        // The message-button row under the buttons, as on the CW panel: it is
+        // drawn whether or not any buttons exist, and uncounted it would be laid
+        // out past the bottom of the panel and paint over whatever is below.
+        let macro_h = 4.0 + crate::chrome::chip_height(ui, None);
+        let rx_h = (content_bottom
+            - ui.cursor().top()
+            - btn_h
+            - macro_h
+            - input_h
+            - 2.0 * gap
+            - bottom_pad)
             .max(24.0);
 
         ui.allocate_ui(egui::vec2(ui.available_width(), rx_h), |ui| {
@@ -299,7 +309,7 @@ impl SdroxideApp {
         if crate::chrome::chip(ui, self.text_macro_edit, "MSG")
             .on_hover_text(
                 "Your own message buttons — working conditions, the weather, a standard \
-                 reply. Each sends its whole text in one go, and F1–F9 press the first \
+                 reply. Each sends its whole text in one go, and F2–F10 press the first \
                  nine. They travel with the station's configuration, so a remote client \
                  has them too.",
             )
@@ -320,6 +330,7 @@ impl SdroxideApp {
             ctx,
             "MESSAGES",
             "TextMacros",
+            "{MYCALL} DE {MYCALL}",
             &mut self.text_macro_edit,
             &mut self.digi_cfg_edit.text_macros,
         ) && self.digi_cfg_seeded

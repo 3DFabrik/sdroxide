@@ -599,7 +599,7 @@ impl SdroxideApp {
         if crate::chrome::chip(ui, self.cw_macro_edit, "MSG")
             .on_hover_text(
                 "Your own message buttons — a contest exchange, a name-and-QTH reply, \
-                 TNX 73 GL. Each sends its whole text in one go, and F1–F9 press the \
+                 TNX 73 GL. Each sends its whole text in one go, and F2–F10 press the \
                  first nine. They travel with the station's configuration, so a \
                  remote client has them too.",
             )
@@ -617,6 +617,7 @@ impl SdroxideApp {
             ctx,
             "CW MESSAGES",
             "CwMacros",
+            "5NN 5NN {MYCALL}",
             &mut self.cw_macro_edit,
             &mut self.digi_cfg_edit.cw_macros,
         ) && self.digi_cfg_seeded
