@@ -944,6 +944,7 @@ impl eframe::App for SdroxideApp {
         self.spots_window(&ctx, &mut cmds);
         self.public_sdrs_window(&ctx, &mut cmds);
         self.awards_window(&ctx);
+        self.grid_tracker_window(&ctx);
         self.bands_window(&ctx);
         self.sat_window(&ctx, &mut cmds);
         self.help.ui(&ctx);

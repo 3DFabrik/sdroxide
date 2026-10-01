@@ -24,6 +24,7 @@ pub(in crate::app) mod awards;
 pub(in crate::app) mod bands;
 pub(in crate::app) mod drm;
 pub(in crate::app) mod frame;
+pub(in crate::app) mod grid_tracker;
 pub(in crate::app) mod hd;
 pub(in crate::app) mod hfdl;
 pub(in crate::app) mod ism;
@@ -910,6 +911,9 @@ pub struct SdroxideApp {
     pending_uploads: Vec<(u64, String, Vec<UploadTarget>)>,
     /// Awards dashboard open state + band filter ("" = all bands).
     show_awards: bool,
+    /// Grid tracker window open state, and its pan/zoom + heard-layer toggle.
+    show_grid: bool,
+    grid_tracker: crate::app::grid_tracker::GridTracker,
     awards_band: String,
     /// Cached award tally, keyed by (log length, band filter).
     awards_cache: Option<(usize, String, sdroxide_types::Awards)>,
@@ -1571,6 +1575,8 @@ impl SdroxideApp {
             callsign_cache: Default::default(),
             pending_uploads: Vec::new(),
             show_awards: false,
+            show_grid: false,
+            grid_tracker: crate::app::grid_tracker::GridTracker::default(),
             awards_band: String::new(),
             awards_cache: None,
             awards_heat: None,
