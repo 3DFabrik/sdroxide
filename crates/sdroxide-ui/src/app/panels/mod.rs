@@ -41,10 +41,10 @@ pub(in crate::app) mod wefax;
 pub(in crate::app) mod widgets;
 pub(in crate::app) mod wspr;
 
-use eframe::egui::{self, RichText};
+use eframe::egui::{self, Color32, RichText};
 use sdroxide_types::{Band, Command, DigiStatus, Mode};
 
-use crate::app::SdroxideApp;
+use crate::app::{SdroxideApp, tx_gated};
 
 /// The waterfall's tab. Always last, and every mode has one: on a phone the
 /// panadapter is a view of its own rather than a strip above the panel, because
@@ -1140,14 +1140,13 @@ impl SdroxideApp {
         }
     }
 
-    /// The FSK441 panel: the period chip row, the slot clock and the decode
-    /// list, and nothing else.
+    /// The FSK441 panel: the period chip row, the slot clock, the decode list
+    /// and the transmit row.
     ///
     /// An FSK441 decode is an ordinary [`sdroxide_types::Decode`], so the list
-    /// is the one the FT8 modes share. What is missing is the QSO area — a
-    /// meteor-scatter exchange this build does not sequence (it is receive-only)
-    /// — so the sequencer, the transmit pane and the call queue have nothing to
-    /// drive.
+    /// is the one the FT8 modes share — but with no QSO controls, since a
+    /// meteor-scatter exchange this build does not sequence has no station to
+    /// answer and nothing to queue.
     pub(in crate::app) fn fsk441_panel(&mut self, ui: &mut egui::Ui, cmds: &mut Vec<Command>) {
         // FSK441's T/R period is the one thing about it an operator chooses,
         // and it decides the slot length the ping search runs over — so it gets
@@ -1173,6 +1172,84 @@ impl SdroxideApp {
         self.slot_progress(ui);
         ui.add_space(4.0);
         self.decode_list(ui, cmds);
+        self.fsk441_tx_row(ui, cmds);
+    }
+
+    /// FSK441's transmit row, under its decode list.
+    ///
+    /// The mode keeps the decode list — a meteor ping lands there and the
+    /// operator wants to read it — so transmit is a single line beneath it:
+    /// the message, a key, and CQ. The message loops for as long as the key is
+    /// held, which is how FSK441 is worked on the air.
+    fn fsk441_tx_row(&mut self, ui: &mut egui::Ui, cmds: &mut Vec<Command>) {
+        let tx_on = self.digi_status.as_ref().is_some_and(|s| s.transmitting);
+        // Armed with an empty box: the key was refused, and saying so is the
+        // difference between "nothing happened" and "there is nothing to send".
+        let refused = self.digi_status.as_ref().and_then(|s| s.tx_refused.clone());
+        let tx_ok = self.tx_capable();
+        ui.add_space(4.0);
+        ui.separator();
+        if let Some(why) = refused {
+            ui.label(RichText::new(why).size(10.0).color(crate::theme::ALERT()));
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("TX").size(10.5).strong().color(crate::theme::CYAN()));
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut self.text_tx)
+                    .desired_width(260.0)
+                    .hint_text("W1ABC W9XYZ FN42"),
+            );
+            if field.changed() {
+                cmds.push(Command::DigiTxText(self.text_tx.clone()));
+            }
+            let label = if tx_on { "  TX ON  " } else { "   TX   " };
+            if tx_gated(ui, tx_ok, |ui| {
+                crate::chrome::chip_accent(
+                    ui,
+                    tx_on,
+                    RichText::new(label).size(13.0).strong(),
+                    crate::theme::ALERT(),
+                    Color32::WHITE,
+                )
+            })
+            .clicked()
+            {
+                // The box may not have been committed yet; hand the current text
+                // over on the key, or the over starts with nothing to send.
+                cmds.push(Command::DigiTxText(self.text_tx.clone()));
+                cmds.push(Command::DigiTxActive(!tx_on));
+            }
+            if tx_gated(ui, tx_ok, |ui| {
+                crate::chrome::chip_accent(
+                    ui,
+                    false,
+                    RichText::new(" CALL CQ ").size(12.0).strong(),
+                    crate::theme::GREEN(),
+                    crate::theme::INK_ON_CYAN(),
+                )
+            })
+            .clicked()
+            {
+                let call = if self.digi_cfg_edit.my_call.is_empty() {
+                    "NOCALL".into()
+                } else {
+                    self.digi_cfg_edit.my_call.clone()
+                };
+                let cq = format!("CQ CQ CQ DE {call} {call} {call} PSE K");
+                cmds.push(Command::DigiAbortTx);
+                self.text_tx = cq.clone();
+                cmds.push(Command::DigiTxText(cq));
+                cmds.push(Command::DigiTxActive(true));
+            }
+        });
+        ui.label(
+            RichText::new(
+                "The message repeats for as long as transmit is held — a meteor catches \
+                 whatever part of it is passing.",
+            )
+            .size(9.5)
+            .color(crate::theme::CYAN_DIM()),
+        );
     }
 
     /// The slot length of the current mode, in seconds.
