@@ -81,9 +81,10 @@ One binary, three ways to run it:
   15/30/60/120/300-second T/R period, the same 77-bit message as FT8), receive-only **Q65** (the
   modern WSJT weak-signal mode — 65-tone FSK in a 15/30/60/120/300-second
   T/R period with a tone-spacing letter A–E for Doppler spread, the same
-  77-bit message as FT8), receive-only **FSK441** (the
+  77-bit message as FT8), **FSK441** (the
   original meteor-scatter mode — 4-FSK at 441 baud, decoding the brief pings a
-  meteor trail reflects in a 15/30-second period),
+  meteor trail reflects in a 15/30-second period, and transmitting a message
+  repeated for the length of the over),
   **Hellschreiber** (all seven Feld Hell / FSK Hell variants, on a scrolling
   raster), image **SSTV** (Scottie, Martin, Robot), image **RIFP**
   (draft-dulaunoy-rifp-00 — packetised, checksummed pictures over a 4800-baud

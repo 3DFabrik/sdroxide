@@ -161,7 +161,7 @@ pub fn fsk441_shorthand_tone(word: &str) -> Option<u8> {
 /// the ordinary three-dits-a-character, with a character outside the alphabet
 /// becoming a space, exactly as the reference's encoder does.
 pub fn fsk441_encode_tones(msg: &str) -> Vec<u8> {
-    // Time in seconds a single-tone shorthand is held, so a word on its own is
+    // Dits a single-tone shorthand is held (about 68 ms), so a word on its own is
     // a carrier long enough for a trail to reflect rather than a lone dit.
     const SHORTHAND_TONES: usize = 30;
     let trimmed = msg.trim();
@@ -211,8 +211,8 @@ pub fn fsk441_tx_tones(msg: &str) -> Vec<u8> {
 }
 
 /// Continuous-phase FSK audio for a tone sequence, at [`FSK441_RATE`],
-/// normalised to ±1. A signal *generator*, for tests and bench checks — the
-/// fork transmits nothing.
+/// normalised to ±1 — the transmit audio, hence the controller's `tx_peak()`
+/// of 1.0.
 pub fn fsk441_generate_audio(tones: &[u8]) -> Vec<f32> {
     let mut samples = Vec::with_capacity(tones.len() * FSK441_NSPD);
     let dt = 1.0_f32 / FSK441_RATE as f32;

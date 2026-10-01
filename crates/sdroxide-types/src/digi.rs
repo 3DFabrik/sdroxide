@@ -446,11 +446,6 @@ pub struct DigiStatus {
     /// action (calling CQ, replying, picking a message).
     #[serde(default)]
     pub tx_watchdog: bool,
-    /// Why a key-up was refused or is armed with nothing to send — an empty
-    /// message box, most often. `None` when there is nothing to say. A message
-    /// rather than a flag so each mode can name its own reason.
-    #[serde(default)]
-    pub tx_refused: Option<String>,
     /// The current QSO's message exchange (empty when idle).
     pub transcript: Vec<TranscriptLine>,
     /// Current engine config (so a fresh client can populate its editor).
@@ -537,6 +532,11 @@ pub struct DigiStatus {
     /// peer that matches the protocol version but not this build.
     #[serde(default)]
     pub acars: Option<AcarsStatus>,
+    /// Why a key-up was refused or is armed with nothing to send — an empty
+    /// message box, most often. `None` when there is nothing to say. A message
+    /// rather than a flag so each mode can name its own reason.
+    #[serde(default)]
+    pub tx_refused: Option<String>,
 }
 
 /// The running detail of the contact in progress: when it started and what has

@@ -111,8 +111,8 @@ pub(in crate::app) fn panel_panes(mode: Mode) -> &'static [&'static str] {
         // The decode list alone: the QSO pane is FT8's sequencer, which a
         // receive-only Q65 build has nothing to put in.
         Mode::Q65 => &["DECODES"],
-        // The decode list alone: the QSO pane is FT8's sequencer, which a
-        // receive-only FSK441 build has nothing to put in.
+        // The decode list alone: the QSO pane is FT8's sequencer, and FSK441
+        // keys from its own message box rather than a slot sequencer.
         Mode::Fsk441 => &["DECODES"],
         // The keyboard modes and RADE are one column already: receive above,
         // what you are sending below it.
@@ -1171,8 +1171,15 @@ impl SdroxideApp {
         ui.add_space(4.0);
         self.slot_progress(ui);
         ui.add_space(4.0);
-        self.decode_list(ui, cmds);
-        self.fsk441_tx_row(ui, cmds);
+        // The decode list's scroll area takes every point it is given, so the
+        // transmit row is laid out first, up from the bottom edge, and the list
+        // gets what is left above it — as `qso_area` does for FT8's controls.
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+            self.fsk441_tx_row(ui, cmds);
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                self.decode_list(ui, cmds);
+            });
+        });
     }
 
     /// FSK441's transmit row, under its decode list.
@@ -1181,17 +1188,22 @@ impl SdroxideApp {
     /// operator wants to read it — so transmit is a single line beneath it:
     /// the message, a key, and CQ. The message loops for as long as the key is
     /// held, which is how FSK441 is worked on the air.
+    ///
+    /// Called inside a bottom-up layout, so the rows are added bottom first.
     fn fsk441_tx_row(&mut self, ui: &mut egui::Ui, cmds: &mut Vec<Command>) {
         let tx_on = self.digi_status.as_ref().is_some_and(|s| s.transmitting);
         // Armed with an empty box: the key was refused, and saying so is the
         // difference between "nothing happened" and "there is nothing to send".
         let refused = self.digi_status.as_ref().and_then(|s| s.tx_refused.clone());
         let tx_ok = self.tx_capable();
-        ui.add_space(4.0);
-        ui.separator();
-        if let Some(why) = refused {
-            ui.label(RichText::new(why).size(10.0).color(crate::theme::ALERT()));
-        }
+        ui.label(
+            RichText::new(
+                "The message repeats for as long as transmit is held — a meteor catches \
+                 whatever part of it is passing.",
+            )
+            .size(9.5)
+            .color(crate::theme::CYAN_DIM()),
+        );
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("TX").size(10.5).strong().color(crate::theme::CYAN()));
             let field = ui.add(
@@ -1242,14 +1254,11 @@ impl SdroxideApp {
                 cmds.push(Command::DigiTxActive(true));
             }
         });
-        ui.label(
-            RichText::new(
-                "The message repeats for as long as transmit is held — a meteor catches \
-                 whatever part of it is passing.",
-            )
-            .size(9.5)
-            .color(crate::theme::CYAN_DIM()),
-        );
+        if let Some(why) = refused {
+            ui.label(RichText::new(why).size(10.0).color(crate::theme::ALERT()));
+        }
+        ui.separator();
+        ui.add_space(4.0);
     }
 
     /// The slot length of the current mode, in seconds.
