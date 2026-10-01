@@ -113,29 +113,26 @@ impl MorseState {
 
     /// A character is played three times with a breath between, which is how a
     /// single letter is copied rather than guessed from one hearing.
-    fn play_letter(&mut self, c: char) {
-        self.play(&format!("{c} {c} {c}"));
+    fn play_letter(&mut self, c: char, device: Option<String>) {
+        self.play(&format!("{c} {c} {c}"), device);
     }
 
-    /// Play `text` locally (native; a no-op in the browser).
+    /// Play `text` locally (native; a no-op in the browser), on `device` — the
+    /// alert output, so the tone goes where the operator already chose to hear
+    /// the app's own sounds rather than to the system default, which on some
+    /// stations is the rig's USB codec.
+    ///
+    /// The worker renders the tone a block at a time at the rate the device
+    /// actually opened at: rendering here at a fixed 48 kHz played at the wrong
+    /// pitch and speed on a 44.1 kHz card, and a long text froze the window
+    /// while it rendered.
     #[cfg(not(target_arch = "wasm32"))]
-    fn play(&mut self, text: &str) {
-        // Render the whole message first: short enough to be comfortable, and
-        // it keeps the worker a plain pacer.
-        let mut tx = CwTx::new(48_000.0, self.pitch_hz as f64, self.wpm);
-        tx.set_params(self.pitch_hz as f64, self.wpm, self.farnsworth_wpm);
-        tx.push_text(text);
-        let mut pcm = Vec::new();
-        while !tx.drained() {
-            let mut block = [0.0f32; 1024];
-            tx.next_block(&mut block);
-            pcm.extend_from_slice(&block);
-        }
-        if pcm.is_empty() {
+    fn play(&mut self, text: &str, device: Option<String>) {
+        if text.trim().is_empty() {
             return;
         }
         if self.audio.is_none() {
-            match MorseSink::start() {
+            match MorseSink::start(device) {
                 Ok(s) => {
                     self.audio_error = None;
                     self.audio = Some(s);
@@ -147,12 +144,17 @@ impl MorseState {
             }
         }
         if let Some(sink) = self.audio.as_ref() {
-            sink.play(pcm);
+            sink.play(Tone {
+                text: text.to_string(),
+                pitch_hz: self.pitch_hz,
+                wpm: self.wpm,
+                farnsworth_wpm: self.farnsworth_wpm,
+            });
         }
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn play(&mut self, _text: &str) {}
+    fn play(&mut self, _text: &str, _device: Option<String>) {}
 
     /// Stop playback and release the device.
     fn stop(&mut self) {
@@ -171,14 +173,24 @@ impl Drop for MorseState {
 
 // ─── Audio worker (native) ────────────────────────────────────────────────────
 
+/// A message to play, and how.
+#[cfg(not(target_arch = "wasm32"))]
+struct Tone {
+    text: String,
+    pitch_hz: f32,
+    wpm: f32,
+    farnsworth_wpm: f32,
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 enum Job {
-    Play(Vec<f32>),
+    Play(Tone),
     Quit,
 }
 
 /// Owns the worker and the sound card. One at a time, opened when the operator
-/// first plays and held until the window closes or STOP is pressed.
+/// first plays and held until the window closes or STOP is pressed (closing
+/// the window calls [`MorseState::stop`]).
 #[cfg(not(target_arch = "wasm32"))]
 struct MorseSink {
     tx: Option<SyncSender<Job>>,
@@ -195,21 +207,21 @@ const LEAD_S: f64 = 0.08;
 
 #[cfg(not(target_arch = "wasm32"))]
 impl MorseSink {
-    fn start() -> Result<Self, String> {
+    fn start(device: Option<String>) -> Result<Self, String> {
         let (tx, rx) = sync_channel::<Job>(8);
         let stop = Arc::new(AtomicBool::new(false));
         let error = Arc::new(std::sync::Mutex::new(None));
         let (stop2, error2) = (Arc::clone(&stop), Arc::clone(&error));
         let thread = std::thread::Builder::new()
             .name("morse-trainer".into())
-            .spawn(move || worker(rx, &stop2, &error2))
+            .spawn(move || worker(rx, device, &stop2, &error2))
             .map_err(|e| format!("could not start the Morse audio thread: {e}"))?;
         Ok(MorseSink { tx: Some(tx), stop, thread: Some(thread), error })
     }
 
-    fn play(&self, pcm: Vec<f32>) {
+    fn play(&self, tone: Tone) {
         if let Some(tx) = &self.tx {
-            let _ = tx.try_send(Job::Play(pcm));
+            let _ = tx.try_send(Job::Play(tone));
         }
     }
 }
@@ -230,8 +242,13 @@ impl Drop for MorseSink {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn worker(rx: Receiver<Job>, stop: &AtomicBool, error: &std::sync::Mutex<Option<String>>) {
-    let (out, mut ring) = match start_output(None, 48_000) {
+fn worker(
+    rx: Receiver<Job>,
+    device: Option<String>,
+    stop: &AtomicBool,
+    error: &std::sync::Mutex<Option<String>>,
+) {
+    let (out, mut ring) = match start_output(device.as_deref(), 48_000) {
         Ok(v) => v,
         Err(e) => {
             *error.lock().unwrap() = Some(format!("no audio output: {e}"));
@@ -244,31 +261,52 @@ fn worker(rx: Receiver<Job>, stop: &AtomicBool, error: &std::sync::Mutex<Option<
             return;
         }
     };
-    let capacity = out.sample_rate as usize * 2;
-    let lead = (out.sample_rate * LEAD_S) as usize;
-    while let Ok(job) = rx.recv() {
+    let rate = out.sample_rate;
+    let capacity = rate as usize * 2;
+    let lead = (rate * LEAD_S) as usize;
+    let mut next = rx.recv().ok();
+    while let Some(job) = next.take() {
         if stop.load(Ordering::Relaxed) {
             break;
         }
-        match job {
+        let tone = match job {
             Job::Quit => break,
-            Job::Play(pcm) => {
-                let mut i = 0;
-                while i < pcm.len() {
-                    if stop.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    let queued = capacity.saturating_sub(ring.slots()) / 2;
-                    if queued < lead && ring.slots() >= 2 {
-                        let s = pcm[i];
-                        let _ = ring.push(s);
-                        let _ = ring.push(s); // interleaved stereo
-                        i += 1;
-                    } else {
-                        std::thread::sleep(TICK);
-                    }
-                }
+            Job::Play(t) => t,
+        };
+        let mut tx = CwTx::new(rate, tone.pitch_hz as f64, tone.wpm);
+        tx.set_params(tone.pitch_hz as f64, tone.wpm, tone.farnsworth_wpm);
+        tx.push_text(&tone.text);
+        let mut block = [0.0f32; 256];
+        let (mut i, mut n) = (0, 0);
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                return;
             }
+            // A newer PLAY replaces the message still sounding rather than
+            // queueing behind it.
+            if let Ok(job) = rx.try_recv() {
+                next = Some(job);
+                break;
+            }
+            if i == n {
+                if tx.drained() {
+                    break;
+                }
+                tx.next_block(&mut block);
+                (i, n) = (0, block.len());
+            }
+            let queued = capacity.saturating_sub(ring.slots()) / 2;
+            if queued < lead && ring.slots() >= 2 {
+                let s = block[i];
+                let _ = ring.push(s);
+                let _ = ring.push(s); // interleaved stereo
+                i += 1;
+            } else {
+                std::thread::sleep(TICK);
+            }
+        }
+        if next.is_none() {
+            next = rx.recv().ok();
         }
     }
 }
@@ -326,7 +364,14 @@ pub(in crate::app) fn from_morse(code: &str) -> String {
 impl super::SdroxideApp {
     pub(in crate::app) fn morse_window(&mut self, ctx: &egui::Context) {
         if !self.morse.show {
+            // Closed by its × or by the TRAINER chip: either way a message still
+            // sounding stops with it, and the device is let go.
+            self.morse.stop();
             return;
+        }
+        // Another tab may have trained since this one last looked.
+        if let Some(p) = super::persist::shared_morse_progress() {
+            self.morse.progress = p;
         }
         let mut open = self.morse.show;
         let resp = egui::Window::new("MORSE")
@@ -424,7 +469,7 @@ impl super::SdroxideApp {
         ui.horizontal_wrapped(|ui| {
             if crate::chrome::chip(ui, true, "PLAY").clicked() {
                 let text = self.morse.play_text.clone();
-                self.morse.play(&text);
+                self.morse.play(&text, self.alerts.settings().device);
             }
             if crate::chrome::chip(ui, false, "STOP").clicked() {
                 self.morse.stop();
@@ -472,12 +517,20 @@ impl super::SdroxideApp {
         self.morse_tone_controls(ui);
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
-            if crate::chrome::chip(ui, false, "NEW").clicked() {
+            // The drill is copying by ear, and the browser build has no
+            // speaker: a NEW there would score guesses.
+            if cfg!(target_arch = "wasm32") {
+                ui.label(
+                    RichText::new("The drill needs sound, which the desktop build has.")
+                        .size(10.5)
+                        .weak(),
+                );
+            } else if crate::chrome::chip(ui, false, "NEW").clicked() {
                 let c = self.morse.next_target();
                 self.morse.target = Some(c);
                 self.morse.answer.clear();
                 self.morse.feedback = None;
-                self.morse.play_letter(c);
+                self.morse.play_letter(c, self.alerts.settings().device);
             }
             if crate::chrome::chip(ui, self.morse.reveal, "REVEAL").clicked() {
                 self.morse.reveal = !self.morse.reveal;
@@ -494,7 +547,7 @@ impl super::SdroxideApp {
                     ui.label(RichText::new(c.to_string()).size(16.0).strong());
                 }
                 if crate::chrome::chip(ui, false, "REPLAY").clicked() {
-                    self.morse.play_letter(c);
+                    self.morse.play_letter(c, self.alerts.settings().device);
                 }
             }
         });

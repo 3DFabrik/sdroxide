@@ -42,8 +42,10 @@ pub enum Answer {
     Wrong,
 }
 
-/// The trainer's remembered state.
+/// The trainer's remembered state. `#[serde(default)]` so a field added later
+/// reads an older `morse.json` instead of discarding it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MorseProgress {
     /// How many of [`KOCH_ORDER`] are unlocked. Never below [`START_UNLOCKED`].
     pub unlocked: u8,
@@ -90,9 +92,9 @@ impl MorseProgress {
             self.correct += 1;
             self.total += 1;
             self.streak += 1;
-            // Only the newest character's run advances the set; answers that
-            // were right but for an older character keep the streak going and
-            // promote nothing. A hard set that has no next character is done.
+            // A run of correct answers across the whole set in play advances
+            // it, whichever characters were asked. A set that has no next
+            // character is done.
             if self.streak >= ADVANCE_RUN && !self.complete() {
                 self.unlocked += 1;
                 self.streak = 0;

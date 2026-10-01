@@ -1131,7 +1131,10 @@ impl eframe::App for SdroxideApp {
             // Control-input bindings: authoritative on native is input.json.
             eframe::set_value(storage, "input", &self.input.cfg);
             // The Morse trainer's progress, so it carries to the browser build.
-            eframe::set_value(storage, "morse_progress", &self.morse.progress);
+            // The shared copy, which any tab may have advanced.
+            let morse = super::persist::shared_morse_progress()
+                .unwrap_or_else(|| self.morse.progress.clone());
+            eframe::set_value(storage, "morse_progress", &morse);
         }
     }
 }
