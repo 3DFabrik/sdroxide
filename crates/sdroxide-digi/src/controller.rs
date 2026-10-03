@@ -227,9 +227,10 @@ pub struct DigiController {
     /// are kept: two stations on one frequency is exactly the situation worth
     /// avoiding.
     recent_activity: Vec<(i64, f32)>,
-    // Decode worker.
+    // Decode worker. FT8 sends two result batches per slot — the quick pass,
+    // then the SIC extras — and `final` on the second marks the slot finished.
     job_tx: Sender<DecodeJob>,
-    res_rx: Receiver<(i64, Vec<Decode>)>,
+    res_rx: Receiver<(i64, Vec<Decode>, bool)>,
     _worker: std::thread::JoinHandle<()>,
     // TX burst playback.
     burst: Option<BurstPlayer>,
@@ -302,7 +303,7 @@ impl DigiController {
 
         // Decode worker: owns its own modem, runs LDPC off the RT thread.
         let (job_tx, job_rx) = std::sync::mpsc::channel::<DecodeJob>();
-        let (res_tx, res_rx) = std::sync::mpsc::channel::<(i64, Vec<Decode>)>();
+        let (res_tx, res_rx) = std::sync::mpsc::channel::<(i64, Vec<Decode>, bool)>();
         let worker_mode = params.mode;
         let worker = std::thread::Builder::new()
             .name("sdroxide-ft8-decode".into())
@@ -310,9 +311,17 @@ impl DigiController {
                 let mut modem = Ft8Modem::new(worker_mode);
                 while let Ok(job) = job_rx.recv() {
                     modem.seed_hashes(&job.ap.calls());
-                    let decodes =
-                        modem.decode_slot(&job.audio, job.slot_utc, &job.ap, job.audio_hz);
-                    if res_tx.send((job.slot_idx, decodes)).is_err() {
+                    // Two stages for FT8: the quick single-pass result is sent
+                    // as soon as it is ready, so an auto-sequenced reply can be
+                    // decided inside the transmit offset, and the slower SIC
+                    // extras follow as a second batch. `false`/`true` says which
+                    // is which, so the controller knows when the slot is done.
+                    let (quick, extras) =
+                        modem.decode_slot_staged(&job.audio, job.slot_utc, &job.ap, job.audio_hz);
+                    if res_tx.send((job.slot_idx, quick, false)).is_err() {
+                        break;
+                    }
+                    if res_tx.send((job.slot_idx, extras, true)).is_err() {
                         break;
                     }
                 }
@@ -791,10 +800,14 @@ impl DigiController {
         // 1. Drain finished decodes from the worker.
         loop {
             match self.res_rx.try_recv() {
-                Ok((slot_idx, decodes)) => {
-                    // Answered for, whether or not it found anything: an empty
-                    // slot is a finished slot.
-                    self.decoding = self.decoding.saturating_sub(1);
+                Ok((slot_idx, decodes, final_batch)) => {
+                    // Only the FINAL batch marks the slot done. FT8 arrives in
+                    // two: the quick pass (so a reply can be decided inside the
+                    // transmit offset) and the SIC extras, which can come a
+                    // second or so later.
+                    if final_batch {
+                        self.decoding = self.decoding.saturating_sub(1);
+                    }
                     if !decodes.is_empty() {
                         let slot_utc = self.scheduler.slot_start_unix(slot_idx) as i64;
                         // Remember which slot we heard each station in (reply
