@@ -78,6 +78,12 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
             wanted='["linux-x86_64-compat", "linux-aarch64-compat", "windows-x86_64", "macos-aarch64"]'
             variants='["cat"]'
+          elif [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" == *-users* ]]; then
+            # This fork's station is one Raspberry Pi. The full fourteen-job
+            # matrix last left every aarch64 runner in Build until the run was
+            # cancelled, so the Pi never got a .deb. One ARM package is enough.
+            wanted='["linux-aarch64"]'
+            variants='["cat"]'
           else
             wanted='null'
             variants='["soapy", "cat"]'
