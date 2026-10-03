@@ -10,7 +10,7 @@ use eframe::egui::{self, Color32, RichText};
 use crate::app::alerts::AlertStatus;
 use crate::app::settings::enum_combo;
 use crate::app::settings::general::device_combo;
-use sdroxide_types::{AlertEvent, AlertSettings, AlertSound};
+use sdroxide_types::{AlertEvent, AlertReply, AlertSettings, AlertSound};
 
 pub(in crate::app) fn alerts_settings(
     ui: &mut egui::Ui,
@@ -65,14 +65,28 @@ pub(in crate::app) fn alerts_settings(
             // yellow on the list" there.
             for event in AlertEvent::ALL {
                 let rule = event.rule_mut(&mut cfg.events);
-                ui.horizontal(|ui| {
+                let tone = rule.reply.plays_tone();
+                // Wrapped: a checkbox and two combos are wider than a phone.
+                ui.horizontal_wrapped(|ui| {
                     crate::chrome::checkbox(ui, &mut rule.enabled, event.label());
+                    // The sound only matters when the reply makes one; a
+                    // voice-only rule greys it rather than hiding it, so the
+                    // row keeps its shape.
+                    ui.add_enabled_ui(tone, |ui| {
+                        enum_combo(
+                            ui,
+                            &format!("alert-{}", event.as_str()),
+                            &mut rule.sound,
+                            &AlertSound::ALL,
+                            AlertSound::label,
+                        );
+                    });
                     enum_combo(
                         ui,
-                        &format!("alert-{}", event.as_str()),
-                        &mut rule.sound,
-                        &AlertSound::ALL,
-                        AlertSound::label,
+                        &format!("alert-reply-{}", event.as_str()),
+                        &mut rule.reply,
+                        &AlertReply::ALL,
+                        AlertReply::label,
                     );
                 });
                 ui.add_space(2.0);
@@ -81,7 +95,8 @@ pub(in crate::app) fn alerts_settings(
             ui.label(
                 RichText::new(
                     "Each station is quiet for a while after an alert, so a busy band \
-                         does not ring every slot.",
+                         does not ring every slot. Voice and Tone + voice are read by the \
+                         spoken-announcement voice — switch it on in Settings → UI.",
                 )
                 .weak()
                 .small(),

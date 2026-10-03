@@ -803,7 +803,7 @@ impl SdroxideApp {
                         Kind::Rig => self.rig_module(ui, cmds, w),
                         Kind::Tx => self.tx_condensed(ui, cmds, w),
                         Kind::Display => self.display_condensed(ui, cmds, w),
-                        Kind::System => self.windows_condensed(ui, w),
+                        Kind::System => self.windows_condensed(ui, w, cmds),
                     }
                 }
             });
@@ -1336,13 +1336,13 @@ impl SdroxideApp {
     }
 
     /// The SYS menu: the window buttons.
-    fn sys_menu(&mut self, ui: &mut egui::Ui, btn: egui::Response, _cmds: &mut Vec<Command>) {
+    fn sys_menu(&mut self, ui: &mut egui::Ui, btn: egui::Response, cmds: &mut Vec<Command>) {
         let btn = btn.on_hover_text(
             "Logbook, spots, awards, memories, the scanner, settings and the manual",
         );
         crate::chrome::menu_popup(ui, &btn, |ui| {
             crate::chrome::menu_caption(ui, "System");
-            self.windows_controls(ui, true);
+            self.windows_controls(ui, true, cmds);
         });
     }
 
@@ -2339,6 +2339,21 @@ impl SdroxideApp {
             size,
         );
 
+        let can_dock = self.band_dock_room.is_some();
+        if self.band_docked && can_dock {
+            if btn
+                .on_hover_text(if self.band_dock_visible {
+                    "Hide the docked band selector — click again to bring it back"
+                } else {
+                    "Show the docked band selector"
+                })
+                .clicked()
+            {
+                self.band_dock_visible = !self.band_dock_visible;
+            }
+            return;
+        }
+
         // The same scrolled, viewport-sized popup the menu chips use. This is
         // the longest menu in the program — three sections and forty chips —
         // and it opens on every layout, so it is the one that has to be held
@@ -2346,9 +2361,95 @@ impl SdroxideApp {
         let (state, caps) = (&self.state, &self.caps);
         let stated = self.radio_cfg.as_ref().is_some_and(|c| !c.freq_ranges_rx.is_empty());
         let (conditions, daylight) = (self.band_conditions.as_ref(), self.daylight);
+        let popup_id = egui::Popup::default_response_id(&btn);
+        let mut dock = false;
         crate::chrome::fading_menu_popup(ui, &btn, &mut self.mode_popup_since, |ui| {
+            if can_dock
+                && crate::chrome::chip(ui, false, "DOCK")
+                    .on_hover_text(
+                        "Keep the band and mode selector open beside the waterfall instead of \
+                         closing this popup every time",
+                    )
+                    .clicked()
+            {
+                dock = true;
+            }
+            ui.add_space(2.0);
             band_mode_menu(ui, mode, state, caps.as_ref(), stated, conditions, daylight, cmds);
         });
+        if dock {
+            self.band_docked = true;
+            self.band_dock_visible = true;
+            egui::Popup::close_id(ui.ctx(), popup_id);
+        }
+    }
+
+    /// The band/mode selector docked as a column beside the panadapter: the
+    /// same [`band_mode_menu`] the popup draws, with its own UNDOCK and hide.
+    pub(in crate::app) fn band_dock_panel(&mut self, ui: &mut egui::Ui, cmds: &mut Vec<Command>) {
+        // No room this frame — a phone, or a window too narrow to spare the
+        // waterfall its share. Hidden rather than undocked: the band chip
+        // opens the popup meanwhile, and widening the window brings the column
+        // back where it was.
+        let Some(max_w) = self.band_dock_room else { return };
+        let mut visible = true;
+        egui::Panel::right(crate::layout::salted_id(ui.ctx(), "band-dock"))
+            .resizable(true)
+            .default_size((ui.available_width() * 0.4).clamp(BAND_DOCK_MIN_W, 280.0))
+            // Re-applied every frame, so a column dragged wide on a big window
+            // gives the width back when the window narrows.
+            .size_range(BAND_DOCK_MIN_W..=max_w)
+            .frame(
+                egui::Frame::new()
+                    .fill(crate::theme::PANEL())
+                    .inner_margin(egui::Margin::symmetric(9, 7)),
+            )
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("BAND & MODE")
+                            .size(11.0)
+                            .strong()
+                            .color(crate::theme::CYAN()),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if crate::chrome::chip(ui, false, "×")
+                            .on_hover_text("Hide — the band chip brings it back")
+                            .clicked()
+                        {
+                            visible = false;
+                        }
+                        if crate::chrome::chip(ui, false, "UNDOCK")
+                            .on_hover_text("Return the selector to the top-bar popup")
+                            .clicked()
+                        {
+                            self.band_docked = false;
+                        }
+                    });
+                });
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .id_salt("band-dock-scroll")
+                    .show(ui, |ui| {
+                        let mode = self.state.rx[0].mode;
+                        let stated =
+                            self.radio_cfg.as_ref().is_some_and(|c| !c.freq_ranges_rx.is_empty());
+                        band_mode_menu(
+                            ui,
+                            mode,
+                            &self.state,
+                            self.caps.as_ref(),
+                            stated,
+                            self.band_conditions.as_ref(),
+                            self.daylight,
+                            cmds,
+                        );
+                    });
+            });
+        if !visible {
+            self.band_dock_visible = false;
+        }
     }
 
     /// [`rx_rows`] against this radio: what the front end offers, what the
@@ -2735,6 +2836,66 @@ impl SdroxideApp {
         }
     }
 
+    /// A chip that appears only once the receiver's settings differ from the
+    /// mode's own defaults, and puts them back when clicked.
+    ///
+    /// The engine remembers what the operator changes while a mode is selected
+    /// (see [`sdroxide_types::ModeProfile`]); this is the way back, next to the
+    /// controls it concerns rather than buried in Settings. Nothing is drawn
+    /// when the mode is sitting on its defaults, so the chip's presence is
+    /// itself the "something here is yours and not the mode's" signal — but
+    /// its room is kept either way ([`RxChip::Defaults`]), so the box is the
+    /// same width with it as without.
+    fn mode_defaults_chip(&mut self, ui: &mut egui::Ui, cmds: &mut Vec<Command>) {
+        let rx = &self.state.rx[0];
+        let defaults = rx.mode.default_profile();
+        // Nothing to offer when the mode is sitting on its own values; the
+        // chip's presence is the "something here is yours" signal.
+        if defaults.agrees_with(rx) {
+            return;
+        }
+        let same = |a: f32, b: f32| a.to_bits() == b.to_bits();
+        let mut changed: Vec<&str> = Vec::new();
+        if defaults.agc != Some(rx.agc) {
+            changed.push("AGC");
+        }
+        if !defaults.agc_max_gain_db.is_some_and(|v| same(v, rx.agc_max_gain_db)) {
+            changed.push("max gain");
+        }
+        if !defaults.manual_gain_db.is_some_and(|v| same(v, rx.manual_gain_db)) {
+            changed.push("manual gain");
+        }
+        if !defaults.squelch_db.is_some_and(|v| same(v, rx.squelch_db)) {
+            changed.push("squelch");
+        }
+        if defaults.noise_reduction != Some(rx.noise_reduction) {
+            changed.push("noise reduction");
+        }
+        if defaults.auto_notch != Some(rx.auto_notch) {
+            changed.push("auto-notch");
+        }
+        if defaults.wfm_stereo != Some(rx.wfm_stereo) {
+            changed.push("stereo");
+        }
+        if defaults.binaural != Some(rx.binaural) {
+            changed.push("binaural");
+        }
+        if changed.is_empty() {
+            return;
+        }
+        let mode = rx.mode;
+        let hover = format!(
+            "Back to {0}'s defaults. Changed from them: {1}.\n\nClick to put them back. \
+             {0}'s own values return, and what you set here is forgotten.",
+            mode.label(),
+            changed.join(", ")
+        );
+        let side = defaults_chip_side(ui);
+        if crate::chrome::chip_reset(ui, egui::vec2(side, side)).on_hover_text(hover).clicked() {
+            cmds.push(Command::ResetModeDefaults { mode: Some(mode) });
+        }
+    }
+
     /// Draw one chip of the RX box's run. Which row it lands on is [`rx_rows`]'s
     /// business; what the chip does is here. `narrow` is the menu column, where
     /// the NR chip stands in for a picker that cannot be opened from inside a
@@ -2769,9 +2930,9 @@ impl SdroxideApp {
             }
             RxChip::Nr => {
                 // Noise reduction. The chip says only whether it is in circuit; the
-                // picker behind it chooses which of the four engines and how hard.
+                // picker behind it chooses which of the five engines and how hard.
                 // A cycling chip was fine at seven states and two engines; at
-                // thirteen and four it is a dozen clicks to cross, and which engine
+                // sixteen and five it is a dozen clicks to cross, and which engine
                 // to use is a considered choice rather than something to walk past
                 // on the way to the one you wanted.
                 if narrow {
@@ -2961,6 +3122,7 @@ impl SdroxideApp {
                     self.show_hd = !self.show_hd;
                 }
             }
+            RxChip::Defaults => self.mode_defaults_chip(ui, cmds),
             RxChip::Tone => {
                 // CTCSS/DCS: what is coming in, and optionally what has to be
                 // present before the audio opens. Only NFM carries either.
@@ -3151,6 +3313,33 @@ impl SdroxideApp {
         }
     }
 
+    /// Stop the MP3 recording when its "stop after" deadline passes. Runs once
+    /// a frame; the deadline itself is armed by the REC popup's chips.
+    pub(in crate::app) fn poll_recording_timer(&mut self, cmds: &mut Vec<Command>) {
+        let now = crate::time::now_unix();
+        // A quick clip asked for while idle is armed the first frame the
+        // recording is actually running ([`rec_clip_tick`]). It has to be
+        // armed after the start, not at the press: a deadline whose recording
+        // is not running is dropped just below, so arming it early would clear
+        // it before the recorder came up.
+        let (clip, arm) = rec_clip_tick(now, self.rec_clip, self.state.recording);
+        self.rec_clip = clip;
+        if let Some((at, secs)) = arm {
+            self.recording_stop_at = Some((at, secs));
+        }
+        // The preset rides along untouched: `rec_timer_tick` decides only
+        // whether the deadline still stands, so keeping it out of the helper
+        // keeps that decision the one pure thing it has to get right.
+        let (stop_at, stop) =
+            rec_timer_tick(now, self.recording_stop_at.map(|(at, _)| at), self.state.recording);
+        if stop_at.is_none() {
+            self.recording_stop_at = None;
+        }
+        if stop {
+            cmds.push(Command::SetRecording(false));
+        }
+    }
+
     /// What the REC chip opens: one row per thing that can be recorded.
     ///
     /// A popup rather than a toggle because there are two answers and neither
@@ -3220,6 +3409,108 @@ impl SdroxideApp {
         });
         if let Some(f) = &self.state.recording_file {
             ui.label(RichText::new(f).size(9.5).color(crate::theme::CYAN_DIM()));
+        }
+
+        // Quick clip: one press records a fixed short span and stops, for a
+        // sample to attach to a reception report. A separate row from "Stop
+        // after" because the intent is different — a clip *starts* a recording
+        // (the operator need not have one running), while the timer below only
+        // gives a running recording an end. A clip asked for while idle is
+        // armed by `poll_recording_timer` once the recorder has come up, so a
+        // start that has not taken yet is not cleared before it runs.
+        crate::chrome::menu_caption(ui, "Quick clip");
+        ui.horizontal_wrapped(|ui| {
+            let now = crate::time::now_unix();
+            for secs in [30u16, 60] {
+                let armed = self.recording_stop_at.is_some_and(|(_, s)| s == secs);
+                let pending = self.rec_clip.is_some_and(|(_, s)| s == secs);
+                let label = clip_label(secs);
+                let hint = if armed || pending {
+                    format!("Clipping {} — press again to start it over", clip_label(secs))
+                } else {
+                    format!(
+                        "Record {} and stop — a clip to attach to a reception report",
+                        clip_label(secs)
+                    )
+                };
+                if crate::chrome::chip(ui, armed || pending, label).on_hover_text(hint).clicked() {
+                    // A clip is one span; it replaces any longer deadline.
+                    // Running already, the span starts now; idle, the recording
+                    // is asked for and the span is armed once it is up.
+                    if audio {
+                        self.recording_stop_at = Some((now + i64::from(secs), secs));
+                        self.rec_clip = None;
+                    } else {
+                        self.recording_stop_at = None;
+                        self.rec_clip = Some((now, secs));
+                        cmds.push(Command::SetRecording(true));
+                    }
+                    crate::repaint::schedule_ms(ui.ctx(), 1_000);
+                }
+            }
+        });
+        if let Some((_, secs)) = self.rec_clip {
+            ui.label(
+                RichText::new(format!("starting a {} clip…", clip_label(secs)))
+                    .size(9.5)
+                    .color(crate::theme::CYAN_DIM()),
+            );
+            crate::repaint::schedule_ms(ui.ctx(), 250);
+        }
+
+        // Auto-stop: "record for the next N minutes". The deadline is armed
+        // here and ticked once a frame by `poll_recording_timer` — it never
+        // rides the engine's SetRecording, so a stop armed for one recording
+        // cannot leak into the next one the operator starts (issue #520).
+        if audio {
+            crate::chrome::menu_caption(ui, "Stop after");
+            ui.horizontal_wrapped(|ui| {
+                let now = crate::time::now_unix();
+                let mut arm: Option<(i64, u16)> = None;
+                let mut cancel = false;
+                for minutes in [15u16, 30, 45, 60, 90] {
+                    // The deadline is stored in seconds (a quick clip is 30 s
+                    // long); these presets are whole minutes.
+                    let secs = minutes * 60;
+                    // Which chip reads as armed is the preset the operator
+                    // pressed, held for as long as the deadline stands — not
+                    // whichever preset happens to match what is left of it,
+                    // which is only its own for the first second.
+                    let armed = self.recording_stop_at.is_some_and(|(_, s)| s == secs);
+                    if crate::chrome::chip(ui, armed, format!("{minutes} min"))
+                        .on_hover_text(format!("Stop the MP3 recording after {minutes} minutes"))
+                        .clicked()
+                    {
+                        arm = Some((now + i64::from(secs), secs));
+                    }
+                }
+                if self.recording_stop_at.is_some()
+                    && crate::chrome::chip(ui, false, "no stop").clicked()
+                {
+                    cancel = true;
+                }
+                if let Some(armed) = arm {
+                    self.recording_stop_at = Some(armed);
+                    // A longer timer also drops a clip still waiting to start.
+                    self.rec_clip = None;
+                    // The countdown label below has to keep being redrawn.
+                    crate::repaint::schedule_ms(ui.ctx(), 1_000);
+                } else if cancel {
+                    self.recording_stop_at = None;
+                    self.rec_clip = None;
+                }
+                if let Some((at, _)) = self.recording_stop_at {
+                    let left = (at - now).max(0);
+                    ui.label(
+                        RichText::new(format!("stops in {}:{:02}", left / 60, left % 60))
+                            .size(11.0)
+                            .color(crate::theme::ALERT()),
+                    );
+                    if left > 0 {
+                        crate::repaint::schedule_ms(ui.ctx(), 1_000);
+                    }
+                }
+            });
         }
 
         crate::chrome::menu_caption(ui, "Record spectrum");
@@ -4135,7 +4426,7 @@ impl SdroxideApp {
             ui.label(RichText::new("CESSB").size(10.5)).on_hover_text(hover.clone());
             // The rail takes whatever height the label left it.
             ui.spacing_mut().slider_width = (ui.available_height() - 2.0).max(24.0);
-            if crate::chrome::slider(
+            if crate::chrome::slider_vertical(
                 ui,
                 Slider::new(&mut db, 0.0..=sdroxide_types::CESSB_MAX_DB)
                     .vertical()
@@ -4162,7 +4453,7 @@ impl SdroxideApp {
             let mut mic = self.state.tx.mic_gain;
             // The rail takes whatever height the label left it.
             ui.spacing_mut().slider_width = (ui.available_height() - 2.0).max(24.0);
-            if crate::chrome::slider(
+            if crate::chrome::slider_vertical(
                 ui,
                 Slider::new(&mut mic, 0.0..=1.0).vertical().show_value(false),
             )
@@ -4269,7 +4560,7 @@ impl SdroxideApp {
             ui.label(RichText::new(format!("{db:.0} dB")).size(10.5));
             // The rail takes whatever height the caption left it.
             ui.spacing_mut().slider_width = (ui.available_height() - 2.0).max(24.0);
-            if crate::chrome::slider(
+            if crate::chrome::slider_vertical(
                 ui,
                 Slider::new(&mut db, sdroxide_types::TX_AUDIO_LEVEL_MIN_DB..=0.0)
                     .vertical()
@@ -4526,6 +4817,16 @@ impl SdroxideApp {
                         });
                     }
                 }
+
+                ui.add_space(2.0);
+                crate::chrome::menu_caption(ui, "Spots");
+                crate::app::panels::save_text_chip(
+                    ui,
+                    !self.skimmer_spots.is_empty(),
+                    "sdroxide-skimmer.txt",
+                    "Save the skimmer's spot list to a file",
+                    || crate::app::save_text::skimmer_text(&self.skimmer_spots),
+                );
 
                 if cfg != self.state.skimmer {
                     cmds.push(Command::SetSkimmerConfig(cfg));
@@ -5171,8 +5472,8 @@ impl SdroxideApp {
     }
 
     /// The remaining window chips — the condensed System box's bottom row.
-    fn system_chips_bottom(&mut self, ui: &mut egui::Ui, extra: f32) {
-        let [mail, mem, scan_label, settings, help] = SYSTEM_CHIPS_BOTTOM;
+    fn system_chips_bottom(&mut self, ui: &mut egui::Ui, extra: f32, cmds: &mut Vec<Command>) {
+        let [mail, mem, scan_label, hfdl_label, grid_label, settings, help] = SYSTEM_CHIPS_BOTTOM;
         if chip_stretched(ui, self.mail.open, mail, extra)
             .on_hover_text("Winlink radio email")
             .clicked()
@@ -5212,6 +5513,52 @@ impl SdroxideApp {
         {
             self.show_scanner = !self.show_scanner;
         }
+        // HFDL: shortwave aircraft ground network. It opens HFDL's own mode,
+        // whose panel docks under the waterfall; accented while the decoder
+        // runs, like the ISM chip, because it spends a downconverter and a
+        // worker thread whether or not the panel is on screen.
+        let hfdl_mode = self.state.rx[0].mode.is_hfdl();
+        let hfdl_running = self.state.hfdl.enabled;
+        let hfdl_chip = if hfdl_running {
+            accent_chip_stretched(
+                ui,
+                true,
+                hfdl_label,
+                crate::theme::GREEN(),
+                crate::theme::INK_ON_BRIGHT(),
+                extra,
+            )
+        } else {
+            chip_stretched(ui, hfdl_mode, hfdl_label, extra)
+        };
+        if hfdl_chip
+            .on_hover_text(if hfdl_mode {
+                "HFDL ground network — the decode log and aircraft map, below the \
+                 waterfall. Switch the decoder on with LISTEN inside the panel."
+            } else if hfdl_running {
+                "HFDL ground network — decoding now. Open the panel."
+            } else {
+                "HFDL ground network — the aircraft shortwave data link, one \
+                 listening channel at a time"
+            })
+            .clicked()
+        {
+            // The lane follows its own chosen frequency; bring the dial with it
+            // so the panadapter shows the signal being decoded.
+            cmds.push(Command::SetMode { rx: RxId::Main, mode: Mode::Hfdl });
+            cmds.push(Command::SetVfo {
+                vfo: self.state.active_vfo,
+                hz: self.state.hfdl.frequency_hz,
+            });
+        }
+        // Grid tracker: the worked squares on a map, with a HEARD layer for
+        // what is on the air now.
+        if chip_stretched(ui, self.show_grid, grid_label, extra)
+            .on_hover_text("Grid tracker — worked Maidenhead squares on a map, with what is heard")
+            .clicked()
+        {
+            self.show_grid = !self.show_grid;
+        }
         if chip_stretched(ui, self.show_settings, settings, extra)
             .on_hover_text("Settings — device gains, antennas, audio devices")
             .clicked()
@@ -5228,16 +5575,16 @@ impl SdroxideApp {
 
     /// The window buttons — the body of the SYS menu. See
     /// [`crate::chrome::control_row`] for `narrow`.
-    fn windows_controls(&mut self, ui: &mut egui::Ui, narrow: bool) {
+    fn windows_controls(&mut self, ui: &mut egui::Ui, narrow: bool, cmds: &mut Vec<Command>) {
         crate::chrome::control_row(ui, narrow, |ui| {
             self.system_chips_top(ui, 0.0);
-            self.system_chips_bottom(ui, 0.0);
+            self.system_chips_bottom(ui, 0.0, cmds);
         });
     }
 
     /// The condensed System box: the window chips over two rows, each row's
     /// chips splitting its share of the packer's stretch evenly.
-    fn windows_condensed(&mut self, ui: &mut egui::Ui, w: f32) {
+    fn windows_condensed(&mut self, ui: &mut egui::Ui, w: f32, cmds: &mut Vec<Command>) {
         let inner = w - 2.0 * crate::chrome::MODULE_MARGIN_X;
         let (top, bottom): (&[&str], &[&str]) = (&SYSTEM_CHIPS_TOP, &SYSTEM_CHIPS_BOTTOM);
         let extra1 = ((inner - chip_row_w(ui, top)) / top.len() as f32).max(0.0);
@@ -5246,7 +5593,7 @@ impl SdroxideApp {
             ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(MODULE_ROW_SPACING, MODULE_ROW_SPACING);
                 ui.horizontal(|ui| self.system_chips_top(ui, extra1));
-                ui.horizontal(|ui| self.system_chips_bottom(ui, extra2));
+                ui.horizontal(|ui| self.system_chips_bottom(ui, extra2, cmds));
             });
         });
     }
@@ -5354,7 +5701,8 @@ impl PttPress {
 const SYSTEM_CHIPS_TOP: [&str; 7] = ["LOG", "SPOTS", "AWARDS", "BANDS", "SAT", "ISM", "PUBLIC SDR"];
 
 /// The rest of them. See [`SYSTEM_CHIPS_TOP`].
-const SYSTEM_CHIPS_BOTTOM: [&str; 5] = ["MAIL", "MEM", "SCAN", "⚙ SETTINGS", "? HELP"];
+const SYSTEM_CHIPS_BOTTOM: [&str; 7] =
+    ["MAIL", "MEM", "SCAN", "HFDL", "GRID", "⚙ SETTINGS", "? HELP"];
 
 /// The Display box's top row: the solar view, then the chips that choose what
 /// the panadapter draws — the last of those only on a front end with a
@@ -5444,6 +5792,65 @@ fn iq_recording_caption(mb: u32, rate_hz: f64) -> String {
     format!("{mb} MB · {}:{:02}", total / 60, total % 60)
 }
 
+/// The auto-stop deadline's decision for one frame: `(deadline to keep, whether
+/// the MP3 recording should stop now)`.
+///
+/// `stop_at` is Unix UTC seconds. A deadline is dropped as soon as the
+/// recording is no longer running, so a stop that arrives from the operator's
+/// chip or anywhere else never double-fires the recorder, and an armed stop
+/// cannot leak into the recording that comes after the one it was set for.
+fn rec_timer_tick(now: i64, stop_at: Option<i64>, recording: bool) -> (Option<i64>, bool) {
+    let Some(at) = stop_at else { return (None, false) };
+    if !recording {
+        return (None, false);
+    }
+    if now >= at { (None, true) } else { (Some(at), false) }
+}
+
+/// The label for a quick-clip span: seconds under a minute, whole minutes at
+/// and above it, so "30 s" and "1 min" read as what they are.
+fn clip_label(secs: u16) -> String {
+    if secs < 60 { format!("{secs} s") } else { format!("{} min", secs / 60) }
+}
+
+/// How long a requested clip start is waited for before it is judged failed,
+/// so a recorder that will not come up is not left waiting on a span that
+/// never begins.
+const REC_CLIP_START_TIMEOUT_S: i64 = 3;
+
+/// A Unix second and the span, in seconds, it belongs to: a clip request's
+/// `(asked_at, secs)`, or an armed deadline's `(stop_at, secs)`.
+type RecSpan = (i64, u16);
+
+/// Arm a quick clip's deadline once its recording is actually running.
+///
+/// A clip pressed while idle sends `SetRecording(true)` and remembers the
+/// request here as `ask = (asked_at, secs)`. The deadline cannot be armed at
+/// the press because [`rec_timer_tick`] drops any deadline whose recording is
+/// not running, so an early one would be cleared on the next frame before the
+/// recorder came up. Instead the request waits: the first frame the recording
+/// is seen running the deadline is armed, measured from that frame so the
+/// clip is a full span, and the request is cleared. A start that never takes —
+/// the recorder refused, or something else owns it — is dropped after
+/// [`REC_CLIP_START_TIMEOUT_S`] rather than waited on forever.
+///
+/// Returns the request to carry and, when the recording has come up, the
+/// `(stop_at, secs)` deadline to arm.
+fn rec_clip_tick(
+    now: i64,
+    ask: Option<RecSpan>,
+    recording: bool,
+) -> (Option<RecSpan>, Option<RecSpan>) {
+    let Some((asked_at, secs)) = ask else { return (None, None) };
+    if recording {
+        return (None, Some((now + i64::from(secs), secs)));
+    }
+    if now - asked_at >= REC_CLIP_START_TIMEOUT_S {
+        return (None, None);
+    }
+    (Some((asked_at, secs)), None)
+}
+
 fn tx_rows_w_for(ui: &egui::Ui, keyer: bool, side_col_w: f32) -> f32 {
     let (row1, row2) = tx_rows_fixed_w(ui, keyer);
     row1.max(row2)
@@ -5516,6 +5923,16 @@ enum RxChip {
     Hd,
     /// NFM's sub-audible tone.
     Tone,
+    /// The way back to the mode's own settings, drawn only while they differ
+    /// ([`SdroxideApp::mode_defaults_chip`]) but reserved in every mode.
+    Defaults,
+}
+
+/// The side of the square the defaults chip is drawn in: as tall as the chips
+/// beside it, and no wider — see [`crate::chrome::chip_reset`] for why it is an
+/// arrow and not a word.
+fn defaults_chip_side(ui: &egui::Ui) -> f32 {
+    crate::chrome::chip_height(ui, None)
 }
 
 impl RxChip {
@@ -5558,10 +5975,16 @@ impl RxChip {
             // rather than a decode, and a DCS code reads longer than any
             // CTCSS tone.
             Self::Tone => "·D023N",
+            // No label at all: it is a painted arrow, and `width` prices it as
+            // the square it is drawn in.
+            Self::Defaults => "",
         }
     }
 
     fn width(self, ui: &egui::Ui) -> f32 {
+        if self == Self::Defaults {
+            return defaults_chip_side(ui);
+        }
         if self == Self::Bw {
             // Every scale `bw_chip_label` can reach, at the widest digits: a
             // 250 Hz CW filter and the two megahertz an ADS-B receiver reads
@@ -5713,6 +6136,13 @@ fn rx_chips(mode: Mode) -> Vec<RxChip> {
         Mode::Nfm => chips.push(RxChip::Tone),
         _ => {}
     }
+    // Last, and in every mode, whether or not it is showing: it comes and goes
+    // as the operator turns a switch or drags the squelch, and a box that
+    // widened under that click would re-break the strip — and, before it was
+    // counted here at all, ran the RX box's row past its own edge and pushed
+    // the boxes after it off the window. Last, too, so the gap it leaves when
+    // it is not drawn is at the end of a row rather than in the middle of one.
+    chips.push(RxChip::Defaults);
     chips
 }
 
@@ -5831,6 +6261,34 @@ fn vfo_offsets_w(ui: &egui::Ui, tx_capable: bool) -> f32 {
     } else {
         rit
     }
+}
+
+/// The docked band column's narrowest width: below it the band chips go one
+/// to a row.
+const BAND_DOCK_MIN_W: f32 = 180.0;
+/// The docked band column's widest: past it the column only takes width from
+/// the waterfall, with nothing more to show for it.
+const BAND_DOCK_MAX_W: f32 = 320.0;
+/// What the docked column must leave the waterfall and the operating panel
+/// under it: the narrowest window the undocked layout is laid out for, the
+/// tablet tier's floor in [`crate::layout::tier_for`]. The panels below the
+/// waterfall are built for that width and no less — with the column at its
+/// default share of a 730 pt window, the FT8 QSO pane ran on under it.
+const BAND_DOCK_WATERFALL_MIN_W: f32 = 600.0;
+
+/// How wide the band/mode selector may be docked beside the panadapter in a
+/// column `avail_w` points wide, or `None` where it cannot dock at all.
+///
+/// Never on a phone, where the chip keeps its popup; and only where the column
+/// can have [`BAND_DOCK_MIN_W`] and still leave the waterfall
+/// [`BAND_DOCK_WATERFALL_MIN_W`]. A window that narrows past that hides the
+/// column until it widens again.
+pub(in crate::app) fn band_dock_room(tier: crate::layout::Tier, avail_w: f32) -> Option<f32> {
+    if tier == crate::layout::Tier::Phone {
+        return None;
+    }
+    let room = (avail_w - BAND_DOCK_WATERFALL_MIN_W).min(BAND_DOCK_MAX_W);
+    (room >= BAND_DOCK_MIN_W).then_some(room)
 }
 
 /// How tall the band/mode chip is drawn: a plain chip plus
@@ -6205,7 +6663,16 @@ fn band_mode_menu(
             Mode::Isb,
             Mode::Spec,
         ] {
-            if crate::chrome::chip(ui, mode == m, m.label()).clicked() {
+            // Offered even where it cannot run, greyed out with the reason, so
+            // the operator learns the mode exists and what it would take —
+            // HD Radio without an nrsc5 on the station's machine (issue #488).
+            let why = state.mode_unavailable(m);
+            let resp = crate::chrome::chip_enabled(ui, why.is_none(), mode == m, m.label());
+            let resp = match why {
+                Some(why) => resp.on_disabled_hover_text(why),
+                None => resp,
+            };
+            if resp.clicked() {
                 cmds.push(Command::SetMode { rx: RxId::Main, mode: m });
             }
         }
@@ -6213,12 +6680,12 @@ fn band_mode_menu(
     ui.add_space(6.0);
     crate::chrome::menu_caption(ui, "Digital");
     ui.horizontal_wrapped(|ui| {
-        // ADS-B, VDL2 and AIS ride along at the end of this row rather than in
-        // [`Mode::DIGITAL`] itself: that list is what the digi engine decodes
-        // and transmits, and neither of these is — each has its own lane, no
-        // QSO and no transmitter. They are digital signals all the same, and
+        // ADS-B, VDL2, AIS and HFDL ride along at the end of this row rather
+        // than in [`Mode::DIGITAL`] itself: that list is what the digi engine
+        // decodes and transmits, and none of these is — each has its own lane,
+        // no QSO and no transmitter. They are digital signals all the same, and
         // this is where an operator looks for one.
-        for m in Mode::DIGITAL.into_iter().chain([Mode::Adsb, Mode::Vdl2, Mode::Ais]) {
+        for m in Mode::DIGITAL.into_iter().chain([Mode::Adsb, Mode::Vdl2, Mode::Ais, Mode::Hfdl]) {
             if crate::chrome::chip(ui, mode == m, m.label()).clicked() {
                 cmds.push(Command::SetMode { rx: RxId::Main, mode: m });
             }
@@ -6344,6 +6811,51 @@ mod tests {
         // The minute must only roll at the top of the minute, not before.
         assert_eq!(iq_recording_caption(119, RATE), "119 MB · 1:59");
         assert_eq!(iq_recording_caption(120, RATE), "120 MB · 2:00");
+    }
+
+    /// The auto-stop deadline fires once, only while recording, and only at or
+    /// after `stop_at` — and it is dropped (not fired) the moment the
+    /// recording stops some other way, so a manual stop or an engine-side
+    /// error never prompts a second `SetRecording(false)`.
+    #[test]
+    fn rec_timer_fires_once_and_only_while_recording() {
+        // No deadline armed: nothing to keep, nothing to fire.
+        assert_eq!(rec_timer_tick(1000, None, true), (None, false));
+        // Armed and still running: kept, not fired before its time.
+        assert_eq!(rec_timer_tick(1000, Some(1060), true), (Some(1060), false));
+        // At and after the deadline, while recording: fired, and cleared.
+        assert_eq!(rec_timer_tick(1060, Some(1060), true), (None, true));
+        assert_eq!(rec_timer_tick(2000, Some(1060), true), (None, true));
+        // The recording stopped first: the deadline is cleared with no fire,
+        // so an armed stop can never kill a later recording it was not set
+        // for.
+        assert_eq!(rec_timer_tick(2000, Some(1060), false), (None, false));
+    }
+
+    /// A quick clip armed while idle waits for its recording to come up,
+    /// then arms a full span from that frame; a start that never takes is
+    /// dropped at the timeout rather than waited on forever.
+    #[test]
+    fn rec_clip_waits_for_the_recording_to_start() {
+        // Idle: the request is carried, with nothing armed yet.
+        assert_eq!(rec_clip_tick(100, Some((100, 30)), false), (Some((100, 30)), None));
+        // Still not up, inside the timeout: still carried.
+        assert_eq!(rec_clip_tick(102, Some((100, 30)), false), (Some((100, 30)), None));
+        // The recorder came up: a full span is armed from now and the request
+        // is spent, so the deadline rides the ordinary timer from here.
+        let (ask, arm) = rec_clip_tick(103, Some((100, 30)), true);
+        assert_eq!((ask, arm), (None, Some((133, 30))));
+        assert_eq!(rec_timer_tick(103, arm.map(|(at, _)| at), true), (Some(133), false));
+        assert_eq!(rec_timer_tick(133, arm.map(|(at, _)| at), true), (None, true));
+        // A start that never takes is given up on at the timeout.
+        assert_eq!(rec_clip_tick(103, Some((100, 30)), false), (None, None));
+        // No request, nothing to do, running or not.
+        assert_eq!(rec_clip_tick(100, None, true), (None, None));
+        assert_eq!(rec_clip_tick(100, None, false), (None, None));
+
+        // The chip labels are the seconds and the whole minute.
+        assert_eq!(clip_label(30), "30 s");
+        assert_eq!(clip_label(60), "1 min");
     }
 
     /// Walk a chip through a sequence of pointer edges, collecting the PTT
@@ -7179,7 +7691,7 @@ mod tests {
                             ui.spacing_mut().item_spacing.y = 2.0;
                             ui.label(RichText::new("Mic").size(10.5));
                             ui.spacing_mut().slider_width = 45.0;
-                            crate::chrome::slider(
+                            crate::chrome::slider_vertical(
                                 ui,
                                 Slider::new(&mut mic, 0.0..=1.0).vertical().show_value(false),
                             );
@@ -7198,7 +7710,7 @@ mod tests {
                             ui.spacing_mut().item_spacing.y = 2.0;
                             ui.label(RichText::new(format!("{db:.0} dB")).size(10.5));
                             ui.spacing_mut().slider_width = 45.0;
-                            crate::chrome::slider(
+                            crate::chrome::slider_vertical(
                                 ui,
                                 Slider::new(&mut db, sdroxide_types::TX_AUDIO_LEVEL_MIN_DB..=0.0)
                                     .vertical()
@@ -7218,7 +7730,7 @@ mod tests {
                             ui.spacing_mut().item_spacing.y = 2.0;
                             ui.label(RichText::new("CESSB").size(10.5));
                             ui.spacing_mut().slider_width = 45.0;
-                            crate::chrome::slider(
+                            crate::chrome::slider_vertical(
                                 ui,
                                 Slider::new(&mut cessb, 0.0..=sdroxide_types::CESSB_MAX_DB)
                                     .vertical()
@@ -7751,6 +8263,63 @@ mod tests {
         assert_eq!(ink, Some(crate::theme::ALERT()));
     }
 
+    /// Draw the band/mode menu for `state` and click the chip labelled
+    /// `label`, returning what the menu asked for. Two passes, as `press` does
+    /// in the public-SDR browser: the first finds where the label was painted,
+    /// the second aims at it.
+    fn click_in_band_mode_menu(state: &RadioState, label: &str) -> Vec<Command> {
+        let (ctx, input) = desktop_ctx();
+        let draw = |input: egui::RawInput, cmds: &mut Vec<Command>| {
+            ctx.run_ui(input, |ui| {
+                band_mode_menu(ui, state.rx[0].mode, state, None, false, None, true, cmds);
+            })
+        };
+        let first = draw(input.clone(), &mut Vec::new());
+        let at = first
+            .shapes
+            .iter()
+            .find_map(|c| match &c.shape {
+                egui::Shape::Text(t) if t.galley.text() == label => {
+                    Some(t.pos + t.galley.rect.center().to_vec2())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{label} is not in the menu"));
+        first.drop_without_applying_deltas();
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let mut cmds = Vec::new();
+        for events in [vec![egui::Event::PointerMoved(at), button(true)], vec![button(false)]] {
+            draw(egui::RawInput { events, ..input.clone() }, &mut cmds)
+                .drop_without_applying_deltas();
+        }
+        cmds
+    }
+
+    /// HD Radio stays on the mode row on a station without an nrsc5, but
+    /// greyed out: a click on it asks for nothing (issue #488). With the
+    /// library there, the same click picks the mode — so the test is of the
+    /// greying, not of a chip that could never be clicked.
+    #[test]
+    fn a_mode_the_station_cannot_run_is_offered_but_cannot_be_picked() {
+        let mut state = RadioState::default();
+        let picked = click_in_band_mode_menu(&state, "HD RADIO");
+        assert!(
+            picked.contains(&Command::SetMode { rx: RxId::Main, mode: Mode::HdRadio }),
+            "{picked:?}"
+        );
+
+        state.hd_radio_unavailable = Some("no libnrsc5 here".into());
+        assert_eq!(state.mode_unavailable(Mode::HdRadio), Some("no libnrsc5 here"));
+        assert_eq!(state.mode_unavailable(Mode::Wfm), None);
+        let picked = click_in_band_mode_menu(&state, "HD RADIO");
+        assert!(picked.is_empty(), "a greyed-out chip asked for {picked:?}");
+    }
+
     /// Open the band/mode menu on a `screen`-sized viewport and measure the
     /// popup it produced.
     fn band_menu_rect(screen: egui::Vec2) -> egui::Rect {
@@ -7919,6 +8488,34 @@ mod tests {
         }
     }
 
+    /// The band selector docks as a column beside the waterfall on desktop and
+    /// tablet layouts, and never on a phone — where the column would leave the
+    /// picture nowhere to draw, and the chip keeps its popup instead.
+    #[test]
+    fn the_band_selector_docks_on_desktop_layouts_only() {
+        use crate::layout::Tier;
+        assert!(band_dock_room(Tier::Desktop, 1600.0).is_some());
+        assert!(band_dock_room(Tier::Tablet, 1024.0).is_some());
+        assert!(band_dock_room(Tier::Phone, 1024.0).is_none());
+    }
+
+    /// The column never takes the waterfall below the width the undocked
+    /// layout is built for, and never grows past its own maximum. The 730 pt
+    /// window is the one where the FT8 QSO pane ran on under the column.
+    #[test]
+    fn the_docked_band_column_leaves_the_waterfall_its_width() {
+        use crate::layout::Tier;
+        for w in [600.0f32, 700.0, 730.0, 779.0] {
+            assert_eq!(band_dock_room(Tier::Tablet, w), None, "{w} pt docks");
+        }
+        for w in [780.0f32, 900.0, 1024.0, 1399.0, 1920.0, 3840.0] {
+            let tier = if w < 1400.0 { Tier::Tablet } else { Tier::Desktop };
+            let max = band_dock_room(tier, w).expect("room to dock");
+            assert!((BAND_DOCK_MIN_W..=BAND_DOCK_MAX_W).contains(&max), "{w} pt: {max} pt column");
+            assert!(w - max >= BAND_DOCK_WATERFALL_MIN_W, "{w} pt leaves {} pt", w - max);
+        }
+    }
+
     /// Lay the condensed RX box's two rows out with the real widgets at
     /// desktop metrics, in every combination of the state that changes them,
     /// and check each fits the width [`rx_rows`] prices for it — including the
@@ -7964,6 +8561,11 @@ mod tests {
                             // what the box reserved for it.
                             let draw = |ui: &mut egui::Ui, run: &[RxChip]| {
                                 for c in run {
+                                    if *c == RxChip::Defaults {
+                                        let side = defaults_chip_side(ui);
+                                        crate::chrome::chip_reset(ui, egui::vec2(side, side));
+                                        continue;
+                                    }
                                     crate::chrome::chip_accent(
                                         ui,
                                         false,
@@ -8052,6 +8654,17 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// Every mode keeps room for the reset chip, at the end of the run. It
+    /// comes and goes under the operator's own clicks; drawn after the run
+    /// instead of in it, it was never priced, and appearing it ran the noise
+    /// row past the box's edge and pushed the boxes after it off the window.
+    #[test]
+    fn every_mode_keeps_room_for_the_defaults_chip() {
+        for mode in Mode::ALL {
+            assert_eq!(rx_chips(mode).last(), Some(&RxChip::Defaults), "{mode:?}");
         }
     }
 

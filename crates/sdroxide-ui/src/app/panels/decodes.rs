@@ -53,6 +53,13 @@ impl SdroxideApp {
     /// row moves the TX audio frequency to that signal; REPLY starts a QSO.
     pub(in crate::app) fn decode_list(&mut self, ui: &mut egui::Ui, cmds: &mut Vec<Command>) {
         let phone = crate::layout::tier(ui.ctx()) == crate::layout::Tier::Phone;
+        // REPLY, QUEUE and the transmit-frequency chips belong to the QSO
+        // sequencer, and only FT8/FT4/FT2/JS8 have one. FSK441 shares this list
+        // and can transmit, but its decodes are free text with no station to
+        // answer and it is worked by hand; the receive-only slotted modes
+        // (MSK144, JT65/JT9, FST4, Q65) have no sequencer at all. Neither is
+        // drawn a control that would do nothing.
+        let qso_mode = self.state.rx[0].mode.has_qso_sequencer();
         // The tab row above already says which view this is and how many
         // stations came in; a second header would be a row of a phone's screen
         // spent repeating it.
@@ -193,7 +200,7 @@ impl SdroxideApp {
             // Whether the engine chooses our transmit frequency. Here rather
             // than in the setup window because it decides what clicking a
             // decode in this list does.
-            if self.digi_cfg_seeded {
+            if self.digi_cfg_seeded && qso_mode {
                 let held = self.digi_cfg_edit.hold_tx_freq;
                 let auto = self.digi_cfg_edit.auto_tx_freq;
                 // Greyed while held, because held wins: leaving it live would
@@ -664,11 +671,14 @@ impl SdroxideApp {
                     // marks a station for later; pressing it again drops the
                     // station, so one button both queues and un-queues.
                     //
-                    // Both are greyed on a receiver: answering a station and
-                    // lining one up to answer later are the same promise to
-                    // transmit, and a list of stations you cannot work should
-                    // say so on the row rather than only when the key fails.
+                    // Neither is drawn where there is no sequencer behind it —
+                    // answering a station and lining one up to answer later are
+                    // the same promise to transmit, and a mode with no QSO to
+                    // sequence should not offer the promise at all.
                     let buttons = |ui: &mut egui::Ui| {
+                        if !qso_mode {
+                            return None;
+                        }
                         let resp = tx_gated(ui, tx_ok, |ui| {
                             crate::chrome::chip_accent(
                                 ui,
@@ -696,7 +706,7 @@ impl SdroxideApp {
                                 "Work this station after the current one"
                             })
                         });
-                        (resp, qresp)
+                        Some((resp, qresp))
                     };
 
                     let inner = egui::Frame::new()
@@ -732,11 +742,12 @@ impl SdroxideApp {
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
-                                            let (resp, qresp) = buttons(ui);
-                                            reply = resp.clicked();
-                                            queue = qresp.clicked();
-                                            reply_left =
-                                                Some(resp.rect.left().min(qresp.rect.left()));
+                                            if let Some((resp, qresp)) = buttons(ui) {
+                                                reply = resp.clicked();
+                                                queue = qresp.clicked();
+                                                reply_left =
+                                                    Some(resp.rect.left().min(qresp.rect.left()));
+                                            }
                                             ui.with_layout(
                                                 egui::Layout::left_to_right(egui::Align::Center),
                                                 |ui| {
@@ -818,11 +829,12 @@ impl SdroxideApp {
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
-                                            let (resp, qresp) = buttons(ui);
-                                            reply = resp.clicked();
-                                            queue = qresp.clicked();
-                                            reply_left =
-                                                Some(resp.rect.left().min(qresp.rect.left()));
+                                            if let Some((resp, qresp)) = buttons(ui) {
+                                                reply = resp.clicked();
+                                                queue = qresp.clicked();
+                                                reply_left =
+                                                    Some(resp.rect.left().min(qresp.rect.left()));
+                                            }
                                             ui.with_layout(
                                                 egui::Layout::left_to_right(egui::Align::Center),
                                                 |ui| {
@@ -1128,6 +1140,7 @@ impl SdroxideApp {
                 })
                 .collect();
             let heat = self.prop_texture(ui.ctx(), self.state.rx_freq_hz());
+            let night = self.night_texture(ui.ctx());
             self.prop_map_controls(ui);
             crate::widgets::worldmap::show(
                 ui,
@@ -1139,6 +1152,7 @@ impl SdroxideApp {
                 &stations,
                 &spot_dots,
                 heat,
+                night,
                 tx_active,
                 map_budget,
             );

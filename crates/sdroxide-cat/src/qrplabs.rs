@@ -184,6 +184,13 @@ fn mode_digit(m: Mode) -> char {
         | Mode::Ft8
         | Mode::Js8
         | Mode::Wspr
+        | Mode::Pi4
+        | Mode::Msk144
+        | Mode::Jt65
+        | Mode::Jt9
+        | Mode::Fst4
+        | Mode::Q65
+        | Mode::Fsk441
         | Mode::Ft4
         | Mode::Ft2
         | Mode::Psk
@@ -212,6 +219,7 @@ fn mode_digit(m: Mode) -> char {
         | Mode::Adsb
         | Mode::Vdl2
         | Mode::Ais
+        | Mode::Hfdl
         | Mode::HdRadio => '2',
         Mode::Usb | Mode::Spec | Mode::Sstv | Mode::Wefax | Mode::Navtex | Mode::RfPaint => '2',
     }

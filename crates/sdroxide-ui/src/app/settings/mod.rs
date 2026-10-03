@@ -547,6 +547,55 @@ fn transverter_table(ui: &mut egui::Ui, cfg: &mut sdroxide_types::RadioConfig) {
     });
 }
 
+/// The operator's hard ceiling on transmit drive (issue #504).
+///
+/// Drawn above the band calibration because it is the other kind of thing: the
+/// table trims the control, this one stops it. On a transmitter whose I/Q
+/// amplitude *is* the drive — an HPSDR set pins the protocol's own drive
+/// register at full scale and modulates the samples instead — the top of the
+/// Drive slider is the finals wide open, and an ANAN-7000DLE reaches twice its
+/// rated power with most of the control's travel still to go.
+fn drive_ceiling_row(ui: &mut egui::Ui, cfg: &mut sdroxide_types::RadioConfig) {
+    ui.add_space(10.0);
+    ui.separator();
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new("Maximum transmit drive").size(14.0).strong().color(crate::theme::CYAN()),
+    );
+    ui.add_space(2.0);
+    ui.label(
+        RichText::new(
+            "A hard limit the Drive and TUNE controls cannot be taken past, applied after the              band calibration below so nothing can lift the drive back over it. Set it where              the radio makes its rated power and the whole of the Drive control becomes usable              — on a transmitter that modulates its own samples (HPSDR, LimeSDR, PlutoSDR,              HackRF) full drive is the transmitter wide open, which on a high-gain amplifier is              well past what its finals are rated for. Off means the controls reach full drive.",
+        )
+        .weak(),
+    );
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        let mut on = cfg.tx_drive_max.is_some();
+        if crate::chrome::checkbox(ui, &mut on, "Limit drive to").changed() {
+            // Starting at the top rather than at a guess: a ceiling this
+            // dialog invented would be a power limit the operator did not
+            // measure, and one they might trust. Turning it on changes
+            // nothing until they bring it down to what their meter says.
+            cfg.tx_drive_max = on.then_some(1.0);
+        }
+        let mut pct = cfg.tx_drive_max.unwrap_or(1.0) * 100.0;
+        if ui
+            .add_enabled(
+                on,
+                egui::DragValue::new(&mut pct).speed(0.5).range(1.0..=100.0).suffix(" %"),
+            )
+            .on_hover_text(
+                "Per cent of full drive. Key the radio into a dummy load and bring this down                  until the meter reads the power the amplifier is rated for.",
+            )
+            .changed()
+        {
+            cfg.tx_drive_max = Some((pct / 100.0).clamp(0.01, 1.0));
+        }
+        ui.label(RichText::new("Applies immediately, on every band and to TUNE as well.").weak());
+    });
+}
+
 /// The per-band transmit drive calibration: one trim per band, so that one
 /// Drive setting means one output power everywhere (issue #295).
 ///
@@ -1759,11 +1808,12 @@ impl SdroxideApp {
 
         match io.tab {
             SettingsTab::General => {
-                // Which build this is, taken from the crate metadata at compile
-                // time — so a bug report can name the version without the
-                // operator having to find the binary.
+                // Which build this is — so a bug report can name the version
+                // without the operator having to find the binary. Stamped, so
+                // a nightly says so here rather than naming the release it was
+                // cut from; a release reads exactly as it always did.
                 ui.label(
-                    RichText::new(format!("SDRoxide {}", env!("CARGO_PKG_VERSION")))
+                    RichText::new(format!("SDRoxide {}", sdroxide_version::VERSION))
                         .size(15.0)
                         .strong(),
                 );
@@ -1856,6 +1906,11 @@ impl SdroxideApp {
                 ui.separator();
                 ui.add_space(6.0);
                 self.settings_swr_guard(ui, cmds);
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(6.0);
+                self.settings_mode_defaults(ui, cmds);
 
                 ui.add_space(10.0);
                 ui.separator();
@@ -2251,6 +2306,7 @@ impl SdroxideApp {
                 // selected above, so it sits here rather than in one of the
                 // per-backend sections below.
                 if self.tx_capable() {
+                    drive_ceiling_row(ui, cfg);
                     drive_trim_table(ui, cfg);
                     ui.separator();
                     ui.label(
@@ -3088,6 +3144,13 @@ impl SdroxideApp {
                 });
                 ui.add_space(6.0);
                 let target = *io.upload_tab;
+                // The service tick is meaningless with the master switch off,
+                // and leaving it live is how an operator ends up with a lit
+                // "Auto-upload each new QSO to X" and nothing ever pushed. Grey
+                // it until the master is on; the credentials below stay
+                // editable, so a service can still be set up before auto-upload
+                // is switched on.
+                let auto_on = io.net_edit.auto_upload;
                 let enable = match target {
                     UploadTarget::Eqsl => &mut io.net_edit.auto_upload_eqsl,
                     UploadTarget::QrzLogbook => &mut io.net_edit.auto_upload_qrz,
@@ -3095,16 +3158,23 @@ impl SdroxideApp {
                     UploadTarget::ClubLog => &mut io.net_edit.auto_upload_clublog,
                     UploadTarget::Wrl => &mut io.net_edit.auto_upload_wrl,
                 };
-                crate::chrome::checkbox(
-                    ui,
-                    enable,
-                    format!("Auto-upload each new QSO to {}", target.label()),
-                );
-                if !io.net_edit.auto_upload {
+                ui.add_enabled_ui(auto_on, |ui| {
+                    crate::chrome::checkbox(
+                        ui,
+                        enable,
+                        format!("Auto-upload each new QSO to {}", target.label()),
+                    )
+                    .on_disabled_hover_text(
+                        "Turn on \"Auto-upload each new QSO\" above first — a service \
+                         ticked here is not pushed until it is.",
+                    );
+                });
+                if !auto_on {
                     ui.label(
                         RichText::new(
-                            "Auto-upload is off above, so nothing is pushed automatically \
-                             yet — the per-QSO UP button in the logbook still works.",
+                            "Auto-upload is off above, so the service ticks are disabled and \
+                             nothing is pushed automatically yet — the per-QSO UP button in the \
+                             logbook still works.",
                         )
                         .size(10.5)
                         .color(crate::theme::gray(140)),

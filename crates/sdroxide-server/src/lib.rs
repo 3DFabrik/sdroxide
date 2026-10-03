@@ -1300,6 +1300,10 @@ fn handle_event(shared: &Shared, ev: RadioEvent) {
             }
             RadioEvent::Ft8QsoLogged(r) => Some(ServerMsg::Ft8QsoLogged(r)),
             RadioEvent::WsprSpots(s) => Some(ServerMsg::WsprSpots(s)),
+            // No propagation-map observation, unlike WSPR's: a PI4 message
+            // carries no grid square, so there is nowhere on the map to
+            // place a reception.
+            RadioEvent::Pi4Spots(s) => Some(ServerMsg::Pi4Spots(s)),
             RadioEvent::Rds(d) => {
                 // Cached without the group log: that part is a delta, and
                 // replaying one batch of it to a client that joined later would
@@ -1343,6 +1347,9 @@ fn handle_event(shared: &Shared, ev: RadioEvent) {
             // own hardware locally, so there is no `ServerMsg` variant for
             // this yet — see `RadioEvent::Qo100Status`'s own doc.
             RadioEvent::Qo100Status(_) => None,
+            // Native-only for the same reason as QO-100 above — the live HFDL
+            // decode log is engine-internal, bridged nowhere yet.
+            RadioEvent::HfdlStatus(_) => None,
             RadioEvent::SstvLine { image_id, y, rgb } => {
                 Some(ServerMsg::SstvLine { image_id, y, rgb })
             }

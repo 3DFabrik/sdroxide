@@ -19,7 +19,7 @@ use std::thread::JoinHandle;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
-use sdroxide_types::{AlertEvent, AlertSettings, AlertSound, Decode, LogIndex};
+use sdroxide_types::{AlertEvent, AlertReply, AlertSettings, AlertSound, Decode, LogIndex};
 
 use crate::time::now_unix_f64;
 
@@ -95,6 +95,21 @@ impl Cooldown {
 enum Job {
     Play { sound: AlertSound, volume: f32 },
     Quit,
+}
+
+/// What an alarm just went off for, handed back to the caller.
+///
+/// The tone is played inside the runtime, but the spoken half is not: speech is
+/// the [`crate::app::speech::SpeechRuntime`]'s, and saying the phrase through it
+/// is the caller's job — and only the focused tab's, since a background radio's
+/// phrase would queue up and be read out late. `sound` is the rule's tone, for
+/// the caller to [`AlertRuntime::ring`] instead when it cannot speak.
+#[derive(Debug, Clone)]
+pub struct AlertFired {
+    pub event: AlertEvent,
+    pub call: String,
+    pub reply: AlertReply,
+    pub sound: AlertSound,
 }
 
 /// The alarms themselves, as a radio tab holds them: a handle on an
@@ -313,6 +328,12 @@ impl AlertRuntime {
         self.core().test();
     }
 
+    /// Sound one alarm tone — a voice-only alert's stand-in where it cannot be
+    /// spoken. See [`AlertFired`].
+    pub fn ring(&self, sound: AlertSound) {
+        self.core().play(sound);
+    }
+
     /// Feed one WSJT-style decode batch — see [`AlertCore::on_ft8`].
     pub fn on_ft8(
         &mut self,
@@ -321,8 +342,8 @@ impl AlertRuntime {
         my_grid: &str,
         log: &LogIndex,
         band: &str,
-    ) {
-        self.core().on_ft8(decodes, my_call, my_grid, log, band);
+    ) -> Option<AlertFired> {
+        self.core().on_ft8(decodes, my_call, my_grid, log, band)
     }
 }
 
@@ -397,14 +418,14 @@ impl AlertCore {
         my_grid: &str,
         log: &LogIndex,
         band: &str,
-    ) {
+    ) -> Option<AlertFired> {
         if !self.settings.enabled {
-            return;
+            return None;
         }
         let my_call = my_call.trim().to_ascii_uppercase();
         let my_grid = my_grid.trim().to_ascii_uppercase();
         if my_call.is_empty() {
-            return;
+            return None;
         }
         // One alarm per batch. A busy slot carries a dozen decodes and more
         // than one of them can match — all sixteen ringing one after another
@@ -430,9 +451,17 @@ impl AlertCore {
             }
         }
         if let Some((event, from)) = best {
-            self.play(event.rule(&self.settings.events).sound);
+            let rule = event.rule(&self.settings.events);
+            let (sound, reply) = (rule.sound, rule.reply);
+            // Voice-only rules leave the tone unsounded; the caller says the
+            // phrase.
+            if reply.plays_tone() {
+                self.play(sound);
+            }
             self.cooldowns.mark(from, event);
+            return Some(AlertFired { event, call: from.to_string(), reply, sound });
         }
+        None
     }
 
     /// Queue an alarm if there is a worker to play it.
@@ -690,6 +719,36 @@ mod tests {
         r.on_ft8(&[novelty, call], "k1abc", "FN42", &log(), "20m");
         assert!(r.core().cooldowns.at.contains_key(&("DL1ABC".to_string(), AlertEvent::Called)));
         assert!(!r.core().cooldowns.at.contains_key(&("JA1ABC".to_string(), AlertEvent::NewDxcc)));
+    }
+
+    /// A fired alarm is handed back with the station and the reply, so the
+    /// caller can speak it — the tone is the runtime's, the phrase is not.
+    #[test]
+    fn a_fired_alert_is_handed_back_with_its_station_and_reply() {
+        let mut settings = AlertSettings { enabled: true, ..Default::default() };
+        settings.events.called.enabled = true;
+        settings.events.called.reply = AlertReply::Voice;
+        let mut r = AlertRuntime::new(settings);
+        let fired = r
+            .on_ft8(&[dec(Some("OE3ABC"), Some("K1ABC"), false)], "oe3abc", "JO63", &log(), "20m")
+            .expect("the call should raise an alarm");
+        assert_eq!(fired.event, AlertEvent::Called);
+        assert_eq!(fired.call, "K1ABC");
+        assert_eq!(fired.reply, AlertReply::Voice);
+        assert!(fired.reply.speaks() && !fired.reply.plays_tone());
+    }
+
+    /// A decode that matches nothing hands nothing back, so the caller has no
+    /// phrase to speak.
+    #[test]
+    fn a_decode_that_matches_nothing_hands_nothing_back() {
+        let mut settings = AlertSettings { enabled: true, ..Default::default() };
+        settings.events.called.enabled = true;
+        let mut r = AlertRuntime::new(settings);
+        assert!(
+            r.on_ft8(&[dec(None, None, false)], "oe3abc", "JO63", &log(), "20m").is_none(),
+            "a decode with no station is no alarm"
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]

@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -73,6 +73,17 @@ pub fn board_is_hermes_lite(board: &str) -> bool {
 /// (register `0x0A`, C4). Other P1 boards use that register for Alex/attenuator
 /// settings, so we must not write it there.
 pub fn board_has_lna_gain(board: &str) -> bool {
+    board_is_hermes_lite(board)
+}
+
+/// Whether a board can have an N2ADR HL2IOBoard on it.
+///
+/// The IO board is a Hermes-Lite 2 accessory: it hangs off that board's I2C bus
+/// and its receive-input switching is an HL2 arrangement. No Metis, Hermes,
+/// Angelia, Orion or Saturn has one, so anything that names the IO board — a
+/// setting, a warning — has to ask this first rather than say it to every
+/// board in the family (issue #518).
+pub fn board_has_io_board(board: &str) -> bool {
     board_is_hermes_lite(board)
 }
 
@@ -651,10 +662,8 @@ pub(crate) struct ThreadCtx {
     /// [`HpsdrRx::pa_temp_c`]. [`TEMP_UNKNOWN`] until the board reports one —
     /// which most of them never do.
     pub temp_centi_c: Arc<AtomicI32>,
-    /// Hermes-Lite 2 slow-ADC forward and reverse power counts (AIN1 / AIN2).
-    /// [`ADC_UNKNOWN`] until a status frame carries them.
-    pub hl2_fwd: Arc<AtomicU32>,
-    pub hl2_rev: Arc<AtomicU32>,
+    pub fwd_power_raw: Arc<AtomicU16>,
+    pub rev_power_raw: Arc<AtomicU16>,
     pub tx: Consumer<f32>,
     pub ctrl: Receiver<Ctrl>,
 }
@@ -668,10 +677,17 @@ pub(crate) struct ThreadCtx {
 /// cold shack in February reads exactly that.
 pub const TEMP_UNKNOWN: i32 = i32::MIN;
 
-/// What [`ThreadCtx::hl2_fwd`] / [`ThreadCtx::hl2_rev`] hold before a
-/// Hermes-Lite has reported a coupler reading. Zero is a real idle count, so
-/// it cannot be the sentinel.
-pub const ADC_UNKNOWN: u32 = u32::MAX;
+/// Sentinel for HL2 forward/reverse ADC readings before the first report.
+pub const POWER_UNKNOWN: u16 = u16::MAX;
+
+/// Empirical HL2 coupler calibration determined against an external SWR meter.
+/// Applied to |Gamma| = REV/FWD before converting to SWR.
+const HL2_SWR_GAMMA_CAL: f32 = 1.23;
+
+/// The SWR an HL2 reports once the reflected reading reaches the forward one:
+/// the top of the range the SWR guard can be set to, so a pegged bridge trips
+/// it at any limit. The same ceiling the Icom meter curve ends at.
+const HL2_SWR_MAX: f32 = sdroxide_types::SWR_LIMIT_MAX;
 
 /// What every stream of one connection shares. Dropping the last handle stops
 /// the stream and shuts the network thread down.
@@ -712,9 +728,8 @@ struct DevInner {
     /// The board's own temperature, hundredths of a degree — see
     /// [`TEMP_UNKNOWN`].
     temp_centi_c: Arc<AtomicI32>,
-    /// Hermes-Lite 2 coupler counts — see [`ADC_UNKNOWN`].
-    hl2_fwd: Arc<AtomicU32>,
-    hl2_rev: Arc<AtomicU32>,
+    fwd_power_raw: Arc<AtomicU16>,
+    rev_power_raw: Arc<AtomicU16>,
     /// The TX ring's feed end, claimable exactly once — by DDC 0's stream.
     tx_endpoint: Mutex<Option<Producer<f32>>>,
     /// Which DDCs have a live [`HpsdrRx`], so one cannot be vended twice: two
@@ -865,8 +880,8 @@ impl HpsdrBoard {
         let conn_id = claim_connection(IpAddr::V4(ip));
         let radio_ptt = Arc::new(AtomicBool::new(false));
         let temp_centi_c = Arc::new(AtomicI32::new(TEMP_UNKNOWN));
-        let hl2_fwd = Arc::new(AtomicU32::new(ADC_UNKNOWN));
-        let hl2_rev = Arc::new(AtomicU32::new(ADC_UNKNOWN));
+        let fwd_power_raw = Arc::new(AtomicU16::new(POWER_UNKNOWN));
+        let rev_power_raw = Arc::new(AtomicU16::new(POWER_UNKNOWN));
         let lna_gain_centi_db = Arc::new(AtomicI32::new((lna_gain_db * 100.0) as i32));
         let adc_overload = Arc::new(AtomicBool::new(false));
         if auto_gain.enabled && board_has_lna_gain(&board) {
@@ -897,8 +912,8 @@ impl HpsdrBoard {
             adc_overload: Arc::clone(&adc_overload),
             radio_ptt: Arc::clone(&radio_ptt),
             temp_centi_c: Arc::clone(&temp_centi_c),
-            hl2_fwd: Arc::clone(&hl2_fwd),
-            hl2_rev: Arc::clone(&hl2_rev),
+            fwd_power_raw: Arc::clone(&fwd_power_raw),
+            rev_power_raw: Arc::clone(&rev_power_raw),
             tx: tx_cons,
             ctrl: ctrl_rx,
         };
@@ -934,8 +949,8 @@ impl HpsdrBoard {
                 transmitting: Arc::new(AtomicBool::new(false)),
                 radio_ptt,
                 temp_centi_c,
-                hl2_fwd,
-                hl2_rev,
+                fwd_power_raw,
+                rev_power_raw,
                 tx_endpoint: Mutex::new(Some(tx_prod)),
                 attached: Mutex::new(std::collections::HashSet::new()),
             }),
@@ -998,6 +1013,11 @@ impl HpsdrBoard {
     /// Whether this board has a front-end gain this crate can command.
     pub fn has_lna_gain(&self) -> bool {
         board_has_lna_gain(&self.inner.board)
+    }
+
+    /// Whether this board can have an N2ADR HL2IOBoard on it.
+    pub fn has_io_board(&self) -> bool {
+        board_has_io_board(&self.inner.board)
     }
 
     /// Attach DDC `ddc` and start its stream. Refused beyond
@@ -1091,6 +1111,26 @@ impl Drop for HpsdrRx {
     }
 }
 
+/// Calculate Hermes-Lite 2 SWR from Protocol-1 detector ADC amplitudes.
+///
+/// `None` only with no forward drive to measure against. A reflected reading
+/// at or above the forward one (after calibration) is the worst the bridge can
+/// say, not an unreadable one: an open or a shorted feed reads exactly that,
+/// and reporting nothing there left the SWR guard blind to the fault it exists
+/// for. So it pegs at [`HL2_SWR_MAX`]. Nor are the two ever swapped: a
+/// reflected reading larger than the forward one is a bad load, and reading
+/// it the other way round made it a good one.
+fn hl2_swr_from_raw(fwd: u16, rev: u16) -> Option<f32> {
+    if fwd <= 6 {
+        return None;
+    }
+    let gamma = (rev as f32 / fwd as f32) * HL2_SWR_GAMMA_CAL;
+    if gamma >= 1.0 {
+        return Some(HL2_SWR_MAX);
+    }
+    Some(((1.0 + gamma) / (1.0 - gamma)).min(HL2_SWR_MAX))
+}
+
 impl HpsdrRx {
     /// Which DDC this stream is (0-based, as the wire counts them).
     pub fn ddc(&self) -> u8 {
@@ -1109,6 +1149,22 @@ impl HpsdrRx {
     /// See [`HpsdrBoard::tx_rate_hz`].
     pub fn tx_rate_hz(&self) -> f64 {
         self.dev.tx_rate_hz
+    }
+
+    /// Hermes-Lite 2 SWR from Protocol-1 forward/reverse detector readings.
+    pub fn swr(&self) -> Option<f32> {
+        if self.dev.protocol != 1 || !board_is_hermes_lite(&self.dev.board) {
+            return None;
+        }
+
+        let fwd = self.dev.fwd_power_raw.load(Ordering::Relaxed);
+        let rev = self.dev.rev_power_raw.load(Ordering::Relaxed);
+
+        if fwd == POWER_UNKNOWN || rev == POWER_UNKNOWN {
+            return None;
+        }
+
+        hl2_swr_from_raw(fwd, rev)
     }
 
     pub fn board(&self) -> &str {
@@ -1234,28 +1290,6 @@ impl HpsdrRx {
         }
     }
 
-    /// SWR from the Hermes-Lite 2's slow ADC (N2ADR coupler on AIN1/AIN2).
-    ///
-    /// `None` on every other board, on a stream that does not own the
-    /// transmitter, and when the coupler is not seeing enough forward RF to
-    /// trust the ratio — a board with no filter board stays silent rather than
-    /// inventing a needle.
-    pub fn tx_telemetry(&self) -> Option<sdroxide_types::TxTelemetry> {
-        if self.tx.is_none() || !board_is_hermes_lite(&self.dev.board) {
-            return None;
-        }
-        let fwd = match self.dev.hl2_fwd.load(Ordering::Relaxed) {
-            ADC_UNKNOWN => return None,
-            n => n as u16,
-        };
-        let rev = match self.dev.hl2_rev.load(Ordering::Relaxed) {
-            ADC_UNKNOWN => return None,
-            n => n as u16,
-        };
-        let swr = crate::protocol1::hl2_swr(fwd, rev)?;
-        Some(sdroxide_types::TxTelemetry { swr: Some(swr), ..Default::default() })
-    }
-
     /// Stop transmitting.
     pub fn tx_end(&self) {
         if self.tx.is_some() {
@@ -1366,6 +1400,25 @@ fn clamp_rate(hz: f64, protocol: u8) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The IO board is a Hermes-Lite 2 accessory. Issue #518: a Hermes was
+    /// told its IO board's receive input was set wrong, which is advice about
+    /// a board it cannot have and a setting it is never offered.
+    #[test]
+    fn only_a_hermes_lite_can_have_an_io_board() {
+        assert!(board_has_io_board("Hermes-Lite 2"));
+        assert!(board_has_io_board("Hermes-Lite"));
+        for other in [
+            "Hermes (ANAN-10/10E/100/100B)",
+            "Metis",
+            "Angelia (ANAN-100D)",
+            "Orion 2 (ANAN-7000/8000)",
+            "Saturn (ANAN-G2)",
+            "HPSDR",
+        ] {
+            assert!(!board_has_io_board(other), "{other} has no IO board to warn about");
+        }
+    }
 
     /// Fast attack, slow decay, and neither of them free-running. Issue #362.
     #[test]
@@ -1640,5 +1693,46 @@ mod tests {
         assert_eq!(TX_RATE_HZ_P2, 192_000);
         assert_eq!(tx_rate_for_protocol(1), 48_000);
         assert_eq!(tx_rate_for_protocol(2), 192_000);
+    }
+}
+
+#[cfg(test)]
+mod hl2_swr_regression_tests {
+    use super::{HL2_SWR_MAX, hl2_swr_from_raw};
+
+    #[test]
+    fn known_hl2_reading_is_about_1_30_to_1() {
+        let swr = hl2_swr_from_raw(1803, 192).expect("valid SWR");
+        assert!((swr - 1.30).abs() < 0.01, "SWR was {swr}");
+    }
+
+    /// An open or a short reflects about what goes forward. That is the
+    /// reading the SWR guard exists for, so it pegs the meter rather than
+    /// reporting nothing — and a reflection larger than the forward reading is
+    /// never read the other way round as a good match.
+    #[test]
+    fn a_reflection_at_or_above_forward_pegs_the_meter() {
+        assert_eq!(hl2_swr_from_raw(192, 1803), Some(HL2_SWR_MAX));
+        assert_eq!(hl2_swr_from_raw(1000, 1000), Some(HL2_SWR_MAX));
+        // Past |Γ| = 1 after calibration, but short of rev = fwd.
+        assert_eq!(hl2_swr_from_raw(1000, 850), Some(HL2_SWR_MAX));
+    }
+
+    /// More reflected power never reads as a better match.
+    #[test]
+    fn swr_rises_with_the_reflected_reading() {
+        let mut last = 1.0f32;
+        for rev in (0..=1200).step_by(10) {
+            let swr = hl2_swr_from_raw(1000, rev).expect("driven");
+            assert!(swr >= last, "rev {rev}: {swr} fell below {last}");
+            last = swr;
+        }
+        assert_eq!(last, HL2_SWR_MAX);
+    }
+
+    #[test]
+    fn no_forward_drive_has_no_meaningful_swr() {
+        assert_eq!(hl2_swr_from_raw(0, 0), None);
+        assert_eq!(hl2_swr_from_raw(6, 0), None);
     }
 }

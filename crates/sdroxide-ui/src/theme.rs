@@ -1347,7 +1347,19 @@ pub struct MapPalette {
     /// The map's frame, and the colour behind it that masks the cut corners.
     pub frame: Color32,
     pub shell: Color32,
+    /// The darkest the grey line shades this map, as an alpha. A dark map
+    /// takes the texture's full [`sdroxide_solar::NIGHT_MAX_ALPHA`]: its
+    /// markers are light, and the night only sets them off. A printed-atlas
+    /// map's markers are dark ink, and a full-strength night turns them into
+    /// ink on ink — station dots fell to 1.3:1 on Catppuccin latte — so the
+    /// light maps stop at [`NIGHT_MAX_LIGHT`].
+    pub night_max: f32,
 }
+
+/// [`MapPalette::night_max`] on the light maps: the day-to-night step on the
+/// sea is still better than 2:1, so the terminator reads, and every light map's
+/// station dots keep 5:1 or more against the darkest of it.
+const NIGHT_MAX_LIGHT: f32 = 0.35;
 
 /// The dark themes' map: a near-black sea with slate-teal continents, white
 /// station dots, and the theme's own accents on the markers.
@@ -1369,6 +1381,7 @@ const fn map_from(p: &Palette) -> MapPalette {
         hint: Color32::from_rgba_premultiplied(90, 90, 90, 90),
         frame: p.red_deep,
         shell: p.bg_deep,
+        night_max: sdroxide_solar::NIGHT_MAX_ALPHA,
     }
 }
 
@@ -1393,6 +1406,7 @@ const SCOPE_MAP_LIGHT: MapPalette = MapPalette {
     // The map is inside a panel here, and a wedge of the *page* colour cut out
     // of its corners would read as a gap rather than as a bevel.
     shell: c(0xffffff),
+    night_max: NIGHT_MAX_LIGHT,
 };
 
 /// The High-contrast map. Still a night sky — black is the highest contrast
@@ -1416,6 +1430,7 @@ const MAP_HIGH_CONTRAST: MapPalette = MapPalette {
     hint: Color32::from_rgba_premultiplied(200, 200, 200, 200),
     frame: c(0xff5555),
     shell: c(0x000000),
+    night_max: sdroxide_solar::NIGHT_MAX_ALPHA,
 };
 
 /// Any bright-ground theme's map, read as the printed atlas
@@ -1440,6 +1455,7 @@ const fn map_light_from(p: &Palette) -> MapPalette {
         hint: Color32::from_rgba_premultiplied(0, 0, 0, 110),
         frame: p.red_deep,
         shell: p.bg_deep,
+        night_max: NIGHT_MAX_LIGHT,
     }
 }
 
@@ -2768,6 +2784,30 @@ mod tests {
         let map = &MAP_PALETTES[i];
         let r = contrast(map.land, map.sea);
         assert!(r >= 4.5, "High-contrast land is {r:.2}:1 on the sea — needs 4.5:1");
+    }
+
+    /// The grey line is painted under the station dots, so every map's dots
+    /// have to survive the darkest of it. A light map's dots are dark ink, and
+    /// at the texture's full strength they fell to 1.3:1 on Catppuccin latte —
+    /// which is what [`MapPalette::night_max`] is for.
+    #[test]
+    fn station_dots_stay_readable_on_the_night_side() {
+        // The darkest cell of the real texture: somewhere is always in full
+        // night, and its colour is the night ink.
+        let px = sdroxide_solar::night_shade_rgba(72, 36, 1_790_000_000);
+        let night = px.as_chunks::<4>().0.iter().max_by_key(|p| p[3]).expect("a texture");
+        for (i, map) in MAP_PALETTES.iter().enumerate() {
+            let a = map.night_max.min(f32::from(night[3]) / 255.0);
+            let mix = |s: u8, n: u8| (f32::from(s) * (1.0 - a) + f32::from(n) * a).round() as u8;
+            let sea = map.sea;
+            let shaded = Color32::from_rgb(
+                mix(sea.r(), night[0]),
+                mix(sea.g(), night[1]),
+                mix(sea.b(), night[2]),
+            );
+            let r = contrast(map.station, shaded);
+            assert!(r >= 4.5, "map {i}: station dots are {r:.2}:1 on the night-side sea");
+        }
     }
 
     /// [`gray`] hands the dark themes their historic level back untouched, and

@@ -269,6 +269,99 @@ pub enum Mode {
     ///
     /// Appended for the same reason as [`Mode::Hell`].
     Acars,
+    /// HFDL (ARINC 635) — the HF aircraft datalink: ground stations on the
+    /// shortwave band talking to aircraft over the ocean, carrying position,
+    /// performance, frequency and ACARS traffic.
+    ///
+    /// A receive-only lane like [`Mode::Adsb`], [`Mode::Vdl2`] and
+    /// [`Mode::Ais`], and a `Mode` for the same reason: it is a thing to point
+    /// the receiver at, owns its own downconverted lane, has neither audio nor
+    /// a transmitter, and shares none of the digital modes' configuration.
+    ///
+    /// Unlike those three its channel is one of a published plan spread across
+    /// 2.8–22 MHz, not a single worldwide frequency, so the panel's own
+    /// frequency control chooses it; the dial follows but does not decide.
+    /// Appended for the same reason as [`Mode::Hell`].
+    Hfdl,
+    /// PI4 — the "Next Generation Beacon" propagation-beacon mode: 4-FSK at
+    /// 6 baud, 146 symbols filling 24.333 s, rate-1/2 K=32 convolutionally
+    /// coded (the same code WSPR and JT9 use), carrying up to eight
+    /// characters — ordinarily a beacon's callsign.
+    ///
+    /// Slotted like WSPR but on a one-minute cycle rather than a two-minute
+    /// one, and for the same reason WSPR is deliberately not [`Self::is_slotted`]:
+    /// what it produces is [`crate::Pi4Spot`]s rather than
+    /// [`crate::Decode`]s. Unlike WSPR it is receive-only here — a decoder for
+    /// a beacon network's signal, not a beacon implementation — so it carries
+    /// none of WSPR's duty-cycle or band-hopping machinery. Appended for the
+    /// same reason as [`Mode::Hell`].
+    Pi4,
+    /// MSK144 — meteor scatter on 6 m and 2 m: continuous-phase binary MSK at
+    /// 2000 baud, LDPC(128,90), the same 77-bit message as FT8, in a 15-second
+    /// T/R period.
+    ///
+    /// Unlike the FT/JT family this is not a frame at a fixed offset: an
+    /// operator transmits continuously and the decoder hunts the 15-second
+    /// slot for the short ionised-trail bursts a meteor leaves, so a decode
+    /// carries the time *into* the slot it was found at. Receive only in this
+    /// build, as [`Mode::Pi4`] is. Appended for the same reason as
+    /// [`Mode::Hell`].
+    Msk144,
+    /// JT65 — the classic weak-signal mode from WSJT: 65-FSK, 2.69 baud, a
+    /// 60-second slot, RS(63,12) error correction, and the 72-bit JT message.
+    /// This is JT65A, the HF and 6 m sub-mode; the B and C sub-modes used for
+    /// moonbounce on 2 m and up are not decoded.
+    ///
+    /// A QSO mode, and a very slow one — a full exchange takes minutes — so
+    /// its panel is the slotted decode list rather than a keyboard. Receive
+    /// only in this build: transmit is not wired yet. Appended for the same
+    /// reason as [`Mode::Hell`].
+    Jt65,
+    /// JT9 — WSJT's 9-FSK sibling of JT65: the same 60-second slot and 72-bit
+    /// message, but with convolutional FEC and a much narrower, slower
+    /// waveform (~16 Hz wide), for the weakest signals on HF.
+    ///
+    /// Receive only in this build, for the same reason [`Mode::Jt65`] is.
+    /// Appended for the same reason as [`Mode::Hell`].
+    Jt9,
+    /// FST4 — the slow weak-signal mode for EME, troposcatter and LF/MF
+    /// propagation: 160-symbol GFSK, LDPC(240,101), the same 77-bit message as
+    /// FT8/FT4, in a T/R period of 15, 30, 60, 120 or 300 seconds.
+    ///
+    /// The period is an operator setting ([`crate::Fst4Period`]), not part of
+    /// the mode — exactly as JS8's speed is a [`crate::Js8Speed`] — so
+    /// [`Mode::slot_timing`] answers `None` for it and the clock comes from
+    /// the chosen period. Receive only in this build, as [`Mode::Pi4`] is.
+    /// Appended for the same reason as [`Mode::Hell`].
+    Fst4,
+    /// Q65 — WSJT-X's modern weak-signal mode for EME, ionoscatter, meteor
+    /// scatter and other very low-SNR paths: 65-tone FSK with a Q-ary LDPC
+    /// code, carrying the same 77-bit message as FT8.
+    ///
+    /// Its sub-mode ([`crate::Q65Mode`]) fixes both the T/R period
+    /// (15/30/60/120/300 s) and the tone-spacing letter (A–E, wider for more
+    /// Doppler), so like FST4's period it is a setting rather than part of the
+    /// mode and [`Mode::slot_timing`] answers `None`. Receive only in this
+    /// build, as [`Mode::Pi4`] is. Appended for the same reason as
+    /// [`Mode::Hell`].
+    Q65,
+    /// FSK441 — the original high-speed meteor-scatter mode, MSK144's older
+    /// sibling: 4-FSK at 441 baud on four tones 441 Hz apart (882/1323/1764/
+    /// 2205 Hz), carrying the 43-character PUA-43 alphabet plus the single-tone
+    /// `R26`/`R27`/`RRR`/`73` shorthand, in a 30-second T/R period (15 seconds
+    /// also used).
+    ///
+    /// Not a frame at a fixed offset: an operator transmits the message
+    /// repeatedly through the whole period and the decoder hunts the slot for
+    /// the short ionised-trail bursts a meteor leaves, so a decode carries the
+    /// time *into* the slot it was found at. The period is an operator setting
+    /// ([`crate::Fsk441Period`]), not part of the mode, so [`Mode::slot_timing`]
+    /// answers `None` and the clock comes from the chosen period.
+    ///
+    /// Transmit is the mode's own shape: the operator holds the key and the
+    /// message repeats for the length of the over. Appended for the same reason
+    /// as [`Mode::Hell`].
+    Fsk441,
 }
 
 /// The bands on which a mode that keeps phone practice rides the lower
@@ -289,7 +382,7 @@ const PHONE_LSB_BANDS: [(f64, f64); 3] =
 impl Mode {
     /// Every mode, in the order they cycle and appear in the picker — which is
     /// deliberately *not* the enum's declaration order (see [`Mode::Hell`]).
-    pub const ALL: [Mode; 41] = [
+    pub const ALL: [Mode; 49] = [
         Mode::Lsb,
         Mode::Usb,
         Mode::Cw,
@@ -312,6 +405,7 @@ impl Mode {
         Mode::Ft2,
         Mode::Js8,
         Mode::Wspr,
+        Mode::Pi4,
         Mode::Psk,
         Mode::Rtty,
         Mode::RttyFm,
@@ -331,6 +425,13 @@ impl Mode {
         Mode::Hell,
         Mode::RfPaint,
         Mode::Rade,
+        Mode::Hfdl,
+        Mode::Msk144,
+        Mode::Jt65,
+        Mode::Jt9,
+        Mode::Fst4,
+        Mode::Q65,
+        Mode::Fsk441,
     ];
 
     /// The digital modes handled by a dedicated decode/encode engine (the
@@ -338,12 +439,19 @@ impl Mode {
     /// packet, RF Paint). All are USB underneath except RIFP, VHF packet and
     /// VHF SSTV, which frequency-modulate the carrier, and ACARS, which is
     /// received in AM.
-    pub const DIGITAL: [Mode; 24] = [
+    pub const DIGITAL: [Mode; 31] = [
         Mode::Ft8,
         Mode::Ft4,
         Mode::Ft2,
         Mode::Js8,
         Mode::Wspr,
+        Mode::Pi4,
+        Mode::Msk144,
+        Mode::Jt65,
+        Mode::Jt9,
+        Mode::Fst4,
+        Mode::Q65,
+        Mode::Fsk441,
         Mode::Psk,
         Mode::Rtty,
         Mode::RttyFm,
@@ -375,6 +483,7 @@ impl Mode {
                 | Mode::Ft2
                 | Mode::Js8
                 | Mode::Wspr
+                | Mode::Pi4
                 | Mode::Psk
                 | Mode::Rtty
                 | Mode::RttyFm
@@ -393,6 +502,12 @@ impl Mode {
                 | Mode::Packet
                 | Mode::PacketHf
                 | Mode::Aprs
+                | Mode::Msk144
+                | Mode::Jt65
+                | Mode::Jt9
+                | Mode::Fst4
+                | Mode::Q65
+                | Mode::Fsk441
         )
     }
 
@@ -445,6 +560,18 @@ impl Mode {
         matches!(self, Mode::Ais)
     }
 
+    /// True for HFDL, the ARINC 635 shortwave aircraft datalink.
+    ///
+    /// Not [`Mode::is_digital`], for the reason [`Mode::is_adsb`] is not: it is
+    /// decoded from the raw I/Q by a lane of its own, transmits nothing, and
+    /// shares none of the digital modes' configuration. Unlike the other lanes
+    /// its channel is one of a plan spread across the shortwave band rather
+    /// than a single worldwide frequency, so the panel chooses it — the dial
+    /// follows the choice but does not decide it.
+    pub fn is_hfdl(self) -> bool {
+        matches!(self, Mode::Hfdl)
+    }
+
     /// True for the modes that own the bottom panel.
     ///
     /// [`Mode::is_digital`] used to answer this on its own, which was true
@@ -452,7 +579,7 @@ impl Mode {
     /// questions are separate: this one decides whether the panadapter shares
     /// the window, and that one decides who is being handed audio.
     pub fn has_bottom_panel(self) -> bool {
-        self.is_digital() || self.is_adsb() || self.is_vdl2() || self.is_ais()
+        self.is_digital() || self.is_adsb() || self.is_vdl2() || self.is_ais() || self.is_hfdl()
     }
 
     /// True for the modes decoded by a wideband engine lane off the raw I/Q
@@ -543,15 +670,43 @@ impl Mode {
         self == Mode::AtChat
     }
 
-    /// True for the slotted FT8/FT4 modes, as opposed to the continuous
-    /// keyboard modems and the image modes. Drives the decode-list / callsign
-    /// overlays that only make sense for a slot-based decoder.
+    /// True for the slotted modes whose decodes are [`crate::Decode`]s — FT8,
+    /// FT4, FT2 and JS8, and the receive-only MSK144, JT65/JT9, FST4, Q65 and
+    /// FSK441 — as opposed to the continuous keyboard modems and the image
+    /// modes. Drives the decode-list / callsign overlays that only make sense
+    /// for a slot-based decoder.
     ///
     /// WSPR is slotted too and is deliberately *not* here: those overlays are
     /// built from [`crate::Decode`]s, and WSPR produces [`crate::WsprSpot`]s.
     /// Including it would buy an overlay that is always empty and a transmit
     /// frequency picker for a mode whose tone offset does not move.
     pub fn is_slotted(self) -> bool {
+        matches!(
+            self,
+            Mode::Ft8
+                | Mode::Ft4
+                | Mode::Ft2
+                | Mode::Js8
+                | Mode::Msk144
+                | Mode::Jt65
+                | Mode::Jt9
+                | Mode::Fst4
+                | Mode::Q65
+                | Mode::Fsk441
+        )
+    }
+
+    /// True for the modes whose decode list is a list of stations to *work* —
+    /// FT8, FT4, FT2 and JS8 — as opposed to one the operator can only read.
+    /// Drives REPLY, QUEUE and the transmit-frequency chips in that list: an
+    /// FSK441 decode is free text with nobody to answer, and the receive-only
+    /// slotted modes have no sequencer at all, so neither offers a control that
+    /// would do nothing.
+    ///
+    /// This is not [`Mode::is_rx_only`], which is the capability — whether the
+    /// mode can key the radio. FSK441 can transmit, but it is worked by ear and
+    /// by hand and has no QSO to sequence.
+    pub fn has_qso_sequencer(self) -> bool {
         matches!(self, Mode::Ft8 | Mode::Ft4 | Mode::Ft2 | Mode::Js8)
     }
 
@@ -589,6 +744,14 @@ impl Mode {
         matches!(self, Mode::Wspr)
     }
 
+    /// True for PI4. Its own controller and panel, for the same reason
+    /// [`Self::is_wspr`] has one: it is slotted, but there is no QSO to
+    /// sequence and what it decodes is a list of beacon receptions rather
+    /// than a conversation.
+    pub fn is_pi4(self) -> bool {
+        matches!(self, Mode::Pi4)
+    }
+
     /// The clock this mode keeps, for the modes that keep one by themselves.
     ///
     /// `None` for JS8 — its slot length is an operator setting, so the answer
@@ -614,6 +777,32 @@ impl Mode {
                 tx_offset_s: crate::WSPR_TX_OFFSET_S,
                 burst_s: crate::WSPR_BURST_S,
             }),
+            // A one-minute IARU mixed-mode beacon cycle: the PI4 message
+            // starts on the minute and runs 146 symbols of 166.667 ms —
+            // 24.333 s, `crate::PI4_BURST_S` — before the CW identification
+            // and carrier that follow it (and that this decoder does not
+            // read). `tx_offset_s` is 0 in the sense that the message starts
+            // right on the boundary; this mode never transmits, so nothing
+            // downstream of the slot clock reads it as a burst start.
+            Mode::Pi4 => Some(SlotTiming {
+                slot_s: crate::PI4_SLOT_S,
+                tx_offset_s: 0.0,
+                burst_s: crate::PI4_BURST_S,
+            }),
+            // MSK144 is a 15-second T/R period and the operator transmits
+            // *continuously* through it: one 72 ms frame at 2000 baud, repeated
+            // back to back, so a meteor's brief trail catches part of one. The
+            // burst figure is one frame; the steady stream is why the decoder
+            // scans the whole slot rather than a fixed offset.
+            Mode::Msk144 => Some(SlotTiming { slot_s: 15.0, tx_offset_s: 0.0, burst_s: 0.072 }),
+            // JT65A is 126 symbols of 4460/12000 s — 46.83 s — keyed one
+            // second into a 60-second slot, the offset WSJT-X uses for the
+            // whole JT65/JT9 family. The burst is short enough that the
+            // receiver has most of the slot to decode before the next one.
+            Mode::Jt65 => Some(SlotTiming { slot_s: 60.0, tx_offset_s: 1.0, burst_s: 46.83 }),
+            // JT9 is 85 symbols of 6912/12000 s — 48.96 s — in the same
+            // 60-second slot and at the same one-second offset.
+            Mode::Jt9 => Some(SlotTiming { slot_s: 60.0, tx_offset_s: 1.0, burst_s: 48.96 }),
             _ => None,
         }
     }
@@ -677,6 +866,17 @@ impl Mode {
                 | Mode::Isb
                 | Mode::Ais
                 | Mode::HdRadio
+                // A decoder for a beacon network's signal, not a beacon
+                // implementation — see `Mode::Pi4`'s own doc comment.
+                | Mode::Pi4
+                // MSK144, JT65/JT9, FST4 and Q65 are QSO modes, but transmit
+                // is not wired in this build — the panel is the decode list
+                // alone. FSK441 has a transmit path now, so it is not here.
+                | Mode::Msk144
+                | Mode::Jt65
+                | Mode::Jt9
+                | Mode::Fst4
+                | Mode::Q65
         )
     }
 
@@ -745,13 +945,94 @@ impl Mode {
             Mode::Wefax => "WEFAX",
             Mode::Js8 => "JS8",
             Mode::Wspr => "WSPR",
+            Mode::Pi4 => "PI4",
             Mode::Drm => "DRM",
             Mode::HdRadio => "HD RADIO",
             Mode::Adsb => "ADS-B",
             Mode::Vdl2 => "VDL2",
             Mode::Isb => "ISB",
             Mode::Ais => "AIS",
+            Mode::Hfdl => "HFDL",
             Mode::AtChat => "ATCHAT",
+            Mode::Msk144 => "MSK144",
+            Mode::Jt65 => "JT65",
+            Mode::Jt9 => "JT9",
+            Mode::Fst4 => "FST4",
+            Mode::Q65 => "Q65",
+            Mode::Fsk441 => "FSK441",
+        }
+    }
+
+    /// The starting values for the settings that differ by mode — AGC,
+    /// squelch, noise reduction, the notch and the two stereo switches.
+    ///
+    /// The demodulator already knows the passband it needs; these are the
+    /// settings that are a matter of taste but not the same taste in every
+    /// mode. An operator copying weak SSB wants the noise reduction in and an
+    /// operator watching a waterfall for FT8 wants it out, because on a digital
+    /// signal it eats what little there is and helps nobody.
+    ///
+    /// These are the values a station that has never touched the settings gets,
+    /// and what a per-mode override is laid over; see
+    /// [`crate::ModeProfile`]. Every field is filled in — a default profile is
+    /// the one place a `None` would mean nothing at all.
+    ///
+    /// Kept deliberately conservative:
+    ///
+    /// * **AGC** slow for the weak-signal digital modes, whose whole point is
+    ///   signals near the noise: a fast loop riding the noise *up* works against
+    ///   the decoder. Everything else keeps the stock medium.
+    /// * **Noise reduction off** everywhere, though a little helps a weak voice
+    ///   mode: it is the setting most dependent on the operator's taste, it
+    ///   carries a make-up gain and can add artefacts, and switching modes
+    ///   should not change how loud the radio is. An operator who wants it sets
+    ///   it once per mode and has it remembered.
+    /// * **Squelch open** everywhere — a mode that arrives with the gate shut
+    ///   and no signal yet looks broken. The digital modes have their own
+    ///   [`crate::DigiConfig::digi_squelch`] for this.
+    /// * **Auto-notch off** everywhere. It cancels constant tones, and some of
+    ///   the modes here *are* a constant tone at the audio offset — a CW carrier
+    ///   or an RTTY mark would be notched out of their own passband.
+    ///
+    /// A sub receiver in the same mode gets the same profile; the overrides are
+    /// the station's, not one receiver's.
+    pub fn default_profile(self) -> crate::ModeProfile {
+        // The HF digital modes whose decoders work at the noise floor.
+        let weak_digi = matches!(
+            self,
+            Mode::Ft8
+                | Mode::Ft4
+                | Mode::Ft2
+                | Mode::Js8
+                | Mode::Wspr
+                | Mode::Pi4
+                | Mode::Psk
+                | Mode::Rtty
+                | Mode::Olivia
+                | Mode::Thor
+                | Mode::Fsq
+                | Mode::Hell
+                | Mode::RfPaint
+                | Mode::Packet
+                | Mode::PacketHf
+                | Mode::Navtex
+                | Mode::Wefax
+                | Mode::Msk144
+                | Mode::Jt65
+                | Mode::Jt9
+                | Mode::Fst4
+                | Mode::Q65
+                | Mode::Fsk441
+        );
+        crate::ModeProfile {
+            agc: Some(if weak_digi { AgcMode::Slow } else { AgcMode::Med }),
+            agc_max_gain_db: Some(90.0),
+            manual_gain_db: Some(20.0),
+            squelch_db: Some(crate::SQUELCH_OPEN_DB),
+            noise_reduction: Some(NrLevel::Off),
+            auto_notch: Some(false),
+            wfm_stereo: Some(true),
+            binaural: Some(false),
         }
     }
 
@@ -793,6 +1074,10 @@ impl Mode {
             // dial, and this is the pair of slots drawn on the panadapter so
             // an operator can see that both are being listened to.
             Mode::Ais => (-37_500.0, 37_500.0),
+            // The lane is a fixed 24 kHz channel centred on the chosen HFDL
+            // frequency; nothing is carved out of it, so the passband is the
+            // lane, drawn only so the panadapter can shade what is read.
+            Mode::Hfdl => (-12_000.0, 12_000.0),
             Mode::Digu => (200.0, 3200.0),
             Mode::Digl => (-3200.0, -200.0),
             Mode::Dsb => (-2850.0, 2850.0),
@@ -806,10 +1091,19 @@ impl Mode {
             // narrowly around audio_hz — and Hell X9 needs nearly all of it).
             // SSTV occupies the full sideband audio passband (mirrored onto
             // the lower sideband by `default_filter_at` where it rides one).
+            // JT65 and JT9 are narrow — JT9 is ~16 Hz wide — but they are
+            // worked anywhere in the 200–3000 Hz audio range and the decoder
+            // searches the whole passband, so they get the same wide filter the
+            // other slotted modes have.
             Mode::Ft8
             | Mode::Ft4
             | Mode::Ft2
             | Mode::Js8
+            | Mode::Msk144
+            | Mode::Jt65
+            | Mode::Jt9
+            | Mode::Fst4
+            | Mode::Q65
             | Mode::Psk
             | Mode::Rtty
             | Mode::Sstv
@@ -817,7 +1111,8 @@ impl Mode {
             | Mode::Thor
             | Mode::Fsq
             | Mode::Hell
-            | Mode::RfPaint => (100.0, 3300.0),
+            | Mode::RfPaint
+            | Mode::Fsk441 => (100.0, 3300.0),
             // The fax subcarrier is 1900 Hz ± 400; the wider passband leaves
             // room for a receiver tuned a few hundred hertz off, which is the
             // normal state of affairs on a chart found by ear.
@@ -837,6 +1132,16 @@ impl Mode {
             // this mode operates in. 1200–1800 leaves room for a dial a few
             // hundred hertz out without letting the neighbours in.
             Mode::Wspr => (1200.0, 1800.0),
+            // The beacon network's own listening convention: dial tuned so
+            // the CW identification and carrier sit at 800 Hz audio, putting
+            // the standard (1 kHz-spaced, "K=40") variant's four PI4 tones
+            // between about 683 and 1386 Hz. Wide enough to show the CW and
+            // the carrier alongside them, since all three are what one beacon
+            // cycle actually is. The wider variants (PI4-80/96/120, for 2 and
+            // 3 kHz beacon spacing) put their top tone above this — an
+            // operator listening to one of those widens the passband, the
+            // same way a CW operator widens theirs for a fast fist.
+            Mode::Pi4 => (300.0, 1600.0),
             // RIFP is not a sideband mode: the CPFSK carrier sits *on* the
             // dial and swings ±4 kHz, so the passband straddles it. 25 kHz is
             // the profile's recommended occupied bandwidth.
@@ -1013,7 +1318,13 @@ impl Mode {
             // ADS-B joins them for the same reason WFM does: no radio with an
             // I.F. output has this mode, so there is no separate offset for it
             // to have, and FM's is the one a wideband receiver already uses.
-            Mode::Nfm | Mode::Wfm | Mode::Adsb | Mode::Vdl2 | Mode::Ais | Mode::HdRadio => C::Fm,
+            Mode::Nfm
+            | Mode::Wfm
+            | Mode::Adsb
+            | Mode::Vdl2
+            | Mode::Ais
+            | Mode::Hfdl
+            | Mode::HdRadio => C::Fm,
             // Everything a rig would be put into DATA (or DIGI) for, on either
             // sideband — including RIFP and VHF packet, which the rig carries
             // as FM data rather than SSB but still through its data input.
@@ -1024,6 +1335,7 @@ impl Mode {
             | Mode::Ft2
             | Mode::Js8
             | Mode::Wspr
+            | Mode::Pi4
             | Mode::Psk
             | Mode::Rtty
             | Mode::RttyFm
@@ -1040,7 +1352,13 @@ impl Mode {
             | Mode::Rade
             | Mode::Packet
             | Mode::PacketHf
-            | Mode::Aprs => C::Data,
+            | Mode::Aprs
+            | Mode::Msk144
+            | Mode::Jt65
+            | Mode::Jt9
+            | Mode::Fst4
+            | Mode::Q65
+            | Mode::Fsk441 => C::Data,
         }
     }
 
@@ -1059,7 +1377,14 @@ impl Mode {
         // front of.
         !matches!(
             self,
-            Mode::Nfm | Mode::Wfm | Mode::Drm | Mode::Adsb | Mode::Vdl2 | Mode::Ais | Mode::HdRadio
+            Mode::Nfm
+                | Mode::Wfm
+                | Mode::Drm
+                | Mode::Adsb
+                | Mode::Vdl2
+                | Mode::Ais
+                | Mode::Hfdl
+                | Mode::HdRadio
         )
     }
 
@@ -1224,6 +1549,9 @@ impl Mode {
             // hears whichever it is over, and this is how the shading says
             // which of the two it is doing.
             Mode::Ais => &[("25k", -12_500.0, 12_500.0), ("75k", -37_500.0, 37_500.0)],
+            // The lane's own width, and nothing narrower: the demod reads the
+            // whole 24 kHz channel, so this only shades what is read.
+            Mode::Hfdl => &[("24k", -12_000.0, 12_000.0)],
             // The one digital mode with a real filter choice: 1200 Bell 202
             // occupies about 10 kHz and 9600 G3RUH about 16 kHz, so the
             // operator wants the narrower one when running 1200 on a busy
@@ -1249,6 +1577,7 @@ impl Mode {
             | Mode::Ft2
             | Mode::Js8
             | Mode::Wspr
+            | Mode::Pi4
             | Mode::Psk
             | Mode::Rtty
             | Mode::Sstv
@@ -1263,7 +1592,13 @@ impl Mode {
             | Mode::Acars
             | Mode::PacketHf
             | Mode::Rade
-            | Mode::HdRadio => &[],
+            | Mode::HdRadio
+            | Mode::Msk144
+            | Mode::Jt65
+            | Mode::Jt9
+            | Mode::Fst4
+            | Mode::Q65
+            | Mode::Fsk441 => &[],
         }
     }
 }
@@ -1316,8 +1651,9 @@ impl std::str::FromStr for Mode {
 /// Which denoiser is running behind the NR chip.
 ///
 /// Derived from [`NrLevel`] rather than stored: the wire carries the level, so a
-/// fifth engine would cost three appended `NrLevel` variants and nothing else.
-/// This type is never serialised.
+/// further engine costs three appended `NrLevel` variants and nothing else —
+/// which is exactly what NR2 cost when it was added in v159. This type is never
+/// serialised.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NrEngine {
     /// RNNoise (`nnnoiseless`) — a recurrent per-band gain estimator.
@@ -1326,14 +1662,22 @@ pub enum NrEngine {
     DeepFilter,
     /// The spectral-bleach algorithm, ported to Rust in `sdroxide-dsp`.
     SpecBleach,
+    /// WDSP's NR2 (`emnr.c`), the Ephraim-Malah denoiser from PowerSDR and
+    /// Thetis, ported to Rust in `sdroxide-dsp`.
+    Nr2,
     /// The hand-written MCRA + log-MMSE spectral NR this program started with.
     Spectral,
 }
 
 impl NrEngine {
     /// Engine-row order in the NR picker: neural first, classical last.
-    pub const ALL: [NrEngine; 4] =
-        [NrEngine::Rnn, NrEngine::DeepFilter, NrEngine::SpecBleach, NrEngine::Spectral];
+    pub const ALL: [NrEngine; 5] = [
+        NrEngine::Rnn,
+        NrEngine::DeepFilter,
+        NrEngine::SpecBleach,
+        NrEngine::Nr2,
+        NrEngine::Spectral,
+    ];
 
     /// The tag the chips wear. The original spectral NR keeps the bare "NR" it
     /// has always had, so an operator who never opens the picker sees exactly
@@ -1343,6 +1687,7 @@ impl NrEngine {
             NrEngine::Rnn => "RNN",
             NrEngine::DeepFilter => "DFNR",
             NrEngine::SpecBleach => "SPEC",
+            NrEngine::Nr2 => "NR2",
             NrEngine::Spectral => "NR",
         }
     }
@@ -1353,6 +1698,7 @@ impl NrEngine {
             NrEngine::Rnn => "RNNoise — neural, speech-trained, cheap",
             NrEngine::DeepFilter => "DeepFilterNet3 — neural, strongest, costliest",
             NrEngine::SpecBleach => "Spectral bleach — adaptive spectral, masked",
+            NrEngine::Nr2 => "NR2 — WDSP's Ephraim-Malah, as PowerSDR and Thetis run it",
             NrEngine::Spectral => "Spectral NR — MCRA + log-MMSE",
         }
     }
@@ -1374,6 +1720,9 @@ impl NrEngine {
             (DeepFilter, Low) => NrLevel::DfLow,
             (DeepFilter, Med) => NrLevel::DfMed,
             (DeepFilter, High) => NrLevel::DfHigh,
+            (Nr2, Low) => NrLevel::Nr2Low,
+            (Nr2, Med) => NrLevel::Nr2Med,
+            (Nr2, High) => NrLevel::Nr2High,
         }
     }
 
@@ -1404,15 +1753,15 @@ impl NrStrength {
     }
 }
 
-/// Audio noise-reduction setting for the demodulated audio: one of four engines
+/// Audio noise-reduction setting for the demodulated audio: one of five engines
 /// at one of three intensities, or off. See [`NrEngine`].
 ///
 /// **The declaration order is the wire format.** postcard encodes the
 /// discriminant positionally, so variants are only ever appended — the spectral
 /// group sits where it always did (1..3), the RNNoise group where proto v10 put
-/// it (4..6), and the two engines added in v43 follow. Nothing reads the
-/// declaration order but the wire: [`NrLevel::ALL`] and the picker impose the
-/// display order instead.
+/// it (4..6), the two engines added in v43 follow, and NR2's three were appended
+/// in v159. Nothing reads the declaration order but the wire: [`NrLevel::ALL`]
+/// and the picker impose the display order instead.
 ///
 /// The RNNoise variants were called `Ai*` until v43, when renaming them still
 /// cost nothing. It would cost something now: the operator's setting is kept in
@@ -1439,11 +1788,15 @@ pub enum NrLevel {
     DfLow,
     DfMed,
     DfHigh,
+    // WDSP NR2 (`Nr2`) — appended in v159, discriminants 13..15.
+    Nr2Low,
+    Nr2Med,
+    Nr2High,
 }
 
 impl NrLevel {
     /// Every setting, in the order the picker lists them.
-    pub const ALL: [NrLevel; 13] = [
+    pub const ALL: [NrLevel; 16] = [
         NrLevel::Off,
         NrLevel::RnnLow,
         NrLevel::RnnMed,
@@ -1454,6 +1807,9 @@ impl NrLevel {
         NrLevel::SpecLow,
         NrLevel::SpecMed,
         NrLevel::SpecHigh,
+        NrLevel::Nr2Low,
+        NrLevel::Nr2Med,
+        NrLevel::Nr2High,
         NrLevel::Low,
         NrLevel::Medium,
         NrLevel::High,
@@ -1474,6 +1830,9 @@ impl NrLevel {
             NrLevel::SpecLow => "SPEC Low",
             NrLevel::SpecMed => "SPEC Med",
             NrLevel::SpecHigh => "SPEC High",
+            NrLevel::Nr2Low => "NR2 Low",
+            NrLevel::Nr2Med => "NR2 Med",
+            NrLevel::Nr2High => "NR2 High",
             NrLevel::DfLow => "DFNR Low",
             NrLevel::DfMed => "DFNR Med",
             NrLevel::DfHigh => "DFNR High",
@@ -1492,6 +1851,7 @@ impl NrLevel {
             NrLevel::RnnLow | NrLevel::RnnMed | NrLevel::RnnHigh => NrEngine::Rnn,
             NrLevel::SpecLow | NrLevel::SpecMed | NrLevel::SpecHigh => NrEngine::SpecBleach,
             NrLevel::DfLow | NrLevel::DfMed | NrLevel::DfHigh => NrEngine::DeepFilter,
+            NrLevel::Nr2Low | NrLevel::Nr2Med | NrLevel::Nr2High => NrEngine::Nr2,
         })
     }
 
@@ -1499,13 +1859,21 @@ impl NrLevel {
     pub fn strength(self) -> Option<NrStrength> {
         Some(match self {
             NrLevel::Off => return None,
-            NrLevel::Low | NrLevel::RnnLow | NrLevel::SpecLow | NrLevel::DfLow => NrStrength::Low,
-            NrLevel::Medium | NrLevel::RnnMed | NrLevel::SpecMed | NrLevel::DfMed => {
-                NrStrength::Med
-            }
-            NrLevel::High | NrLevel::RnnHigh | NrLevel::SpecHigh | NrLevel::DfHigh => {
-                NrStrength::High
-            }
+            NrLevel::Low
+            | NrLevel::RnnLow
+            | NrLevel::SpecLow
+            | NrLevel::DfLow
+            | NrLevel::Nr2Low => NrStrength::Low,
+            NrLevel::Medium
+            | NrLevel::RnnMed
+            | NrLevel::SpecMed
+            | NrLevel::DfMed
+            | NrLevel::Nr2Med => NrStrength::Med,
+            NrLevel::High
+            | NrLevel::RnnHigh
+            | NrLevel::SpecHigh
+            | NrLevel::DfHigh
+            | NrLevel::Nr2High => NrStrength::High,
         })
     }
 
@@ -1577,6 +1945,22 @@ impl NrLevel {
         }
     }
 
+    /// NR2 tuning: `(noise over-estimation factor, minimum gain floor)`.
+    ///
+    /// NR2 has no intensity control of its own — WDSP ships one setting — so
+    /// the strength is a layer on top of the ported gain rule rather than a
+    /// change to it: the over-factor tells the rule there is more noise than
+    /// there is, and the floor limits how far any bin may be pulled down.
+    /// Neutral (unused) for Off and for every other engine.
+    pub fn nr2_params(self) -> (f32, f32) {
+        match self {
+            NrLevel::Nr2Low => (1.0, 0.30),
+            NrLevel::Nr2Med => (1.4, 0.14),
+            NrLevel::Nr2High => (2.0, 0.07),
+            _ => (1.0, 1.0),
+        }
+    }
+
     /// RNNoise wet/dry depth (0 = bypass, 1 = full RNNoise). Only meaningful for
     /// the `Rnn*` variants.
     pub fn rnn_mix(self) -> f32 {
@@ -1616,6 +2000,9 @@ impl NrLevel {
             NrLevel::DfLow => 1.0,
             NrLevel::DfMed => 1.05,
             NrLevel::DfHigh => 1.15,
+            NrLevel::Nr2Low => 1.2,
+            NrLevel::Nr2Med => 1.5,
+            NrLevel::Nr2High => 1.9,
             NrLevel::SpecLow => 1.15,
             NrLevel::SpecMed => 1.4,
             NrLevel::SpecHigh => 1.7,
@@ -1685,7 +2072,11 @@ mod tests {
                 assert!(all_symmetric, "{m:?} mirrors its edges but has an off-centre preset");
             } else if !m.filter_presets().is_empty() {
                 assert!(
-                    !all_symmetric || m == Mode::Adsb || m == Mode::Vdl2 || m == Mode::Ais,
+                    !all_symmetric
+                        || m == Mode::Adsb
+                        || m == Mode::Vdl2
+                        || m == Mode::Ais
+                        || m == Mode::Hfdl,
                     "{m:?} has only symmetric presets — should its edges mirror?"
                 );
             }
@@ -1744,6 +2135,14 @@ mod tests {
             (Mode::AtChat, 38),
             (Mode::HdRadio, 39),
             (Mode::Acars, 40),
+            (Mode::Hfdl, 41),
+            (Mode::Pi4, 42),
+            (Mode::Msk144, 43),
+            (Mode::Jt65, 44),
+            (Mode::Jt9, 45),
+            (Mode::Fst4, 46),
+            (Mode::Q65, 47),
+            (Mode::Fsk441, 48),
         ];
         for (mode, index) in pinned {
             assert_eq!(mode as u8, index, "{} moved", mode.label());
@@ -1790,7 +2189,7 @@ mod tests {
         // dropped and nothing listed twice.
         // The last variant *by discriminant*, which is the one appended most
         // recently — not the one that reads last in the picker.
-        let last = Mode::Acars as u8;
+        let last = Mode::Fsk441 as u8;
         for i in 0..=last {
             let present = Mode::ALL.iter().filter(|m| **m as u8 == i).count();
             assert_eq!(present, 1, "discriminant {i} appears {present} times in Mode::ALL");
@@ -1813,6 +2212,20 @@ mod tests {
         assert!(Mode::Acars.is_digital(), "it has a decoder and a panel");
         assert!(Mode::Acars.is_carrier_centered(), "the dial is the carrier");
         assert!(!Mode::Acars.tunes_off_dial());
+    }
+
+    /// HFDL is a panel-owning lane: it decides the layout question
+    /// (`has_bottom_panel`) exactly as ADS-B, VDL2 and AIS do, and nothing
+    /// about the digi engine.
+    #[test]
+    fn hfdl_owns_a_panel_like_the_other_lanes() {
+        assert!(Mode::Hfdl.has_bottom_panel());
+        assert!(Mode::Hfdl.is_hfdl());
+        assert!(!Mode::Hfdl.is_digital());
+        assert_eq!(Mode::Hfdl.label(), "HFDL");
+        // The lane is a fixed 24 kHz channel, symmetric about its centre.
+        assert_eq!(Mode::Hfdl.default_filter(), (-12_000.0, 12_000.0));
+        assert!(Mode::Hfdl.filter_presets().iter().all(|(_, lo, hi)| lo == &-hi));
     }
 
     #[test]
@@ -1862,6 +2275,9 @@ mod tests {
         assert_eq!(NrLevel::DfLow as u8, 10);
         assert_eq!(NrLevel::DfMed as u8, 11);
         assert_eq!(NrLevel::DfHigh as u8, 12);
+        assert_eq!(NrLevel::Nr2Low as u8, 13);
+        assert_eq!(NrLevel::Nr2Med as u8, 14);
+        assert_eq!(NrLevel::Nr2High as u8, 15);
     }
 
     #[test]
@@ -1951,7 +2367,17 @@ mod tests {
     #[test]
     fn only_the_slotted_modes_have_a_slot_clock() {
         for mode in Mode::ALL {
-            let expected = matches!(mode, Mode::Ft8 | Mode::Ft4 | Mode::Ft2 | Mode::Wspr);
+            let expected = matches!(
+                mode,
+                Mode::Ft8
+                    | Mode::Ft4
+                    | Mode::Ft2
+                    | Mode::Wspr
+                    | Mode::Pi4
+                    | Mode::Msk144
+                    | Mode::Jt65
+                    | Mode::Jt9
+            );
             assert_eq!(mode.slot_timing().is_some(), expected, "{mode:?}");
         }
         assert_eq!(Mode::Js8.slot_timing(), None);
@@ -1966,6 +2392,22 @@ mod tests {
         let ft2 = Mode::Ft2.slot_timing().unwrap();
         assert_eq!(ft8.slot_s, 2.0 * ft4.slot_s);
         assert_eq!(ft4.slot_s, 2.0 * ft2.slot_s);
+    }
+
+    /// REPLY and QUEUE are the sequencer's promise to transmit, so only the
+    /// modes that have one may offer them. FSK441 is the case that separates
+    /// this from `is_rx_only`: it can key the radio, but its decodes are free
+    /// text and there is no station in one to answer.
+    #[test]
+    fn only_the_qso_modes_offer_to_work_a_station() {
+        let qso = [Mode::Ft8, Mode::Ft4, Mode::Ft2, Mode::Js8];
+        for mode in Mode::ALL {
+            assert_eq!(mode.has_qso_sequencer(), qso.contains(&mode), "{mode:?}");
+            // Whatever offers to work a station must be able to key one.
+            assert!(!(mode.has_qso_sequencer() && mode.is_rx_only()), "{mode:?}");
+        }
+        assert!(Mode::Fsk441.takes_digi_tx_audio(), "FSK441 transmits");
+        assert!(!Mode::Fsk441.has_qso_sequencer(), "…but has no QSO to sequence");
     }
 
     /// SSTV and RADE follow phone practice: the low bands are LSB, everything

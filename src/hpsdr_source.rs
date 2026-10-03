@@ -179,16 +179,32 @@ impl HpsdrSource {
             );
         }
         if puresignal.is_some() {
+            // Where the sample has to arrive depends on the board. Sending the
+            // operator of a Hermes, an ANAN or a Red Pitaya after a
+            // Hermes-Lite 2's IO board gives them nowhere to look.
+            let wiring = if board.has_io_board() {
+                "on a Hermes-Lite 2 that is the IO board's PureSignal input, with the IO board's                  receive input set to match"
+            } else {
+                "this board has no IO board to switch it in, so the coupler and its attenuator                  have to reach a receive input the T/R switch does not take away on transmit —                  an ANAN's RX port, or an external relay that switches the coupler into the                  receive input for the length of the over"
+            };
             tracing::info!(
-                "HPSDR: PureSignal is on — the receiver is the feedback path, so a coupled \
-                 sample of the transmitter has to reach it during the over (on a Hermes-Lite 2 \
-                 that is the IO board's PureSignal input). {} table steps, feedback decimated \
-                 by {}. Until the loop locks the transmitter is left exactly as it would have \
-                 been.",
+                "HPSDR: PureSignal is on — this receiver, the first one, is the feedback path, \
+                 so a coupled sample of the transmitter has to reach it during the over \
+                 ({wiring}). A second receiver is never read as the feedback: a coupler wired \
+                 to RX2/ADC2 cannot lock the loop however the board's own firmware routes it \
+                 (issue #510). {} table steps, feedback decimated by {}. Until the loop locks \
+                 the transmitter is left exactly as it would have been.",
                 cfg.ps_bins,
                 ps_decim.as_ref().map_or(1, |d| d.factor())
             );
-            if cfg.io_rx_input != sdroxide_types::HpsdrIoRxInput::IoBoardPureSignal {
+            // Only on a board that can have an IO board. The setting this
+            // names is a Hermes-Lite 2 accessory's, and it is not even offered
+            // on a Hermes or an ANAN — telling one of those that its IO board
+            // is set wrong sends the operator after a board they do not own
+            // (issue #518).
+            if board.has_io_board()
+                && cfg.io_rx_input != sdroxide_types::HpsdrIoRxInput::IoBoardPureSignal
+            {
                 tracing::warn!(
                     "HPSDR: PureSignal is on but the IO board's receive input is set to \"{}\" \
                      — unless you have wired the transmit sample in some other way, the T/R \
@@ -203,7 +219,7 @@ impl HpsdrSource {
         // nothing on J9 is deaf there, so the choice is not put on the panel of
         // an HL2 that has never used it.
         let io_rx_input = (board.protocol() == 1
-            && board.has_lna_gain()
+            && board.has_io_board()
             && cfg.ddc == 0
             && cfg.io_rx_input != sdroxide_types::HpsdrIoRxInput::Radio)
             .then_some(cfg.io_rx_input);
@@ -442,7 +458,8 @@ impl IqSource for HpsdrSource {
     }
 
     fn tx_telemetry(&mut self) -> Option<sdroxide_types::TxTelemetry> {
-        self.rx.as_ref()?.tx_telemetry()
+        let swr = self.rx.as_ref()?.swr()?;
+        Some(sdroxide_types::TxTelemetry { fwd_w: None, swr: Some(swr), alc: None, po: None })
     }
 
     /// The board's own ADC-overflow flag — see [`IqSource::adc_overload`]. It

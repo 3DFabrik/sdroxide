@@ -11,8 +11,8 @@ built-in, and **TCI and Hamlib rigctld servers** so third-party programs like WS
 This repository is a GPLv3 fork of
 [dividebysandwich/sdroxide](https://github.com/dividebysandwich/sdroxide),
 kept on the `users` branch. Upstream is the project; what differs here is how a
-station with more than one operator is shared, and how a Hermes Lite 2 reports
-SWR.
+station with more than one operator is shared. Hermes Lite 2 SWR (N2ADR
+coupler, AIN1/AIN2) is upstream's.
 
 - **Named operators.** A roster (`users.toml`; `--add-user` / `--set-password`
   on a headless box) signs people in by name. One of them holds the radio and
@@ -26,15 +26,12 @@ SWR.
   under `users/<name>/` as well (`settings.json`, `net.json`, `qso_log.json`),
   not in the station files. A listener is not shown the holder's secrets. A
   station with one shared password is unchanged.
-- **Hermes Lite 2 SWR.** With an N2ADR I/O board the HL2 already measures
-  forward and reverse on AIN1/AIN2; this fork draws the SWR meter from that
-  rather than leaving it blank.
 
 The rest of this README is upstream's.
 
 <hr/>
 
-<img width="1496" height="933" alt="image" src="https://github.com/user-attachments/assets/9d88118c-0efe-45c5-9918-8ee2bb91b700" />
+<img width="2560" height="1600" alt="image" src="https://github.com/user-attachments/assets/d4b29901-3e84-4c49-a987-ffec795017f2" />
 
 <hr/>
 
@@ -58,7 +55,9 @@ One binary, three ways to run it:
   WebAssembly. Every radio the station has is served, one client each: `/ws`
   and `/ws/<id>`, listed at `/radios`. Its roster is editable from a client
   too — a signed-in operator can add a radio to the station and close one
-  again, without touching the machine or restarting it.
+  again, without touching the machine or restarting it. On a phone or tablet it
+  installs to the home screen and runs full screen, holding the screen awake
+  while it is in front.
 - **Native remote** — `sdroxide --connect host:4950`; the desktop UI driving a
   remote server instead of local hardware. A station with several radios comes
   up with all of them, one tab each.
@@ -91,7 +90,22 @@ One binary, three ways to run it:
   **PSK31**, **RTTY**,
   **Olivia**, **THOR** and **FSQ** (with directed messaging + images),
   **WSPR** (transmit and receive, with WSPRnet reporting and optional band
-  hopping),
+  hopping), receive-only **PI4** (the "Next Generation Beacon" propagation
+  mode — 4-FSK, decoded from a rate-1/2 K=32 Fano search across every beacon
+  variant and tone frequency the network uses), receive-only **MSK144**
+  (meteor scatter on 6 m and 2 m — continuous-phase binary MSK in a
+  15-second period, the decoder hunting each period for the brief
+  meteor-trail bursts), receive-only **JT65** and
+  **JT9** (the classic WSJT weak-signal modes — 65-FSK and 9-FSK in a
+  60-second slot, for EME and the weakest HF paths), receive-only **FST4** (the
+  slow weak-signal mode for EME, troposcatter and LF/MF — 160-symbol GFSK in a
+  15/30/60/120/300-second T/R period, the same 77-bit message as FT8), receive-only **Q65** (the
+  modern WSJT weak-signal mode — 65-tone FSK in a 15/30/60/120/300-second
+  T/R period with a tone-spacing letter A–E for Doppler spread, the same
+  77-bit message as FT8), **FSK441** (the
+  original meteor-scatter mode — 4-FSK at 441 baud, decoding the brief pings a
+  meteor trail reflects in a 15/30-second period, and transmitting a message
+  repeated for the length of the over),
   **Hellschreiber** (all seven Feld Hell / FSK Hell variants, on a scrolling
   raster), image **SSTV** (Scottie, Martin, Robot), image **RIFP**
   (draft-dulaunoy-rifp-00 — packetised, checksummed pictures over a 4800-baud
@@ -103,12 +117,15 @@ One binary, three ways to run it:
   datalink those same aircraft exchange ACARS over, on all seven channels around
   136.8 MHz at once, with the messages and the stations sending them — and
   receive-only **ACARS** itself, the classic airband datalink, decoded from the AM
-  carrier on the shared airline channels (131.550, 131.725 MHz and friends).
+  carrier on the shared airline channels (131.550, 131.725 MHz and friends) — and
+  receive-only **HFDL**, the shortwave ground network airliners use where no VHF
+  receiver can hear them, one assigned channel at a time between 2.8 and 22 MHz,
+  with a decode log and a map of the aircraft positions it carries.
 - **Receiver** — hang AGC, draggable passband filter edges (on the spectrum and
-  the waterfall), noise blanker, auto-notch, **four noise-reduction engines**
-  (RNNoise, DeepFilterNet3, a libspecbleach port and the built-in spectral NR,
-  three strengths each), squelch, a second sub-receiver, RIT/XIT, VFO A/B with split,
-  per-band band stacks, and memory channels.
+  the waterfall), noise blanker, auto-notch, **five noise-reduction engines**
+  (RNNoise, DeepFilterNet3, a libspecbleach port, a port of WDSP's NR2 and the
+  built-in spectral NR, three strengths each), squelch, a second sub-receiver,
+  RIT/XIT, VFO A/B with split, per-band band stacks, and memory channels.
 - **Winlink radio email** — a built-in client for the amateur store-and-forward
   email network, speaking B2F/FBB, LZHUF and the secure login natively (no Pat,
   no external modem). Mailbox with inbox / outbox / sent / archive, compose and
@@ -158,7 +175,14 @@ One binary, three ways to run it:
   interface that wants a PTT closure, a Raspberry Pi GPIO line, or an external
   command. An optional transmit-sense input on the same port sees a rig keyed at
   its own microphone in milliseconds instead of the few hundred a CAT poll
-  takes. See "T/R switch" in the user manual for what this cannot do.
+  takes. A contact can also be given a **band-decoder** role instead, switched
+  by which band the dial is on — a per-band RX/TX output table, the RX-to-TX
+  move sequenced on the same lead and hold as every other contact. The same
+  idea as the HPSDR filter board's open-collector band code (below), on a relay
+  board, GPIO header or RTS/DTR pair, for driving an outboard band-pass/low-pass
+  filter bank or a transverter selector on a PlutoSDR, a LibreSDR, or any other
+  front end without HPSDR's own seven-pin bus. See "T/R switch" in the user
+  manual for what this cannot do.
 - **Persistence** — device, rates, gains, memories, band stacks, the FT8/FT4/FT2
   operator profile, network/QSL credentials, control bindings, and the logbook
   are all stored under `~/.config/sdroxide/`.
@@ -211,6 +235,102 @@ paths rather than a conversation.
   message has room for nothing else. A compound call or a 6-character grid is
   said plainly rather than mangled; receiving is unaffected.
 
+## PI4
+
+Selecting **PI4** opens a reception list beside a status pane showing the
+one-minute beacon cycle. Like WSPR it is not a QSO mode — a beacon transmits
+its callsign (or occasionally a status string) and nothing else — but unlike
+WSPR it is receive only here: this is a decoder for the "Next Generation
+Beacon" network, not a beacon implementation.
+
+- **Receive** searches once a minute across four beacon-spacing variants
+  (PI4, PI4-80, PI4-96, PI4-120), a tone-frequency window either side of the
+  network's own listening convention, and a couple of seconds either side of
+  the nominal minute boundary for clock drift. Each row is a beacon heard,
+  with its variant, signal estimate, and a **fit** figure — the message's
+  FEC carries no checksum, so fit (how much of the received tone energy the
+  decoded message actually accounts for) is what stands between a real
+  decode and a plausible-looking guess out of noise, not a bare pass/fail.
+- Tune so the beacon's CW identification and carrier sit at 800 Hz audio —
+  the network's own convention — and the four PI4 tones land where the
+  decoder searches for them by default.
+
+## MSK144
+
+Selecting **MSK144** opens the decode list alone: a reception list of the
+meteor-scatter pings heard, with time, signal estimate, audio offset and the
+decoded message. It is the standard way to work 6 m and 2 m "meteor scatter"
+contacts, and it is receive only here.
+
+- MSK144 runs on a **15-second T/R period** and an operator transmits
+  *continuously* through it, so the decoder scans the whole period for the
+  short ionised-trail bursts a meteor leaves rather than reading a frame at a
+  fixed offset. A row's **DT** is therefore not an offset from a frame start
+  but **how far into the period** the burst was found.
+- It carries the same 77-bit message as FT8, so a decode reads the same way.
+- Tune to the MSK144 calling frequencies — **50.260 MHz** (**50.380** in IARU
+  Region 1) on 6 m and **144.150 MHz** (**144.360** in Region 1) on 2 m — and
+  keep the audio cursor on **1500 Hz**, where everyone transmits: the decoder
+  searches 200 Hz either side of the cursor.
+
+## JT65 and JT9
+
+Selecting **JT65** or **JT9** opens the decode list alone: a reception list of
+the stations heard, with time, signal estimate, audio offset and the decoded
+`<to> <from> <grid|report>`. These are the two classic weak-signal modes from
+the WSJT family — JT65 is the older HF and 6 m weak-signal mode (its B and C
+sub-modes are the classic moonbounce ones; this build decodes JT65A), and JT9
+is its narrower, slower sibling for HF. Both are receive only here.
+
+- Both run on a **60-second slot** and carry a short 72-bit message, so a
+  decode arrives a few seconds after the minute.
+- The **72-bit JT message carries no CRC**: the error correction is a
+  Reed–Solomon code (JT65) or a convolutional one (JT9), and either can
+  converge on a well-formed message that was never sent. The decoders'
+  own gates keep that rare — JT65's Reed–Solomon decode is strict, and JT9
+  checks sync and symbol quality — but on a dead band a lone weak row is
+  worth a second look before it goes in the log.
+- Tune the dial to the band and leave the audio cursor where the signals are —
+  a JT signal is tiny (16 Hz wide for JT9, about 180 Hz for JT65) and the
+  decoder searches the whole audio passband.
+
+## FST4
+
+Selecting **FST4** opens the decode list with a period chip row above it:
+choose the **T/R period** — 15, 30, 60, 120 or 300 seconds — and the slot
+length and the decode both follow. FST4 is the slow weak-signal mode of the
+same WSJT family, built for the paths where JT65 and FT8 run out: EME
+(moonbounce), troposcatter, and LF/MF propagation experiments. It is receive
+only here.
+
+- The period is the whole trade: a short one is a fast terrestrial signal, a
+  long one digs tens of dB under the noise for a moonbounce path. **60
+  seconds is the band convention** and the default. Both ends of a contact
+  have to agree on it.
+- A decode is the same `<to> <from> <grid|report>` as FT8/FT4, since FST4
+  carries the same 77-bit message.
+- On the longer periods expect the list to fill in well after the period
+  ends: an FST4-300 scan is tens of seconds of work over a five-minute slot.
+
+## Q65
+
+Selecting **Q65** opens the decode list with a sub-mode chip row above it.
+Q65 is the modern WSJT weak-signal mode, built for the paths where FT8 and
+JT65 run out — EME (moonbounce), ionoscatter, rainscatter and troposcatter —
+and it is receive only here.
+
+- The **sub-mode** has two axes: the **T/R period** (15, 30, 60, 120 or 300
+  seconds) and the **tone-spacing letter** (A–E, wider for more Doppler
+  spread). **Q65-30A** is the default; the 60 s sub-modes are the usual EME
+  choice. Both ends of a
+  contact have to agree, so check what the other station is running.
+- Ten sub-modes are wired: 15A, 30A, 60A–60E, 120D, 120E and 300A.
+- A decode is the same `<to> <from> <grid|report>` as FT8/FT4, since Q65
+  carries the same 77-bit message. Unlike JT65/JT9, Q65 carries a CRC, so a
+  decode is checksummed rather than a claim.
+- On the longer sub-modes expect the list to fill in well after the period
+  ends: a Q65-300 scan is tens of seconds of work over a five-minute slot.
+
 ## Propagation heat map
 
 Everything the station hears becomes evidence about the ionosphere, and the
@@ -223,6 +343,14 @@ decodes, and the logbook.
   control point per hop.
 - **ALL BANDS** gives every band its own hue, **ONE BAND** runs a
   single band through a blue → green → yellow → red ramp. The same picture can be switched on under the flat map in the operating panel.
+- **NIGHT** shades the night side and the twilight on the flat maps, so the grey
+  line is on the same picture.
+
+The **BANDS** window adds two things worth knowing beside a forecast: the
+NCDXF/IARU **IBP beacon** on each of the five beacon frequencies right now, with
+its bearing and distance, and the **meteor showers** active today with their
+radiants placed for your locator. The aurora panel shows the last day of
+**observed Kp** beside the forecast.
 
 ## PSK31 and RTTY
 
@@ -1086,6 +1214,19 @@ brew install pkg-config cmake autoconf automake libtool opus
   Debian/Ubuntu, `libfdk-aac` on Arch, `brew install fdk-aac` on macOS, or
   `libfdk-aac-2.dll` beside the executable on Windows. See
   `vendor/fdk-aac/PROVENANCE.md`.
+- **libnrsc5** is optional and a *runtime* dependency as well. It is nrsc5's
+  decoder library, which **HD Radio** is decoded with, and none of it is built
+  into sdroxide: HD Radio's HDC audio codec is proprietary, and the patched
+  faad2 that decodes it lives inside that library. sdroxide looks for it at
+  startup; without it the **HD RADIO** mode is greyed out and says why. Few
+  distributions package it (`nrsc5-git` on the AUR, `nrsc5` in nixpkgs), so it
+  is usually built from [theori-io/nrsc5](https://github.com/theori-io/nrsc5)
+  with its own CMake — `sudo make install` puts it in `/usr/local/lib`, where
+  sdroxide looks too. Beside the executable works on every platform, and
+  `SDROXIDE_NRSC5_LIB` names one anywhere else. It has been checked against
+  nrsc5 3.2.0 and upstream's current master. A library built with
+  `-DUSE_FAAD2=OFF` finds stations but cannot play them, and the HD Radio
+  window says that as well.
 
 For the **SoapySDR** backend you need its development libraries and the driver
 module(s) for your radio (e.g. `soapysdr`, `soapysdr-module-hackrf`,
@@ -1537,7 +1678,7 @@ way.
 | `--freq <HZ>` | Center frequency in Hz (default: where the last session was left; `14200000` on a first run). |
 | `--rate <HZ>` | Sample rate in Hz (default: from config). |
 | `--gain <DB>` | Overall RX gain in dB (default: hardware AGC / moderate). |
-| `--mode <MODE>` | Initial mode: `USB LSB CW AM SAM NFM WFM DIGU DIGL DSB ISB SPEC FT8 FT4 FT2 PSK RTTY OLIVIA THOR FSQ HELL SSTV RIFP WEFAX RFPAINT RADE ADS-B VDL2 ACARS`. Default: the mode the last session was left in. |
+| `--mode <MODE>` | Initial mode, case-insensitive: `LSB USB CW AM SAM NFM WFM DRM ADS-B VDL2 AIS DIGU DIGL DSB ISB SPEC FT8 FT4 FT2 JS8 WSPR PI4 MSK144 JT65 JT9 FST4 Q65 FSK441 PSK RTTY RTTY-FM PACKET PACKET-HF APRS SSTV SSTV-FM RIFP WEFAX NAVTEX ACARS OLIVIA THOR FSQ ATCHAT HELL RFPAINT RADE HFDL`, and `"HD RADIO"` (the one name with a space in it, so it needs the quotes). Default: the mode the last session was left in. |
 | `--antenna <NAME>` | RX antenna port, as the device names it (`LNAH`, `TX/RX`; see `--probe`). Default: the port the last session was left on. |
 | `--tx-antenna <NAME>` | TX antenna port, likewise (`BAND1`, `BAND2`). |
 | `--server` | Run as a server: HTTP web client + WebSocket streaming backend. |
@@ -1623,3 +1764,6 @@ Corresponding Source.** Using sdroxide on your own machine changes nothing. The
 model is confined to the `sdroxide-deepcw` crate, and the wasm web client links
 none of it.
 
+The grey-line shade, the IBP beacon schedule, the meteor-shower calendar and the
+Kp history are adapted from ideas in
+[OpenHamClock](https://github.com/accius/openhamclock) (MIT).

@@ -32,6 +32,38 @@ const CHANNELS: &[(u32, &str)] = &[
     (136_700_000, "136.700"),
 ];
 
+/// The header row: the level, the frame counts, CLEAR RX and SAVE. `status`
+/// is the app's `digi_status`, which SAVE writes from.
+///
+/// Wrapped: on a phone the row is wider than the screen, and a plain one ran
+/// SAVE off its edge.
+pub(super) fn acars_header(
+    ui: &mut egui::Ui,
+    st: &AcarsStatus,
+    status: Option<&sdroxide_types::DigiStatus>,
+    cmds: &mut Vec<Command>,
+) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("ACARS").strong().color(theme::CYAN()));
+        // The audio level: ACARS speaks in bursts, and the meter is how an
+        // operator tells "nothing on this channel" from "nothing decoded".
+        ui.add(
+            egui::ProgressBar::new(st.level.clamp(0.0, 1.0))
+                .desired_width(70.0)
+                .fill(theme::CYAN_DIM()),
+        )
+        .on_hover_text("Audio in the decoder's passband.");
+        ui.label(
+            RichText::new(format!("{} frames · {} bad", st.frames, st.bad))
+                .size(10.0)
+                .color(if st.bad > 0 { theme::YELLOW() } else { theme::CYAN_DIM() }),
+        )
+        .on_hover_text("Blocks that framed, and blocks whose check sequence failed.");
+        super::clear_rx_chip_at(ui, cmds, true);
+        super::save_rx_chip_for(ui, status);
+    });
+}
+
 impl SdroxideApp {
     pub(in crate::app) fn acars_panel(
         &mut self,
@@ -45,24 +77,7 @@ impl SdroxideApp {
             return;
         };
 
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("ACARS").strong().color(theme::CYAN()));
-            // The audio level: ACARS speaks in bursts, and the meter is how an
-            // operator tells "nothing on this channel" from "nothing decoded".
-            ui.add(
-                egui::ProgressBar::new(st.level.clamp(0.0, 1.0))
-                    .desired_width(70.0)
-                    .fill(theme::CYAN_DIM()),
-            )
-            .on_hover_text("Audio in the decoder's passband.");
-            ui.label(
-                RichText::new(format!("{} frames · {} bad", st.frames, st.bad))
-                    .size(10.0)
-                    .color(if st.bad > 0 { theme::YELLOW() } else { theme::CYAN_DIM() }),
-            )
-            .on_hover_text("Blocks that framed, and blocks whose check sequence failed.");
-            self.clear_rx_chip(ui, cmds);
-        });
+        acars_header(ui, &st, self.digi_status.as_ref(), cmds);
 
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("CHANNEL").size(10.0).weak());

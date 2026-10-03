@@ -159,6 +159,7 @@ impl WefaxController {
             tx_even: false,
             transmitting: false,
             tx_watchdog: false,
+            tx_refused: None,
             transcript: Vec::<TranscriptLine>::new(),
             config: self.cfg.clone(),
             text_rx: String::new(),
@@ -177,6 +178,7 @@ impl WefaxController {
             clock_offset_s: None,
             cw: None,
             wspr: None,
+            pi4: None,
             qso: None,
         }
     }

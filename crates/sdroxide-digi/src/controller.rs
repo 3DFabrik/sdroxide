@@ -116,6 +116,13 @@ pub enum DigiAction {
     /// emitted by diff, so decoding the *same* station twice running — the
     /// common case in a QSO — would stop re-reporting it.
     RadeCallsign { call: String, snr_db: f32, freq_hz: f64 },
+    /// RADE: a signal is in sync but has not identified itself yet, so the
+    /// engine should tell the reporting networks we are hearing *something*.
+    ///
+    /// An event rather than a status field because it is a report to send, not
+    /// a value to display, and it must be paced (see the controller) rather
+    /// than emitted on every poll.
+    RadePresence { snr_db: f32 },
     /// CW for the *rig's* keyer to send, rather than sidetone for the engine to
     /// transmit. A transceiver in CW mode keys its own transmitter and ignores
     /// what arrives at its sound card, so on a CAT rig this is the only route
@@ -129,6 +136,11 @@ pub enum DigiAction {
     SendCw { text: String, seconds: f32 },
     /// Stop CW the rig is part way through sending.
     AbortCw,
+    /// PI4: what a completed one-minute cycle's search decoded.
+    ///
+    /// Not `Decodes`, for the same reason [`DigiAction::WsprSpots`] is not: a
+    /// beacon reception is a measurement, not a message addressed to anyone.
+    Pi4Spots(Vec<sdroxide_types::Pi4Spot>),
 }
 
 struct DecodeJob {

@@ -804,11 +804,32 @@ pub enum Command {
     SetAdsbConfig(crate::AdsbSettings),
 
     /// Whether the QO-100 beacon decoder runs, and how wide it searches
-    /// around [`crate::QO100_BEACON_HZ`]. The engine persists this and
-    /// echoes it back in [`crate::RadioState`], so there is no apply step —
-    /// the same convention [`Command::SetIsmConfig`] follows. Appended for
-    /// the usual reason: postcard numbers variants by position.
+    /// around [`crate::QO100_BEACON_HZ`]. The engine echoes it back in
+    /// [`crate::RadioState`], so there is no apply step and no way for the
+    /// panel's copy and the engine's to drift apart — the same convention
+    /// [`Command::SetIsmConfig`] follows.
+    ///
+    /// It is *not* written to disk, which is where the resemblance to
+    /// `SetIsmConfig` stops: that one is kept in `ism.json` and comes back
+    /// next run, while this is session-scoped and the decoder starts off
+    /// again. Deliberately — the lane costs a downconversion and a worker
+    /// thread, and a station that switched it on once should not find it
+    /// running on its own. [`Command::SetHfdlConfig`] is the other lane that
+    /// works this way.
+    ///
+    /// Appended for the usual reason: postcard numbers variants by position.
     SetQo100Config(crate::Qo100Settings),
+
+    /// Whether the HFDL (ARINC 635) decoder runs, and which channel it
+    /// centres on. The engine echoes it back in [`crate::RadioState`], so
+    /// there is no apply step and no way for the panel's copy and the
+    /// engine's to drift apart — but it is held for the session only and
+    /// never written to disk, so the decoder starts off again next run. That
+    /// is deliberate: the lane costs a downconversion and a worker thread,
+    /// and a station that switched it on once should not find it running on
+    /// its own. Appended for the usual reason: postcard numbers variants by
+    /// position.
+    SetHfdlConfig(crate::HfdlSettings),
 
     /// Start (`true`) or stop (`false`) recording the receiver's raw I/Q to a
     /// WAV file (issue #217).
@@ -1113,4 +1134,16 @@ pub enum Command {
     ///
     /// Appended for the usual reason — postcard numbers variants by position.
     ProfileDelete(String),
+    /// Forget the operator's per-mode settings overrides — for one mode, or
+    /// (`None`) for every mode — and put the defaults back on any receiver
+    /// sitting in a mode that was cleared.
+    ///
+    /// The counterpart of the overrides the engine records when a setting is
+    /// changed while a mode is selected. This is the "put it back the way the
+    /// mode ships" an operator reaches for after fiddling; the values it
+    /// restores are [`Mode::default_profile`]'s. Appended for the usual reason
+    /// too.
+    ResetModeDefaults {
+        mode: Option<Mode>,
+    },
 }

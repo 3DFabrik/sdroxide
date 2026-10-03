@@ -24,9 +24,12 @@ pub(in crate::app) mod awards;
 pub(in crate::app) mod bands;
 pub(in crate::app) mod drm;
 pub(in crate::app) mod frame;
+pub(in crate::app) mod grid_tracker;
 pub(in crate::app) mod hd;
+pub(in crate::app) mod hfdl;
 pub(in crate::app) mod ism;
 pub(in crate::app) mod logbook;
+pub(in crate::app) mod morse;
 pub(in crate::app) mod net;
 pub(in crate::app) mod panels;
 pub(crate) mod persist;
@@ -34,6 +37,7 @@ pub(in crate::app) mod publicsdr;
 pub(in crate::app) mod qo100;
 pub(in crate::app) mod rds;
 pub(in crate::app) mod sat;
+pub(in crate::app) mod save_text;
 pub(in crate::app) mod scanner;
 pub(in crate::app) mod settings;
 pub(in crate::app) mod solar;
@@ -63,8 +67,8 @@ use self::panels::fsq::fsq_load_contacts;
 use self::panels::rf_paint::RfPaintUi;
 use self::panels::sstv::SstvUi;
 use self::persist::{
-    load_alerts_settings, load_broadcast_stations, load_qso_log, load_speech_settings,
-    load_ui_settings,
+    load_alerts_settings, load_broadcast_stations, load_morse_progress, load_qso_log,
+    load_speech_settings, load_ui_settings,
 };
 use self::settings::servers::TciServerStatus;
 use self::settings::{SatEditState, SettingsTab, TestOutcome};
@@ -444,6 +448,17 @@ pub struct SdroxideApp {
     /// frequency offset, decoded telemetry — as last reported by the engine.
     /// `None` until the decoder has been enabled at least once this session.
     qo100_status: Option<sdroxide_types::Qo100Status>,
+    /// The HFDL ground-network decoder's live status — level, decode count and
+    /// the rolling decode log — as last reported by the engine. `None` until
+    /// the decoder has been enabled at least once this session.
+    hfdl_status: Option<sdroxide_types::HfdlStatus>,
+    /// HFDL: the aircraft plot table and the map's pan/zoom and selection. Its
+    /// own table rather than the decode log's, so an aircraft stays on the map
+    /// after its earliest decodes have scrolled out of the log.
+    hfdl_map: crate::hfdl_map::HfdlMapState,
+    /// HFDL: filter for the decode log; matches a kind, a ground station or the
+    /// payload details.
+    hfdl_filter: String,
     show_settings: bool,
     /// Scroll the Settings window back to its tab bar on the frame it opens.
     /// The window's scroll offset is egui memory, which outlives both the
@@ -471,6 +486,33 @@ pub struct SdroxideApp {
     navtex_open: Option<usize>,
     nr_popup_since: Option<f64>,
     rec_popup_since: Option<f64>,
+    /// When the running MP3 recording should stop, Unix UTC seconds, and the
+    /// preset in **seconds** that asked for it — armed by the REC popup's
+    /// "quick clip" and "stop after" chips. UI-owned: the engine's
+    /// [`sdroxide_types::Command::SetRecording`] carries no deadline, so this
+    /// is a per-tab timer ticked once a frame rather than a setting, and it
+    /// does not survive a restart — which is fine for a "this over"
+    /// convenience (issue #520). Cleared when the recording stops for any
+    /// reason.
+    ///
+    /// The preset is carried rather than worked back out of the deadline
+    /// because the remaining time does not identify it: a quarter of an hour
+    /// left is a quarter of an hour left whether the operator asked for 15
+    /// minutes or is most of the way through 90, and the chip that reads as
+    /// armed has to be the one they pressed. Seconds rather than minutes
+    /// because a quick clip is 30 s long.
+    recording_stop_at: Option<(i64, u16)>,
+    /// A quick clip asked for while no recording was running, `(asked_at,
+    /// secs)`, waiting for the recorder to actually start.
+    ///
+    /// A clip's deadline cannot be armed at the press: the timer tick drops
+    /// any deadline whose recording is not running, so an early deadline
+    /// would be cleared on the next frame before the start took. The request
+    /// rides here instead and is armed the first frame the recording is seen
+    /// running — measured from that frame, so the clip is a full span — or
+    /// dropped if the start never takes. See
+    /// [`Self::poll_recording_timer`].
+    rec_clip: Option<(i64, u16)>,
     /// Fade clock for the receive-filter popup behind the BW chip, like
     /// `nr_popup_since`.
     bw_popup_since: Option<f64>,
@@ -478,6 +520,19 @@ pub struct SdroxideApp {
     /// and the TONE encoder — like `tone_popup_since`.
     duplex_popup_since: Option<f64>,
     rpt_tone_popup_since: Option<f64>,
+    /// Whether the band/mode selector is docked beside the panadapter rather
+    /// than opened from the top-bar chip, and whether the docked column is
+    /// currently shown. Session UI state: hiding the column leaves it docked,
+    /// so the band chip brings it straight back. A window too narrow for the
+    /// column (see `band_dock_room`) leaves both alone and simply does not draw
+    /// it, so widening the window again brings it back.
+    band_docked: bool,
+    band_dock_visible: bool,
+    /// How wide the docked column may be this frame, or `None` where it cannot
+    /// dock — see [`top_bar::band_dock_room`]. Settled at the top of the frame
+    /// from this app's own column, before the top bar draws the chip that
+    /// shows and hides it.
+    band_dock_room: Option<f32>,
     /// The layout in force last frame, so a change can re-apply the style
     /// metrics (chip padding, text sizes) exactly once instead of every frame.
     tier: crate::layout::Tier,
@@ -532,6 +587,9 @@ pub struct SdroxideApp {
     /// Screen state, not the operator's: the buttons themselves live in
     /// `DigiConfig`.
     cw_macro_edit: bool,
+    /// The keyboard-mode message editor (`DigiConfig::text_macros`), the same
+    /// window on its own list.
+    text_macro_edit: bool,
     /// Whether the CW panel's keyboard-as-straight-key mode is engaged (issue
     /// #322). Screen state: the keyer's engagement lives in the controller,
     /// and this is the toggle's face and where the key is read.
@@ -728,11 +786,19 @@ pub struct SdroxideApp {
     show_bands: bool,
     /// The propagation field rendered to pixels, rebuilt only when it moves.
     prop_heat: crate::prop_map::PropHeat,
+    /// The grey-line (night/twilight) overlay rendered to pixels, rebuilt at
+    /// most once a minute.
+    night_shade: crate::prop_map::NightShade,
     /// WSPR receptions, newest first: what this station decoded, and — when the
     /// WSPRnet download is on — who decoded this station. Capped at
     /// [`crate::app::panels::wspr::WSPR_SPOT_ROWS`]; the propagation store keeps
     /// the long view, this is only what the panel lists.
     wspr_spots: Vec<sdroxide_types::WsprSpot>,
+    /// PI4 receptions, newest first — what this station decoded. Capped at
+    /// [`crate::app::panels::pi4::PI4_SPOT_ROWS`]. No propagation-store
+    /// counterpart, unlike `wspr_spots`: a PI4 message carries no grid
+    /// square, so there is no path to fold into the map.
+    pi4_spots: Vec<sdroxide_types::Pi4Spot>,
     /// Location of the decode row hovered this frame, shown on the map as a
     /// bright yellow dot. Frame-scoped (set by the decode list, read by the map).
     digi_hover_ll: Option<(f64, f64)>,
@@ -745,6 +811,8 @@ pub struct SdroxideApp {
     flags: crate::flags::Flags,
     /// Logbook overlay open state, and the in-progress new/edit entry (if any).
     show_logbook: bool,
+    /// The Morse trainer window and its persisted progress.
+    morse: morse::MorseState,
     /// The Winlink mail window. Holds its own view state; the mailbox itself
     /// lives engine-side and is read a page at a time.
     pub(in crate::app) mail: winlink::MailUi,
@@ -858,6 +926,9 @@ pub struct SdroxideApp {
     pending_uploads: Vec<(u64, String, Vec<UploadTarget>)>,
     /// Awards dashboard open state + band filter ("" = all bands).
     show_awards: bool,
+    /// Grid tracker window open state, and its pan/zoom + heard-layer toggle.
+    show_grid: bool,
+    grid_tracker: crate::app::grid_tracker::GridTracker,
     awards_band: String,
     /// Cached award tally, keyed by (log length, band filter).
     awards_cache: Option<(usize, String, sdroxide_types::Awards)>,
@@ -1348,6 +1419,9 @@ impl SdroxideApp {
             ism_sort: ism::IsmSort::default(),
             ism_sort_desc: true,
             qo100_status: None,
+            hfdl_status: None,
+            hfdl_map: crate::hfdl_map::HfdlMapState::default(),
+            hfdl_filter: String::new(),
             show_settings: false,
             settings_scroll_top: true,
             voice: sdroxide_types::VoiceStatus::default(),
@@ -1361,9 +1435,14 @@ impl SdroxideApp {
             navtex_open: None,
             nr_popup_since: None,
             rec_popup_since: None,
+            recording_stop_at: None,
+            rec_clip: None,
             bw_popup_since: None,
             duplex_popup_since: None,
             rpt_tone_popup_since: None,
+            band_docked: false,
+            band_dock_visible: false,
+            band_dock_room: None,
             // Corrected on the first frame, once the viewport size is known.
             tier: crate::layout::Tier::Desktop,
             ptt: Default::default(),
@@ -1439,6 +1518,7 @@ impl SdroxideApp {
             aprs_lon_buf: String::new(),
             digi_cfg_seeded: false,
             cw_macro_edit: false,
+            text_macro_edit: false,
             cw_straight: false,
             cw_key_down: false,
             digi_tx_hz_edit: String::new(),
@@ -1453,11 +1533,14 @@ impl SdroxideApp {
             digi_stations: Default::default(),
             prop: Default::default(),
             prop_heat: Default::default(),
+            night_shade: Default::default(),
             wspr_spots: Vec::new(),
+            pi4_spots: Vec::new(),
             digi_hover_ll: None,
             digi_free_text: String::new(),
             flags: Default::default(),
             show_logbook: false,
+            morse: morse::MorseState::new(load_morse_progress(storage)),
             mail: winlink::MailUi::default(),
             log_edit: None,
             spots: Vec::new(),
@@ -1513,6 +1596,8 @@ impl SdroxideApp {
             callsign_cache: Default::default(),
             pending_uploads: Vec::new(),
             show_awards: false,
+            show_grid: false,
+            grid_tracker: crate::app::grid_tracker::GridTracker::default(),
             awards_band: String::new(),
             awards_cache: None,
             awards_heat: None,

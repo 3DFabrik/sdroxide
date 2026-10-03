@@ -243,6 +243,7 @@ impl TextModemController {
             tx_even: false,
             transmitting: self.keyed,
             tx_watchdog: false,
+            tx_refused: None,
             transcript: Vec::<TranscriptLine>::new(),
             config: self.cfg.clone(),
             text_rx: self.rx_text.clone(),
@@ -261,6 +262,7 @@ impl TextModemController {
             clock_offset_s: None,
             cw: None,
             wspr: None,
+            pi4: None,
             qso: None,
         }
     }

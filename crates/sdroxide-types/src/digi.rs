@@ -516,6 +516,10 @@ pub struct DigiStatus {
     /// will take it next. `None` in every other mode, as `cw` and `js8` are.
     #[serde(default)]
     pub wspr: Option<crate::WsprStatus>,
+    /// PI4: where the one-minute beacon cycle is, and whether this slot's
+    /// audio is still being searched. `None` in every other mode.
+    #[serde(default)]
+    pub pi4: Option<crate::Pi4Status>,
     /// The contact in progress, beyond the callsign and grid above. `None`
     /// whenever no station is being worked. See [`QsoLive`].
     #[serde(default)]
@@ -528,6 +532,11 @@ pub struct DigiStatus {
     /// peer that matches the protocol version but not this build.
     #[serde(default)]
     pub acars: Option<AcarsStatus>,
+    /// Why a key-up was refused or is armed with nothing to send — an empty
+    /// message box, most often. `None` when there is nothing to say. A message
+    /// rather than a flag so each mode can name its own reason.
+    #[serde(default)]
+    pub tx_refused: Option<String>,
 }
 
 /// The running detail of the contact in progress: when it started and what has
@@ -551,7 +560,7 @@ pub struct QsoLive {
 }
 
 /// Live state of the CW decoder.
-#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct CwStatus {
     /// The decoder is copying: its timing fit is good and holding steady.
     pub locked: bool,
@@ -563,6 +572,22 @@ pub struct CwStatus {
     /// The tone actually being copied, in Hz above the dial — the operator's
     /// pitch plus whatever the decoder's AFC has pulled to stay on the signal.
     pub tone_hz: f32,
+    /// Whether the radio is sending from its own keyer rather than from our
+    /// sidetone.
+    ///
+    /// True over the control port: the text goes to the rig and the rig times
+    /// the elements, so there is nothing between the keyboard and the air for
+    /// a hand to drive, and the straight key cannot engage. The panel needs
+    /// the answer because the operator cannot see it — the KEY button used to
+    /// light up and then key nothing, which is the whole of issue #495. False
+    /// is the ordinary case and the safe default: an SDR, or a rig on the
+    /// sound-card route, keys from the sidetone we generate.
+    pub rig_keys_itself: bool,
+    /// What the straight key decoded of *our own* sending, so the operator can
+    /// see the characters their hand produced. Empty in every other mode and
+    /// whenever the key has not been used.
+    #[serde(default)]
+    pub sent_text: String,
 }
 
 /// Live state of the RADE V1 modem.
@@ -796,6 +821,96 @@ impl NavtexMessage {
     pub fn is_mandatory(&self) -> bool {
         matches!(self.kind, 'A' | 'B' | 'D')
     }
+
+    /// The time-of-day a NAVTEX body states, as `(hour, minute)` UTC, if it
+    /// names one.
+    ///
+    /// Time is not a message class: a NAVTEX station's time broadcasts and the
+    /// `AT 1200 UTC` in a gale warning are ordinary text that happens to carry
+    /// a clock reading, so this reads the body rather than the header. It is a
+    /// convenience for the reader — a warning is nearly always read against
+    /// when it was issued, and picking the figure out of a column of positions
+    /// by eye is the tedious part — not a synchronisation source: sdroxide
+    /// never sets the system clock from it (issue #212).
+    ///
+    /// Only a four-digit time that is *marked* as a time counts — followed by
+    /// `UTC`, or run into a `Z` — so a bare four-digit number in a position or
+    /// a serial is not mistaken for one. `HH:MM` is accepted too, since
+    /// stations send it. The first such reading in the body wins; a message
+    /// that states several is a forecast table, and the first is its header
+    /// time.
+    #[must_use]
+    pub fn body_time_utc(&self) -> Option<(u8, u8)> {
+        parse_navtex_time(&self.text)
+    }
+}
+
+/// Pull the first marked UTC time-of-day out of a NAVTEX body.
+///
+/// Free function rather than a method's private detail so the tests can reach
+/// it with raw text, including the shapes a real station sends.
+pub(crate) fn parse_navtex_time(text: &str) -> Option<(u8, u8)> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i + 3 < bytes.len() {
+        // A four-digit run, optionally written `HH:MM`.
+        let whole_word = i == 0 || !bytes[i - 1].is_ascii_digit();
+        let digits = if whole_word
+            && bytes[i].is_ascii_digit()
+            && bytes[i + 1].is_ascii_digit()
+            && bytes.get(i + 2) == Some(&b':')
+            && bytes.get(i + 3).is_some_and(u8::is_ascii_digit)
+            && bytes.get(i + 4).is_some_and(u8::is_ascii_digit)
+        {
+            // Colon form: HH:MM. Whole-word like the bare form below, or the
+            // tail of a longer number reads as an hour: `123:45` is not 23:45.
+            Some((
+                (bytes[i] - b'0') * 10 + (bytes[i + 1] - b'0'),
+                (bytes[i + 3] - b'0') * 10 + (bytes[i + 4] - b'0'),
+                5usize,
+            ))
+        } else if whole_word
+            && bytes[i..].len() >= 4
+            && bytes[i..i + 4].iter().all(u8::is_ascii_digit)
+        {
+            // Bare form: HHMM, and `whole_word` is what keeps the tail of a
+            // longer number from being read as one.
+            Some((
+                (bytes[i] - b'0') * 10 + (bytes[i + 1] - b'0'),
+                (bytes[i + 2] - b'0') * 10 + (bytes[i + 3] - b'0'),
+                4usize,
+            ))
+        } else {
+            None
+        };
+        if let Some((hh, mm, len)) = digits {
+            // Marked as a time: the token right after the digits says so. This
+            // is what keeps a bare HHMM in a position, a serial or a count from
+            // being read as a clock. Two shapes count, and nothing else:
+            //
+            // * the digits run straight into a `Z` — `1200Z`, the maritime
+            //   shorthand for "1200 UTC";
+            // * the next word is `UTC`, after any spaces — `1200 UTC`.
+            //
+            // Matched over bytes rather than a `&str` slice: `word[..3]` panics
+            // where byte 3 is inside a multi-byte character, and the body is
+            // only ASCII when it came from the decoder — a `NavtexMessage`
+            // arriving over the wire carries whatever the peer put in it.
+            let after = &text[i + len..];
+            let zulu = after.as_bytes().first().is_some_and(|c| c.eq_ignore_ascii_case(&b'Z'));
+            let word = after.trim_start().as_bytes();
+            let utc = word.len() >= 3
+                && word[..3].eq_ignore_ascii_case(b"UTC")
+                && word.get(3).is_none_or(|c| !c.is_ascii_alphabetic());
+            if hh < 24 && mm < 60 && (zulu || utc) {
+                return Some((hh, mm));
+            }
+            i += len;
+            continue;
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Messages kept. A station transmits on a ten-minute slot every four hours
@@ -924,6 +1039,7 @@ impl DigiStatus {
             tx_even: config.tx_even,
             transmitting: false,
             tx_watchdog: false,
+            tx_refused: None,
             transcript: Vec::new(),
             config,
             text_rx: String::new(),
@@ -942,6 +1058,7 @@ impl DigiStatus {
             clock_offset_s: None,
             cw: None,
             wspr: None,
+            pi4: None,
             qso: None,
         }
     }
@@ -1214,8 +1331,13 @@ impl HellVariant {
     }
 }
 
-/// One of the operator's CW message buttons — what the chip says, and what it
-/// sends (issue #374).
+/// One of the operator's message buttons — what the chip says, and what it
+/// sends (issues #374, #463).
+///
+/// Shared by the CW panel (through [`DigiConfig::cw_macros`]) and the keyboard
+/// modes (through [`DigiConfig::text_macros`]): the same label-and-text shape,
+/// drawn by the same control, kept in two lists because the two kinds of
+/// message differ.
 ///
 /// The label is kept apart from the text because a chip has to be readable at a
 /// glance and the text it sends is a sentence: a button showing
@@ -1256,6 +1378,62 @@ impl CwMacro {
     /// other station's callsign, so there is nothing true to substitute.
     pub fn expand(&self, my_call: &str, my_grid: &str) -> String {
         self.text.replace("{MYCALL}", my_call).replace("{MYGRID}", my_grid)
+    }
+}
+
+/// How the text drawn into a transmitted SSTV picture looks: the banner strip's
+/// gradient and outline, and the slot message's ink.
+///
+/// Its own struct rather than a dozen more `DigiConfig` fields, because it is
+/// one idea — "how do I want my picture to look" — and because `DigiConfig`
+/// rides the wire whole: one appended field means one protocol bump instead of
+/// six. The defaults reproduce the original look exactly (strip fades to black,
+/// banner text plain, message white on black), so an existing `digi.json` and
+/// an operator who never opens the editor both see no change.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SstvStyle {
+    /// Fade the banner strip to [`Self::banner_fill2`] at its bottom edge
+    /// instead of to black. The top colour is
+    /// [`DigiConfig::sstv_banner_fill`](DigiConfig::sstv_banner_fill).
+    pub banner_gradient: bool,
+    /// The colour the strip's gradient reaches at its bottom, when
+    /// [`Self::banner_gradient`] is on.
+    pub banner_fill2: [u8; 3],
+    /// Draw the banner text with an outline in [`Self::banner_outline_ink`].
+    pub banner_outline: bool,
+    pub banner_outline_ink: [u8; 3],
+    /// Fade the banner text from its ink to [`Self::banner_ink2`] across the
+    /// strip, left to right.
+    pub banner_ink_gradient: bool,
+    pub banner_ink2: [u8; 3],
+    /// Override every colour the picture's text would use — the banner's ink
+    /// and its gradient, and the slot message — with a horizontal rainbow.
+    /// Takes precedence over all of them.
+    pub rainbow_text: bool,
+    /// The colour the slot message is printed in.
+    pub message_ink: [u8; 3],
+    /// Draw the message text with an outline in [`Self::message_outline_ink`].
+    /// On by default, which is what the message has always been: white text
+    /// with a black edge, readable over any picture.
+    pub message_outline: bool,
+    pub message_outline_ink: [u8; 3],
+}
+
+impl Default for SstvStyle {
+    fn default() -> Self {
+        SstvStyle {
+            banner_gradient: false,
+            banner_fill2: [0, 0, 0],
+            banner_outline: false,
+            banner_outline_ink: [0, 0, 0],
+            banner_ink_gradient: false,
+            banner_ink2: [0, 0, 0],
+            rainbow_text: false,
+            message_ink: [255, 255, 255],
+            message_outline: true,
+            message_outline_ink: [0, 0, 0],
+        }
     }
 }
 
@@ -1934,6 +2112,59 @@ pub struct DigiConfig {
     /// that quietly kept its spots to itself would be missing the mode.
     #[serde(default = "yes")]
     pub wspr_upload: bool,
+    /// SSTV: how the text drawn into a transmitted picture looks — the banner
+    /// strip's gradient and outline, and the slot message's ink. See
+    /// [`SstvStyle`].
+    #[serde(default)]
+    pub sstv_style: SstvStyle,
+    /// CW: play the keyed sidetone through the local speakers as well as
+    /// sending it, so the operator hears what they are sending.
+    ///
+    /// Every other mode gets its feedback another way — the transmitted signal
+    /// is off the air, and a receiver that is not muted during the over lets
+    /// the operator hear it. On `Sound card (MCW)` the keyed tone goes to the
+    /// rig's sound card and nowhere else, so without this the operator sends in
+    /// silence. On by default; turn it off where the rig's own monitor or an
+    /// off-air copy already does the job, so the two do not double.
+    #[serde(default = "yes")]
+    pub cw_sidetone: bool,
+    /// CW: how long transmit is held after the last character or key release
+    /// before the carrier drops, in seconds. The idle between characters is
+    /// what makes typing feel like sending, and it is what a straight key
+    /// rests on between elements — but it has to end somewhere, and five
+    /// seconds is a long time to sit on an empty frequency. 0 drops transmit
+    /// as soon as the queue drains (subject to the straight key's hold).
+    #[serde(default = "cw_default_tx_idle_s")]
+    pub cw_tx_idle_s: f32,
+    /// FST4: the T/R period (15/30/60/120/300 s). The period is a property of
+    /// the contact rather than of the mode — all five share one waveform and
+    /// one message — so it is a setting here, exactly as JS8's speed is. See
+    /// [`crate::Fst4Period`].
+    #[serde(default)]
+    pub fst4_period: crate::Fst4Period,
+    /// Q65: the sub-mode — T/R period and tone-spacing letter together. The
+    /// sub-mode fixes both the period and the tone spacing rather than being
+    /// part of the mode, so it is a setting, exactly as FST4's period is. See
+    /// [`crate::Q65Mode`].
+    #[serde(default)]
+    pub q65_mode: crate::Q65Mode,
+    /// FSK441: the T/R period (15/30 s). A property of the contact rather than
+    /// of the mode — both periods share one waveform and one alphabet — so it
+    /// is a setting here. See [`crate::Fsk441Period`].
+    #[serde(default)]
+    pub fsk441_period: crate::Fsk441Period,
+    /// The same message buttons for the keyboard modes — PSK, RTTY, Olivia,
+    /// Thor: the working conditions or the weather an operator sends over and
+    /// over, typed once and kept across sessions (issue #463). A list of its
+    /// own rather than shared with the CW row above, because a CW abbreviation
+    /// and a PSK sentence are not the same message; identical in shape and
+    /// behaviour otherwise.
+    #[serde(default)]
+    pub text_macros: Vec<CwMacro>,
+}
+
+fn cw_default_tx_idle_s() -> f32 {
+    5.0
 }
 
 fn wspr_default_power() -> i16 {
@@ -2026,6 +2257,7 @@ impl Default for DigiConfig {
             cw_wpm: cw_default_wpm(),
             cw_farnsworth_wpm: 0.0,
             cw_macros: Vec::new(),
+            text_macros: Vec::new(),
             cw_speed_lock: false,
             cw_engine: crate::CwEngine::default(),
             send_on_enter: false,
@@ -2115,6 +2347,12 @@ impl Default for DigiConfig {
             wspr_hop: false,
             wspr_hop_bands: wspr_default_hop_bands(),
             wspr_upload: true,
+            sstv_style: SstvStyle::default(),
+            cw_sidetone: true,
+            cw_tx_idle_s: 5.0,
+            fst4_period: crate::Fst4Period::P60,
+            q65_mode: crate::Q65Mode::A30,
+            fsk441_period: crate::Fsk441Period::P30,
         }
     }
 }
@@ -3398,6 +3636,67 @@ mod tests {
         }
         // A known civil date: 2021-01-01 00:01:00 UTC.
         assert_eq!(ymd_hms_to_unix(2021, 1, 1, 0, 1, 0), 1_609_459_260);
+    }
+
+    /// The time a NAVTEX message states, in the shapes stations actually send
+    /// (issue #212).
+    #[test]
+    fn a_navtex_body_time_is_read_where_it_is_marked() {
+        // The two markings: `UTC` after a space, and the maritime `Z` suffix.
+        assert_eq!(parse_navtex_time("GALE WARNING AT 1200 UTC"), Some((12, 0)));
+        assert_eq!(parse_navtex_time("WIND 0900Z INCREASING"), Some((9, 0)));
+        // Lower case and the colon form a few stations use.
+        assert_eq!(parse_navtex_time("issued 1200 utc"), Some((12, 0)));
+        assert_eq!(parse_navtex_time("FROM 06:30 UTC"), Some((6, 30)));
+        // The first reading wins when a body states several — a forecast table
+        // is not a clock.
+        assert_eq!(parse_navtex_time("1200 UTC then 1800 UTC"), Some((12, 0)));
+    }
+
+    /// A four-digit number that is not marked as a time is not one: positions,
+    /// serials and counts are full of them.
+    #[test]
+    fn an_unmarked_number_is_not_a_time() {
+        assert_eq!(parse_navtex_time("5103N 00109E"), None, "a position");
+        assert_eq!(parse_navtex_time("SERIAL 1200"), None, "a bare count");
+        assert_eq!(parse_navtex_time("CHANNEL 3184"), None);
+        // A time of day out of range is not a time either — 2560 is a serial.
+        assert_eq!(parse_navtex_time("2560 UTC"), None, "hour 25");
+        assert_eq!(parse_navtex_time("1299 UTC"), None, "minute 99");
+        // The tail of a longer number must not be read as HHMM either, in
+        // both the bare and the colon form.
+        assert_eq!(parse_navtex_time("REF 11200 UTC"), None);
+        assert_eq!(parse_navtex_time("REF 123:45 UTC"), None);
+    }
+
+    /// A body is ASCII when it came from the decoder — the CCIR 476 alphabet
+    /// has nothing else in it — but a `NavtexMessage` also arrives over the
+    /// wire, carrying whatever the peer put in it. Reading one must not take
+    /// the panel down.
+    #[test]
+    fn a_body_that_is_not_ascii_is_read_without_panicking() {
+        // A character boundary three bytes into the word after the digits:
+        // slicing a `&str` there panics.
+        assert_eq!(parse_navtex_time("1200 \u{e9}\u{e9}"), None);
+        assert_eq!(parse_navtex_time("\u{e9}\u{e9}\u{e9} 1200 UTC"), Some((12, 0)));
+        assert_eq!(parse_navtex_time("1200\u{e9}"), None);
+    }
+
+    /// The accessor reads the body, and a message with no time says so.
+    #[test]
+    fn the_message_accessor_reads_the_body() {
+        let mut m = NavtexMessage {
+            station: 'F',
+            kind: 'A',
+            serial: 12,
+            text: "GALE WARNING\nAT 1200 UTC".into(),
+            at: 0,
+            complete: true,
+            lost: 0,
+        };
+        assert_eq!(m.body_time_utc(), Some((12, 0)));
+        m.text = "NAVAREA ONE".into();
+        assert_eq!(m.body_time_utc(), None);
     }
 }
 

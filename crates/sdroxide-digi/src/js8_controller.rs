@@ -1162,6 +1162,7 @@ impl DigiEngine for Js8Controller {
             tx_even: false,
             transmitting: self.keyed,
             tx_watchdog: false,
+            tx_refused: None,
             transcript: Vec::new(),
             config: self.cfg.clone(),
             text_rx: String::new(),
@@ -1188,6 +1189,7 @@ impl DigiEngine for Js8Controller {
             clock_offset_s: self.clock.offset_s(),
             cw: None,
             wspr: None,
+            pi4: None,
             qso: None,
         }
     }

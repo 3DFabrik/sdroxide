@@ -35,6 +35,7 @@ use std::time::Duration;
 use num_complex::Complex32;
 use sdroxide_dsp::Demodulator;
 use sdroxide_nrsc5::HdDemod;
+use sdroxide_nrsc5::Mode;
 use sdroxide_nrsc5::demod::FM_RATE_HZ;
 
 const TAPS: usize = 255;
@@ -47,6 +48,12 @@ fn main() {
         )
         .with_writer(std::io::stderr)
         .init();
+    // Without a library the demod starts no decoder and this would report a
+    // capture that never locks; say what is missing instead.
+    if let Some(why) = sdroxide_nrsc5::unavailable_reason() {
+        eprintln!("{why}\n(set {} to a libnrsc5 to use one elsewhere)", sdroxide_nrsc5::LIB_ENV);
+        std::process::exit(1);
+    }
     let a: Vec<String> = env::args().skip(1).collect();
     let (path, centre, chan) = (&a[0], a[1].parse::<f64>().unwrap(), a[2].parse::<f64>().unwrap());
     // The capture rate is not fixed: `--record-iq` files come at whatever the
@@ -67,7 +74,7 @@ fn main() {
     // The programme is selected once the station has announced it: the demod
     // ignores a programme the multiplex has not listed, and before the first
     // station information arrives it has listed none but HD-1.
-    let mut demod = HdDemod::new(chan_rate);
+    let mut demod = HdDemod::new(chan_rate, Mode::Fm);
 
     // Windowed-sinc low-pass, flat to the 200 kHz the digital sidebands reach,
     // down by `chan_rate / 2` where the decimated band folds, with the cutoff

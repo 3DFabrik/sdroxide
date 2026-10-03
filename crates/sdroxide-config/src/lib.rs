@@ -758,7 +758,7 @@ pub fn config_dir() -> Result<PathBuf, ConfigError> {
 /// migration and stays downgrade-safe.
 ///
 /// Only the files that describe *a radio* are scoped: `radio.json`,
-/// `session.json`, `scanner.json`, `tciserver.json`, `rigctld.json`,
+/// `session.json`, `scanner.json`, `modeprofiles.json`, `tciserver.json`, `rigctld.json`,
 /// `wsjtx.json`. Everything the operator shares across radios — memories,
 /// band stacks, the logbook, `config.toml` — stays on the root free functions.
 /// A named operator's UI preferences live under `users/<name>/`, which is a
@@ -841,6 +841,20 @@ impl Store {
         }
     }
 
+    /// [`Store::load`], but `None` rather than the defaults when there is no
+    /// file to read — missing, unreadable, or quarantined for not parsing.
+    fn load_if_present<T: serde::de::DeserializeOwned>(&self, file: &str) -> Option<T> {
+        let dir = self.dir().ok()?;
+        let FileText::Text(text) = read_config_text(&dir, file) else { return None };
+        match serde_json::from_str(&text) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                quarantine_unreadable(&dir, file, &e);
+                None
+            }
+        }
+    }
+
     fn save<T: serde::Serialize>(&self, file: &str, value: &T) -> Result<(), ConfigError> {
         let dir = self.dir()?;
         let text = serde_json::to_string_pretty(value).expect("serialize");
@@ -903,12 +917,39 @@ impl Store {
 
     /// The remembered dial and mode, or the defaults on a first run.
     pub fn load_session(&self) -> Session {
-        let s: Session = self.load("session.json");
-        if s.is_usable() { s.sanitized() } else { Session::default() }
+        self.load_session_if_present().unwrap_or_default()
+    }
+
+    /// The remembered session, or `None` when there is not one to restore —
+    /// no `session.json`, or one that failed [`Session::is_usable`].
+    ///
+    /// The engine has to tell "a session was restored" from "this is a first
+    /// run" apart: a restored session's levels are recorded as the per-mode
+    /// values of the mode it was left in, and a first run's must not be. Those
+    /// are [`Session::default`]'s, which nobody chose, and would be recorded as
+    /// departures from a mode that starts differently — FT8's slow AGC, for
+    /// one.
+    pub fn load_session_if_present(&self) -> Option<Session> {
+        // The file has to be *there*: [`Session::default`] is itself usable, so
+        // `load` alone cannot tell a first run from a session that was saved.
+        let s: Session = self.load_if_present("session.json")?;
+        if s.is_usable() { Some(s.sanitized()) } else { None }
     }
 
     pub fn save_session(&self, session: &Session) -> Result<(), ConfigError> {
         self.save("session.json", session)
+    }
+
+    /// This station's per-mode settings overrides, or none on a first run.
+    pub fn load_mode_profiles(&self) -> sdroxide_types::ModeProfiles {
+        self.load("modeprofiles.json")
+    }
+
+    pub fn save_mode_profiles(
+        &self,
+        profiles: &sdroxide_types::ModeProfiles,
+    ) -> Result<(), ConfigError> {
+        self.save("modeprofiles.json", profiles)
     }
 
     pub fn load_scanner_config(&self) -> sdroxide_types::ScannerConfig {
@@ -1718,6 +1759,17 @@ pub fn load_memory_folders() -> Vec<sdroxide_types::MemoryFolder> {
 
 pub fn save_memory_folders(folders: &[sdroxide_types::MemoryFolder]) -> Result<(), ConfigError> {
     save_json("memory_folders.json", &folders)
+}
+
+/// The Morse trainer's progress: which Koch characters are unlocked and the
+/// running score. Its own file, like the memory list, so a version without the
+/// trainer leaves it alone rather than overwriting it.
+pub fn load_morse_progress() -> sdroxide_types::MorseProgress {
+    load_json("morse.json")
+}
+
+pub fn save_morse_progress(progress: &sdroxide_types::MorseProgress) -> Result<(), ConfigError> {
+    save_json("morse.json", progress)
 }
 
 /// Radio backend config (SoapySDR vs CAT rig; serial + sound-card settings).

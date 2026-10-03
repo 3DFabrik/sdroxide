@@ -13,7 +13,7 @@
 //! and decoded audio and the status snapshot come back under short locks.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::sync_channel;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
@@ -24,7 +24,6 @@ use sdroxide_dsp::ComplexResampler;
 use sdroxide_types::{HdAudioService, HdRadioStatus};
 use tracing::{debug, warn};
 
-use crate::demod::FM_RATE_HZ;
 use crate::{Event, HdReceiver, Mode, NrsError};
 
 /// Target RMS of the samples handed to the decoder.
@@ -33,12 +32,6 @@ use crate::{Event, HdReceiver, Mode, NrsError};
 /// agnostic, but the HDC decoder downstream expects a sane amplitude, and a
 /// level that swings with fading costs decodes. Slow to follow, like DRM's.
 const TARGET_RMS: f32 = 0.06;
-
-/// One-pole coefficient for the level estimate: ~0.5 s at the rate it runs at,
-/// which is the decoder's own, after resampling. Written for 96 kHz, it made the
-/// time constant 65 ms at 744 kHz — a gain that followed fading instead of
-/// riding it out.
-const LEVEL_ALPHA: f32 = (1.0 / (0.5 * FM_RATE_HZ)) as f32;
 
 /// How much channel I/Q the queue into this thread holds, in seconds. A
 /// decoder that falls further behind than this loses the oldest samples rather
@@ -55,6 +48,36 @@ const CHUNK: usize = 32_768;
 /// spinning.
 const IDLE: Duration = Duration::from_millis(2);
 
+/// HDC packets of the selected programme that may arrive with no audio at all
+/// before the library is judged to have no audio decoder: a couple of seconds
+/// of one programme.
+///
+/// A library that has one reports an audio frame — decoded, or filled-in
+/// silence — for every slot of a programme, straight after that slot's packet
+/// (`output_advance`, in every version since 3.0), so the count never gets past
+/// one. One built with `USE_FAAD2=OFF` reports no audio, ever: on nrsc5's own
+/// sample capture, 476 packets and not one frame. Only the selected programme
+/// counts, because only its audio is copied out — see
+/// [`HdReceiver::set_audio_program`].
+const NO_AUDIO_AFTER_PACKETS: u32 = 32;
+
+/// Set once the library has shown it cannot play: HDC packets and not one
+/// audio frame. A property of the library rather than the station, so it
+/// outlives the receiver that found it, and a retune or a later visit to the
+/// mode says so straight away instead of after another second of packets.
+static NO_AUDIO_DECODER: AtomicBool = AtomicBool::new(false);
+
+/// What the operator is told about such a library.
+pub(crate) const NO_AUDIO_DECODER_WHY: &str = "The nrsc5 library on this machine was built without \
+     its audio decoder (USE_FAAD2=OFF), so it can find HD Radio stations but not play them. \
+     Install an nrsc5 built with it — upstream's default, which carries its own patched faad2 — \
+     then restart sdroxide.";
+
+/// Whether the library has already shown it has no audio decoder.
+pub(crate) fn library_cannot_play() -> bool {
+    NO_AUDIO_DECODER.load(Ordering::Relaxed)
+}
+
 /// What the receive chain and the decoder thread share.
 pub(crate) struct Shared {
     /// Decoded audio for the selected programme, and which programme that is.
@@ -66,6 +89,9 @@ pub(crate) struct Shared {
     pub status_dirty: AtomicBool,
     restart: AtomicBool,
     stop: AtomicBool,
+    /// HDC packets since the receiver was opened, while no audio frame has
+    /// arrived — `u32::MAX` once one has. See [`NO_AUDIO_AFTER_PACKETS`].
+    packets_without_audio: AtomicU32,
 }
 
 /// Decoded audio waiting to be played.
@@ -85,6 +111,7 @@ impl Shared {
             status_dirty: AtomicBool::new(true),
             restart: AtomicBool::new(false),
             stop: AtomicBool::new(false),
+            packets_without_audio: AtomicU32::new(0),
         }
     }
 
@@ -107,10 +134,11 @@ pub(crate) struct HdWorker {
 }
 
 impl HdWorker {
-    /// Start a decoder for a chain whose channel rate is `channel_rate`. The
-    /// receiver is opened on the thread that drives it, and a failed open comes
-    /// back here rather than leaving a thread with nothing to do.
-    pub fn new(channel_rate: f64) -> Result<Self, NrsError> {
+    /// Start a decoder for a chain whose channel rate is `channel_rate`, for
+    /// the analogue source `mode`. The receiver is opened on the thread that
+    /// drives it, and a failed open comes back here rather than leaving a
+    /// thread with nothing to do.
+    pub fn new(channel_rate: f64, mode: Mode) -> Result<Self, NrsError> {
         let capacity = ((channel_rate * INPUT_SECONDS) as usize).max(CHUNK);
         let (input, queue) = rtrb::RingBuffer::new(capacity);
         let shared = Arc::new(Shared::new());
@@ -120,7 +148,7 @@ impl HdWorker {
             std::thread::Builder::new()
                 .name("hd-radio".into())
                 .spawn(move || {
-                    let receiver = match HdReceiver::open(Mode::Fm) {
+                    let receiver = match HdReceiver::open(mode) {
                         Ok(r) => {
                             let _ = tx.send(Ok(()));
                             r
@@ -130,7 +158,7 @@ impl HdWorker {
                             return;
                         }
                     };
-                    run(receiver, queue, &shared, channel_rate);
+                    run(receiver, queue, &shared, channel_rate, mode);
                 })
                 .expect("spawn the HD Radio decoder thread")
         };
@@ -193,9 +221,10 @@ fn run(
     mut queue: rtrb::Consumer<Complex32>,
     shared: &Shared,
     channel_rate: f64,
+    mode: Mode,
 ) {
     let mut receiver = Some(receiver);
-    let mut feed = Feed::new(channel_rate);
+    let mut feed = Feed::new(channel_rate, mode);
     let mut block: Vec<Complex32> = Vec::with_capacity(CHUNK);
     while !shared.stop.load(Ordering::Relaxed) {
         if shared.restart.swap(false, Ordering::Relaxed) {
@@ -205,7 +234,7 @@ fn run(
                 chunk.commit_all();
             }
             receiver = None;
-            feed = Feed::new(channel_rate);
+            feed = Feed::new(channel_rate, mode);
             // The programme was put back to HD-1 by whoever asked for the
             // restart, and may have been changed again since; keep what it is.
             let program = {
@@ -213,12 +242,21 @@ fn run(
                 audio.frames.clear();
                 audio.selected
             };
-            *shared.status() = HdRadioStatus { program, ..HdRadioStatus::default() };
+            *shared.status() = HdRadioStatus {
+                program,
+                unavailable: library_cannot_play().then(|| NO_AUDIO_DECODER_WHY.to_string()),
+                ..HdRadioStatus::default()
+            };
+            shared.packets_without_audio.store(0, Ordering::Relaxed);
             shared.status_dirty.store(true, Ordering::Relaxed);
-            match HdReceiver::open(Mode::Fm) {
-                Ok(r) => receiver = Some(r),
-                Err(e) => {
-                    warn!(?e, "could not restart the HD Radio decoder; the mode will be silent")
+            // A library that cannot play is not reopened to find that out
+            // again: the queue is still drained below, and nothing is decoded.
+            if !library_cannot_play() {
+                match HdReceiver::open(mode) {
+                    Ok(r) => receiver = Some(r),
+                    Err(e) => {
+                        warn!(?e, "could not restart the HD Radio decoder; the mode will be silent")
+                    }
                 }
             }
         }
@@ -241,6 +279,10 @@ fn run(
         rx.set_audio_program(Some(shared.audio().selected));
         feed.pipe(&block, rx);
         drain(rx, shared);
+        if library_cannot_play() {
+            // Every station would sound the same: silent. Stop decoding.
+            receiver = None;
+        }
     }
 }
 
@@ -258,16 +300,23 @@ struct Feed {
     level: Option<f32>,
     /// The gain last applied, held while there is nothing to measure.
     gain: f32,
+    /// One-pole coefficient for the level estimate: ~0.5 s at the rate it runs
+    /// at, which is the decoder's own after resampling. Written for 96 kHz, it
+    /// made the time constant 65 ms at 744 kHz — a gain that followed fading
+    /// instead of riding it out.
+    level_alpha: f32,
 }
 
 impl Feed {
-    fn new(channel_rate: f64) -> Self {
+    fn new(channel_rate: f64, mode: Mode) -> Self {
+        let native = mode.native_rate_hz();
         Feed {
-            resampler: ComplexResampler::new(channel_rate, FM_RATE_HZ),
+            resampler: ComplexResampler::new(channel_rate, native),
             rs_buf: Vec::new(),
             iq_buf: Vec::new(),
             level: None,
             gain: 1.0,
+            level_alpha: (1.0 / (0.5 * native)) as f32,
         }
     }
 
@@ -287,7 +336,7 @@ impl Feed {
             self.rs_buf.iter().map(power).sum::<f32>() / self.rs_buf.len() as f32
         });
         for z in &self.rs_buf {
-            level += LEVEL_ALPHA * (power(z) - level);
+            level += self.level_alpha * (power(z) - level);
         }
         self.level = Some(level);
         // A silent input would divide by zero and then clip on the first real
@@ -317,12 +366,23 @@ fn drain(receiver: &HdReceiver, shared: &Shared) {
     // `poll` is non-blocking, so this ends when the queue is empty.
     while let Some(ev) = receiver.poll() {
         match ev {
-            Event::Audio { program, data, flags } => {
+            Event::Audio { program, data, unavailable } => {
+                shared.packets_without_audio.store(u32::MAX, Ordering::Relaxed);
                 let mut audio = shared.audio();
                 if program == audio.selected {
                     audio.frames.extend(data);
                     drop(audio);
-                    moved |= note_audio(&mut shared.status(), flags);
+                    moved |= note_audio(&mut shared.status(), unavailable);
+                }
+            }
+            Event::HdcPacket { program } => {
+                if program == shared.audio().selected
+                    && packet_without_audio(&shared.packets_without_audio)
+                {
+                    warn!("{NO_AUDIO_DECODER_WHY}");
+                    NO_AUDIO_DECODER.store(true, Ordering::Relaxed);
+                    shared.status().unavailable = Some(NO_AUDIO_DECODER_WHY.to_string());
+                    moved = true;
                 }
             }
             other => {
@@ -336,17 +396,31 @@ fn drain(receiver: &HdReceiver, shared: &Shared) {
     }
 }
 
-/// Whether the selected programme is decoding, from the flags on its latest
-/// audio frame. Returns whether the light changed.
+/// Whether the selected programme is decoding, from its latest audio frame.
+/// Returns whether the light changed.
 ///
 /// Once the frame clock is aligned nrsc5 emits a frame for every slot, and one
-/// whose packet was missing or failed its check is a frame of silence flagged
-/// `UNAVAILABLE`. Counting those as audio lit AUDIO on a marginal signal that
-/// held sync while nothing at all was playing — the one moment the light is
-/// being read. The silence itself is still played: it keeps the audio in time.
-fn note_audio(status: &mut HdRadioStatus, flags: u32) -> bool {
-    let sounding = flags & crate::AUDIO_FLAG_UNAVAILABLE == 0;
+/// whose packet was missing or failed its check is a frame of filled-in
+/// silence (see [`Event::Audio`]). Counting those as audio lit AUDIO on a
+/// marginal signal that held sync while nothing at all was playing — the one
+/// moment the light is being read. The silence itself is still played: it
+/// keeps the audio in time.
+fn note_audio(status: &mut HdRadioStatus, unavailable: bool) -> bool {
+    let sounding = !unavailable;
     std::mem::replace(&mut status.audio, sounding) != sounding
+}
+
+/// Count an HDC packet of the selected programme towards
+/// [`NO_AUDIO_AFTER_PACKETS`]. True exactly once: on the packet that shows the
+/// library cannot play. `u32::MAX` in `count` means audio has been heard, and
+/// nothing is counted after that.
+fn packet_without_audio(count: &AtomicU32) -> bool {
+    let seen = count.load(Ordering::Relaxed);
+    if seen == u32::MAX {
+        return false;
+    }
+    count.store(seen + 1, Ordering::Relaxed);
+    seen + 1 == NO_AUDIO_AFTER_PACKETS
 }
 
 /// Fold one non-audio event into the status snapshot.
@@ -378,7 +452,9 @@ fn apply(status: &mut HdRadioStatus, ev: Event) {
         Event::StationName(name) => status.station_name = name,
         Event::StationSlogan(slogan) => status.station_slogan = slogan,
         Event::StationMessage(message) => status.station_message = message,
-        Event::Audio { .. } => debug!("audio reached the status fold"),
+        Event::Audio { .. } | Event::HdcPacket { .. } => {
+            debug!("an audio event reached the status fold")
+        }
     }
 }
 
@@ -390,14 +466,32 @@ mod tests {
     #[test]
     fn a_filled_in_silence_frame_does_not_light_audio() {
         let mut status = HdRadioStatus { locked: true, ..HdRadioStatus::default() };
-        assert!(!note_audio(&mut status, crate::AUDIO_FLAG_UNAVAILABLE));
+        assert!(!note_audio(&mut status, true));
         assert!(!status.audio);
-        assert!(note_audio(&mut status, 0), "a sounding frame lights it");
+        assert!(note_audio(&mut status, false), "a sounding frame lights it");
         assert!(status.audio);
-        assert!(!note_audio(&mut status, 0), "and a second one changes nothing");
+        assert!(!note_audio(&mut status, false), "and a second one changes nothing");
         // A packet faad2 failed to decode arrives the same way: as stand-in
-        // silence, flagged unavailable as well as with the decoding error.
-        assert!(note_audio(&mut status, crate::AUDIO_FLAG_UNAVAILABLE | 1 << 1));
+        // silence.
+        assert!(note_audio(&mut status, true));
         assert!(!status.audio);
+    }
+
+    /// A library with no audio decoder is named once, after enough packets of
+    /// the programme to be sure — and one that has played is never named.
+    #[test]
+    fn packets_with_no_audio_at_all_name_the_library_once() {
+        let count = AtomicU32::new(0);
+        let judged: Vec<bool> =
+            (0..NO_AUDIO_AFTER_PACKETS + 10).map(|_| packet_without_audio(&count)).collect();
+        assert_eq!(judged.iter().filter(|j| **j).count(), 1, "once, not on every packet");
+        assert!(judged[NO_AUDIO_AFTER_PACKETS as usize - 1]);
+
+        // nrsc5 reports a slot's audio straight after its packet, so a library
+        // that can play has the count at most at one when audio arrives.
+        let count = AtomicU32::new(0);
+        assert!(!packet_without_audio(&count));
+        count.store(u32::MAX, Ordering::Relaxed);
+        assert!((0..10 * NO_AUDIO_AFTER_PACKETS).all(|_| !packet_without_audio(&count)));
     }
 }
