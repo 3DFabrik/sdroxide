@@ -1508,7 +1508,15 @@ use sdroxide_types::{
 /// whole, so a v171 peer reads the extra bytes as the start of the next field
 /// and fails to decode every digital status — the same break as v170's appended
 /// FSK441 period.
-pub const PROTO_VERSION: u16 = 172;
+///
+/// v173: selectable FT8 decode depth. `DigiConfig` gains `ft8_depth`
+/// (`Ft8Depth`) on its tail — `Fast` / `Normal` / `Deep`, how hard the decoder
+/// works for weak signals (no subtraction / flat multi-pass SIC / the
+/// checkpointed pass). `DigiConfig` rides `Command::SetDigiConfig` and
+/// `DigiStatus` whole, so a v172 peer reads the extra byte as the start of the
+/// next field and fails to decode every config — the same break as v172's
+/// appended message buttons.
+pub const PROTO_VERSION: u16 = 173;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]

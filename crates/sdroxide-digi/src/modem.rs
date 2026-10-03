@@ -6,7 +6,7 @@
 use mfsk_core::msg::decode_request::DecodeRequest;
 use mfsk_core::msg::hash_table::CallsignHashTable;
 use mfsk_core::msg::wsjt77;
-use sdroxide_types::{Decode, Mode};
+use sdroxide_types::{Decode, Ft8Depth, Mode};
 
 use crate::params::{AUDIO_MAX_HZ, AUDIO_MIN_HZ};
 
@@ -144,15 +144,33 @@ pub struct Ft8Modem {
     /// The same callsigns again, hashed the way the EU VHF contest layout
     /// needs them — see [`eu_vhf::Hashes`].
     eu_hashes: eu_vhf::Hashes,
+    /// How hard the FT8 decoder works for weak signals — see
+    /// [`Ft8Depth`]. Only the FT8 path reads it.
+    ft8_depth: Ft8Depth,
 }
 
 impl Ft8Modem {
     pub fn new(mode: Mode) -> Self {
-        Ft8Modem { mode, hashes: CallsignHashTable::new(), eu_hashes: eu_vhf::Hashes::default() }
+        Ft8Modem {
+            mode,
+            hashes: CallsignHashTable::new(),
+            eu_hashes: eu_vhf::Hashes::default(),
+            ft8_depth: Ft8Depth::default(),
+        }
     }
 
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    /// How hard the FT8 decoder works — see [`Ft8Depth`]. Set from
+    /// [`crate::DigiConfig::ft8_depth`] on every config change.
+    pub fn set_ft8_depth(&mut self, depth: Ft8Depth) {
+        self.ft8_depth = depth;
+    }
+
+    pub fn ft8_depth(&self) -> Ft8Depth {
+        self.ft8_depth
     }
 
     /// Register callsigns we already know (ours, and the station we're
@@ -221,7 +239,10 @@ impl Ft8Modem {
         let mut decodes: Vec<Decode> = match mode {
             Mode::Ft8 => {
                 let hint = ap.ft8();
-                let run = |sic: bool| -> Vec<Decode> {
+                // The operator's chosen depth — see `Ft8Depth` — governs only
+                // the extras: `Fast` skips them, `Normal` runs flat multi-pass
+                // SIC, `Deep` the checkpointed pass (~1.2 s on a busy slot).
+                let run = |depth: Ft8Depth| -> Vec<Decode> {
                     let req = DecodeRequest::<mfsk_core::Ft8>::new(
                         audio_12k,
                         AUDIO_MIN_HZ,
@@ -230,7 +251,11 @@ impl Ft8Modem {
                         MAX_CAND,
                     )
                     .osd(true);
-                    let req = if sic { req.sic_early() } else { req };
+                    let req = match depth {
+                        Ft8Depth::Fast => req,
+                        Ft8Depth::Normal => req.sic_rounds(2),
+                        Ft8Depth::Deep => req.sic_early(),
+                    };
                     let req = match hint.as_ref() {
                         Some(h) => req.ap_hint(h),
                         None => req,
@@ -244,12 +269,14 @@ impl Ft8Modem {
                         })
                         .collect()
                 };
-                let quick = run(false);
+                let quick = run(Ft8Depth::Fast);
                 // The SIC pass supersedes the quick one; keep what it adds.
-                extras = run(true)
-                    .into_iter()
-                    .filter(|d| !quick.iter().any(|q| same_signal(q, d)))
-                    .collect();
+                if self.ft8_depth != Ft8Depth::Fast {
+                    extras = run(self.ft8_depth)
+                        .into_iter()
+                        .filter(|d| !quick.iter().any(|q| same_signal(q, d)))
+                        .collect();
+                }
                 quick
             }
             Mode::Ft4 => DecodeRequest::<mfsk_core::Ft4>::new(
@@ -2464,5 +2491,12 @@ mod tests {
         );
         // The quick pass alone is what a reply can act on within the offset.
         assert!(!q.contains(&"CQ W9XYZ EN52"), "the weak one is the slow pass's job: {q:?}");
+
+        // `Fast` is the quick pass alone: no subtraction batch at all.
+        let mut fast = Ft8Modem::new(Mode::Ft8);
+        fast.set_ft8_depth(Ft8Depth::Fast);
+        let (quick, extras) = fast.decode_slot_staged(&buf, 0, &ApHints::default(), 2310.0);
+        assert!(quick.iter().any(|d| d.message == "CQ AB1CD FN42"));
+        assert!(extras.is_empty(), "Fast must skip the subtraction pass: {extras:?}");
     }
 }
