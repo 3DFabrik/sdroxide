@@ -1,0 +1,93 @@
+# The station is one Raspberry Pi, and it is the wrong place to compile.
+#
+# A release build of the server links more than the Pi has free while the
+# receiver is running, and the web client cannot be finished there at all:
+# the wasm-opt binary Trunk downloads is built for a newer ARM generation and
+# dies with SIGILL, so the client that went out was the unoptimized 38 MB
+# one. The client is wasm32 — any x86 runner builds it, and wasm-opt runs
+# there. The server is aarch64 — GitHub's ARM runner has the RAM the Pi has
+# not. The Pi only ever receives the two artifacts; see deploy/pi-from-ci.ps1.
+#
+# Triggered by a push to `users`, which is the branch the station tracks, and
+# by hand. It does not deploy: nothing here has the station's SSH key.
+
+name: Pi station
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [users]
+    paths:
+      - ".github/workflows/pi.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+      - "src/**"
+      - "vendor/**"
+      - ".cargo/**"
+
+concurrency:
+  group: pi-station
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: web client (wasm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pi-web
+      - name: Install trunk
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -sSfL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xzf - -C "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build web client
+        working-directory: crates/sdroxide-web
+        run: trunk build --release
+      - name: Report the size
+        run: ls -lh crates/sdroxide-web/dist/*_bg.wasm
+      - uses: actions/upload-artifact@v7
+        with:
+          name: web-dist
+          path: crates/sdroxide-web/dist
+          if-no-files-found: error
+
+  server:
+    name: server (aarch64, no SoapySDR)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          # What the vendored C and C++ actually need: RADE builds Opus with
+          # autotools, the DRM receiver's bindings need libclang, and neither
+          # is a library the system is expected to have.
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev pkg-config cmake autoconf automake libtool \
+            libclang-dev wget ca-certificates
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pi-server-aarch64
+      - name: Build
+        # The station is a Hermes Lite 2, so no SoapySDR and no rtl_433. No
+        # embed-web either: the client is served from --web-root, which is
+        # what lets the two artifacts be replaced independently.
+        run: cargo build --release --locked -p sdroxide --no-default-features
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sdroxide-aarch64
+          path: target/release/sdroxide
+          if-no-files-found: error

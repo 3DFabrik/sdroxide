@@ -13,3 +13,11 @@
 # wholesale rather than adding to it — CI deliberately sets none.
 [target.x86_64-pc-windows-gnu]
 rustflags = ["-C", "link-arg=-static-libgcc"]
+
+# The browser client is downloaded in full before it draws anything, and it
+# does no sample-rate work — that stays on the server. So this target, and
+# only this target, is built for size. Trunk then runs wasm-opt -Oz over it
+# (see crates/sdroxide-web/index.html); the two together are what keeps the
+# download in the range of megabytes rather than tens of them.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "opt-level=z", "-C", "strip=symbols"]
