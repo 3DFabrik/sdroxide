@@ -1518,7 +1518,26 @@ use sdroxide_types::{
 /// would show a PTT button on a radio somebody else is working. Callsign,
 /// grid, logbook and network credentials follow the roster name rather than
 /// the station.
-pub const PROTO_VERSION: u16 = 173;
+///
+/// v174: `TleSubStatus` gains `listing`, the cached TLE text of that
+/// subscription. The SAT picker in a browser has no disk cache, so without
+/// this field a Weather (or any other) subscription never appears there.
+/// `TleSubStatus` rides `ServerMsg::TleSubStatus` whole, so a v173 peer
+/// cannot decode the status vector.
+/// NOAA APT (`Mode::Apt`) and `ServerMsg::AptLine` / `AptImage` / `AptStatus`
+/// ride the same bump: a new mode discriminant and three appended messages.
+///
+/// v175: `ServerMsg::SatFreqDb` — SatNOGS transmitter frequencies, fetched
+/// and cached on the engine host and replayed on connect so a browser SAT
+/// picker can tune birds the built-in table never knew.
+///
+/// v176: the weather-satellite pass scheduler. `ServerMsg::WxSched` and
+/// `ServerMsg::WxAudio`, and `Command` gains `SetWxSchedConfig`, `ArmWxPass`,
+/// `RefreshWxSched`, `WxAudioGet` and `WxAudioDelete` — all appended, so no
+/// surviving discriminant moved. A v175 client never sees the schedule and
+/// cannot arm a pass; the recording itself is the engine's and runs regardless
+/// of what is attached.
+pub const PROTO_VERSION: u16 = 176;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]
@@ -2057,6 +2076,42 @@ pub enum ServerMsg {
     ///
     /// Appended last, for the usual reason.
     UserQsoLog(Vec<sdroxide_types::QsoRecord>),
+
+    /// NOAA APT: one video line. Appended last, for the usual reason.
+    AptLine {
+        image_id: u32,
+        channel: u8,
+        y: u16,
+        gray: Vec<u8>,
+    },
+    /// NOAA APT: a finished pass (PNG). Appended last, for the usual reason.
+    AptImage {
+        image_id: u32,
+        w: u16,
+        h: u16,
+        png: Vec<u8>,
+    },
+    AptStatus(sdroxide_types::AptStatus),
+    /// Published satellite frequencies from SatNOGS, cached on the engine
+    /// host. Replayed on connect beside the TLE listings. Appended last, for
+    /// the usual reason.
+    SatFreqDb(Vec<sdroxide_types::SatFreqs>),
+
+    /// The weather-satellite pass scheduler: the filter, the predicted passes,
+    /// and what the engine is recording. Replayed on connect, because the
+    /// schedule belongs to the station rather than to whoever is looking at it.
+    ///
+    /// Boxed for the same reason the AIS status is: a week's horizon across
+    /// three birds is sixty-odd rows, far larger than anything else in this
+    /// enum, and an enum is as big as its largest variant everywhere it is
+    /// held. Appended last, for the usual reason.
+    WxSched(Box<sdroxide_types::WxSchedStatus>),
+    /// One recorded pass's discriminator audio, for an external decoder.
+    /// Appended last, for the usual reason.
+    WxAudio {
+        name: String,
+        wav: Vec<u8>,
+    },
 }
 
 /// One radio in a station's roster, as a client sees it.
@@ -2462,7 +2517,13 @@ mod tests {
                 count: 8,
                 curated: 0,
                 error: Some("connection reset".into()),
+                listing: String::new(),
             }]),
+            ServerMsg::SatFreqDb(vec![SatFreqs::new(
+                27_607,
+                "SO-50",
+                vec![SatLink::down("FM", "FM", Passband::at(436.795))],
+            )]),
         ];
         for m in &msgs {
             let bytes = encode(m).unwrap();
@@ -2476,6 +2537,52 @@ mod tests {
         let cmd = ClientMsg::Command(Command::RefreshTleSubs);
         let back: ClientMsg = decode(&encode(&cmd).unwrap()).unwrap();
         assert_eq!(back, cmd);
+    }
+
+    /// The pass scheduler crosses the wire whole: the engine host predicts and
+    /// records, and a client only ever reads the answer and ticks a row. A
+    /// status that did not survive would leave a browser unable to see what its
+    /// own station is about to record.
+    #[test]
+    fn roundtrip_wx_schedule() {
+        use sdroxide_types::{WxJobState, WxPass, WxSchedConfig, WxSchedStatus};
+
+        let status = WxSchedStatus {
+            cfg: WxSchedConfig { horizon_h: 48, min_max_el: 25.0, ..WxSchedConfig::default() },
+            passes: vec![WxPass {
+                norad_id: 33_591,
+                name: "NOAA 19".into(),
+                aos_unix: 1_800_000_000,
+                los_unix: 1_800_000_900,
+                max_el: 64.5,
+                rise_az: 192.0,
+                set_az: 18.0,
+                downlink_hz: 137_100_000.0,
+                armed: true,
+                state: WxJobState::Done,
+                png: "apt-1800000000000-NOAA_19.png".into(),
+                wav: "apt-1800000000000-NOAA_19.wav".into(),
+                note: "812 lines".into(),
+            }],
+            note: String::new(),
+            recording: Some((25_338, 1_800_003_000)),
+        };
+        let m = ServerMsg::WxSched(Box::new(status));
+        assert_eq!(decode::<ServerMsg>(&encode(&m).unwrap()).unwrap(), m);
+
+        let m = ServerMsg::WxAudio { name: "apt-1.wav".into(), wav: vec![1, 2, 3] };
+        assert_eq!(decode::<ServerMsg>(&encode(&m).unwrap()).unwrap(), m);
+
+        for cmd in [
+            Command::SetWxSchedConfig(WxSchedConfig::default()),
+            Command::ArmWxPass { norad_id: 25_338, aos_unix: 1_800_000_000, on: true },
+            Command::RefreshWxSched,
+            Command::WxAudioGet("apt-1.wav".into()),
+            Command::WxAudioDelete("apt-1.wav".into()),
+        ] {
+            let m = ClientMsg::Command(cmd);
+            assert_eq!(decode::<ClientMsg>(&encode(&m).unwrap()).unwrap(), m);
+        }
     }
 
     /// Every orbit-ring position survives the wire, including the one a bare

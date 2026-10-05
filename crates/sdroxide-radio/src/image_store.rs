@@ -141,6 +141,7 @@ fn read_dirs(kind: ImageKind) -> Vec<PathBuf> {
             .into_iter()
             .chain(sdroxide_config::wefax_legacy_rx_dir())
             .collect(),
+        ImageKind::Apt => sdroxide_config::apt_rx_dir().into_iter().collect(),
     }
 }
 

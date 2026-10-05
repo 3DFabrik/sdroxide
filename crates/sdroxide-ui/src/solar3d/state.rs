@@ -262,6 +262,8 @@ pub struct SolarUi {
     ///
     /// [`SolarServerMsg::SatFreqs`]: sdroxide_proto::solar::SolarServerMsg::SatFreqs
     pub sat_cfg: std::sync::Arc<sdroxide_types::SatConfig>,
+    /// SatNOGS transmitter table, same source the SAT picker uses.
+    pub sat_freq_db: std::sync::Arc<Vec<sdroxide_types::SatFreqs>>,
     /// What has been typed into the find box.
     ///
     /// Matches are drawn with their orbit and label whether or not they
@@ -425,6 +427,7 @@ impl SolarUi {
             lapse_playing: false,
             search: String::new(),
             sat_cfg: Default::default(),
+            sat_freq_db: std::sync::Arc::new(Vec::new()),
             selected_sat: None,
             sat_passes: None,
             focus_override: None,

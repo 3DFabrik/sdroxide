@@ -479,6 +479,13 @@ impl eframe::App for SdroxideApp {
                 // pan stay live, and it is re-applied only on a mode change or
                 // a retune that takes the channel off-screen.
                 (dial - 150_000.0, dial + 150_000.0)
+            } else if mode.is_apt() {
+                // APT is ±17 kHz FM on 137 MHz, not a USB sub-band. Framing it
+                // like FT8 (3.7 kHz above the dial) hid the channel — the
+                // multiplex is 40 kHz wide. The weather birds sit 137.100 /
+                // 137.620 / 137.9125; ±200 kHz shows the one being tracked
+                // and a neighbour without swallowing the whole HackRF span.
+                (dial - 200_000.0, dial + 200_000.0)
             } else if mode.is_carrier_centered() {
                 let half = (self.state.rx[0].filter_hi - self.state.rx[0].filter_lo).abs() as f64
                     * 0.5
@@ -732,6 +739,8 @@ impl eframe::App for SdroxideApp {
                                     self.atchat_panel(ui, &mut cmds, panel_h);
                                 } else if mode.is_wefax() {
                                     self.wefax_panel(ui, &mut cmds, panel_h);
+                                } else if mode.is_apt() {
+                                    self.apt_panel(ui, &mut cmds, panel_h);
                                 } else if mode == Mode::Navtex {
                                     self.navtex_panel(ui, &mut cmds, panel_h);
                                 } else if mode == Mode::Acars {
@@ -989,6 +998,7 @@ impl eframe::App for SdroxideApp {
                 awards,
                 prop,
                 std::sync::Arc::clone(&self.sat_cfg),
+                std::sync::Arc::clone(&self.sat_freq_db),
                 self.sat_track.as_ref().map(|t| t.norad_id),
             );
             // ...and keep where it actually ended up, so the next open — after a
@@ -1502,6 +1512,13 @@ impl SdroxideApp {
                     self.wefax.clear_live();
                 }
                 RadioEvent::WefaxStatus(s) => self.wefax.status = s,
+                RadioEvent::AptLine { image_id, channel, y, gray } => {
+                    self.apt.on_line(image_id, channel, y, gray);
+                }
+                RadioEvent::AptImage { .. } => self.apt.on_image(),
+                RadioEvent::AptStatus(s) => self.apt.status = s,
+                RadioEvent::WxSched(s) => self.apt.on_sched(*s),
+                RadioEvent::WxAudio { name, wav } => self.apt.on_wav(&name, wav),
                 RadioEvent::Rds(d) => self.on_rds(d),
                 RadioEvent::Drm(d) => self.on_drm(d),
                 RadioEvent::HdRadio(d) => self.on_hd(d),
@@ -1583,14 +1600,16 @@ impl SdroxideApp {
                     self.sstv.on_slot_source(slot, version, &png);
                 }
                 // One store per mode: SSTV and RIFP share a gallery, charts
-                // have their own.
+                // and weather passes have their own.
                 RadioEvent::ImageListing(l) => match l.kind {
                     sdroxide_types::ImageKind::Sstv => self.sstv.on_listing(l, &ctx),
                     sdroxide_types::ImageKind::Wefax => self.wefax.on_listing(l, &ctx),
+                    sdroxide_types::ImageKind::Apt => self.apt.on_listing(l, &ctx),
                 },
                 RadioEvent::ImageFile { kind, name, png } => match kind {
                     sdroxide_types::ImageKind::Sstv => self.sstv.on_file(&name, &png, &ctx),
                     sdroxide_types::ImageKind::Wefax => self.wefax.on_file(&name, &png, &ctx),
+                    sdroxide_types::ImageKind::Apt => self.apt.on_file(&name, &png, &ctx),
                 },
                 // What the station is set up to do, from the machine the engine
                 // runs on. Seeded once, like the digi config above: later edits
@@ -1652,6 +1671,7 @@ impl SdroxideApp {
                     }
                 }
                 RadioEvent::TleSubStatus(s) => self.on_tle_sub_status(s),
+                RadioEvent::SatFreqDb(s) => self.sat_freq_db = std::sync::Arc::new(s),
                 RadioEvent::SatTrack(t) => self.sat_track = t.map(|t| *t),
                 RadioEvent::RotatorStatus { connected, az_deg, el_deg, error } => {
                     self.rotator_status = Some((connected, az_deg, el_deg, error));
@@ -1660,12 +1680,14 @@ impl SdroxideApp {
                 RadioEvent::ImageSaved(e) => match e.kind {
                     sdroxide_types::ImageKind::Sstv => self.sstv.on_saved(e, &ctx),
                     sdroxide_types::ImageKind::Wefax => self.wefax.on_saved(e, &ctx),
+                    sdroxide_types::ImageKind::Apt => self.apt.on_saved(e, &ctx),
                 },
                 // Broadcast, so this is as likely to be another screen's delete
                 // as our own — either way the picture has gone.
                 RadioEvent::ImageDeleted { kind, name } => match kind {
                     sdroxide_types::ImageKind::Sstv => self.sstv.on_deleted(&name),
                     sdroxide_types::ImageKind::Wefax => self.wefax.on_deleted(&name),
+                    sdroxide_types::ImageKind::Apt => self.apt.on_deleted(&name),
                 },
                 RadioEvent::WinlinkStatus(st) => self.mail.on_status(st),
                 RadioEvent::MailListing(l) => self.mail.on_listing(l),

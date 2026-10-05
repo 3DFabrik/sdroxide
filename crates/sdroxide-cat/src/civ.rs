@@ -93,6 +93,7 @@ pub fn mode_to_civ(m: Mode) -> u8 {
         // 1090 MHz. Grouped with FM so nothing downstream has to special-case
         // a mode a radio can neither be put into nor report back.
         Mode::Nfm
+        | Mode::Apt
         | Mode::Rifp
         | Mode::Packet
         | Mode::Aprs
@@ -837,7 +838,7 @@ pub fn set_filter_frame(radio: u8, mode: Mode, lo_hz: f32, hi_hz: f32) -> Option
     let want = (hi_hz - lo_hz).abs().round().max(0.0) as u32;
     let index = match mode {
         // No filter-width setting: the mode itself picks the filter.
-        Mode::Nfm | Mode::Wfm | Mode::Rifp | Mode::Packet | Mode::Aprs => return None,
+        Mode::Nfm | Mode::Apt | Mode::Wfm | Mode::Rifp | Mode::Packet | Mode::Aprs => return None,
         Mode::Am | Mode::Sam | Mode::Dsb => {
             // 200 Hz .. 10 kHz in 200 Hz steps, rounded up so the passband is
             // never quietly narrower than the one on screen.

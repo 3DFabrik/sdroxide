@@ -50,6 +50,7 @@ mod thor;
 mod tonegen;
 mod wbddc;
 mod wbspectrum;
+pub mod apt;
 pub mod wefax;
 mod window;
 

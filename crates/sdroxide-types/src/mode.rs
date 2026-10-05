@@ -362,6 +362,15 @@ pub enum Mode {
     /// message repeats for the length of the over. Appended for the same reason
     /// as [`Mode::Hell`].
     Fsk441,
+    /// NOAA APT — the analog weather-satellite downlink on 137 MHz. An FM
+    /// carrier carrying a 2400 Hz AM video subcarrier: two interleaved
+    /// channels (visible and IR), two lines a second, about ten minutes of
+    /// picture per pass.
+    ///
+    /// Receive only. The radio underneath is NFM; the panel is the picture,
+    /// the way [`Mode::Wefax`] is a chart. Appended for the same reason as
+    /// [`Mode::Hell`].
+    Apt,
 }
 
 /// The bands on which a mode that keeps phone practice rides the lower
@@ -382,7 +391,7 @@ const PHONE_LSB_BANDS: [(f64, f64); 3] =
 impl Mode {
     /// Every mode, in the order they cycle and appear in the picker — which is
     /// deliberately *not* the enum's declaration order (see [`Mode::Hell`]).
-    pub const ALL: [Mode; 49] = [
+    pub const ALL: [Mode; 50] = [
         Mode::Lsb,
         Mode::Usb,
         Mode::Cw,
@@ -432,6 +441,7 @@ impl Mode {
         Mode::Fst4,
         Mode::Q65,
         Mode::Fsk441,
+        Mode::Apt,
     ];
 
     /// The digital modes handled by a dedicated decode/encode engine (the
@@ -439,7 +449,7 @@ impl Mode {
     /// packet, RF Paint). All are USB underneath except RIFP, VHF packet and
     /// VHF SSTV, which frequency-modulate the carrier, and ACARS, which is
     /// received in AM.
-    pub const DIGITAL: [Mode; 31] = [
+    pub const DIGITAL: [Mode; 32] = [
         Mode::Ft8,
         Mode::Ft4,
         Mode::Ft2,
@@ -464,6 +474,7 @@ impl Mode {
         Mode::SstvFm,
         Mode::Rifp,
         Mode::Wefax,
+        Mode::Apt,
         Mode::Navtex,
         Mode::Acars,
         Mode::RfPaint,
@@ -498,6 +509,7 @@ impl Mode {
                 | Mode::RfPaint
                 | Mode::Rade
                 | Mode::Wefax
+                | Mode::Apt
                 | Mode::Navtex
                 | Mode::Packet
                 | Mode::PacketHf
@@ -607,7 +619,13 @@ impl Mode {
     pub fn is_carrier_centered(self) -> bool {
         matches!(
             self,
-            Mode::Rifp | Mode::Packet | Mode::Aprs | Mode::SstvFm | Mode::RttyFm | Mode::Acars
+            Mode::Rifp
+                | Mode::Packet
+                | Mode::Aprs
+                | Mode::SstvFm
+                | Mode::RttyFm
+                | Mode::Acars
+                | Mode::Apt
         )
     }
 
@@ -633,6 +651,7 @@ impl Mode {
                 | Mode::Aprs
                 | Mode::SstvFm
                 | Mode::RttyFm
+                | Mode::Apt
         )
     }
 
@@ -846,6 +865,12 @@ impl Mode {
         matches!(self, Mode::Wefax)
     }
 
+    /// True for NOAA APT weather-satellite pictures. Own panel, like WEFAX:
+    /// receive only, two channels, no transmit compositor.
+    pub fn is_apt(self) -> bool {
+        matches!(self, Mode::Apt)
+    }
+
     /// True for the receive-only modes, so the UI can leave the transmit
     /// controls out rather than showing ones that refuse.
     pub fn is_rx_only(self) -> bool {
@@ -859,6 +884,7 @@ impl Mode {
         matches!(
             self,
             Mode::Wefax
+                | Mode::Apt
                 | Mode::Adsb
                 | Mode::Navtex
                 | Mode::Acars
@@ -943,6 +969,7 @@ impl Mode {
             Mode::PacketHf => "PACKET-HF",
             Mode::Aprs => "APRS",
             Mode::Wefax => "WEFAX",
+            Mode::Apt => "APT",
             Mode::Js8 => "JS8",
             Mode::Wspr => "WSPR",
             Mode::Pi4 => "PI4",
@@ -1117,6 +1144,10 @@ impl Mode {
             // room for a receiver tuned a few hundred hertz off, which is the
             // normal state of affairs on a chart found by ear.
             Mode::Wefax => (500.0, 3300.0),
+            // APT is NFM on 137 MHz: ±17 kHz deviation, two video channels.
+            // A 40 kHz window keeps the whole multiplex; narrower than NFM's
+            // 16 kHz default would clip the IR channel.
+            Mode::Apt => (-20_000.0, 20_000.0),
             // The two NAVTEX tones are 1615 and 1785 Hz; a few hundred hertz
             // either side leaves room for a receiver that is not exactly on the
             // channel, which is the usual state of a signal found by ear.
@@ -1320,6 +1351,7 @@ impl Mode {
             // to have, and FM's is the one a wideband receiver already uses.
             Mode::Nfm
             | Mode::Wfm
+            | Mode::Apt
             | Mode::Adsb
             | Mode::Vdl2
             | Mode::Ais
@@ -1379,6 +1411,7 @@ impl Mode {
             self,
             Mode::Nfm
                 | Mode::Wfm
+                | Mode::Apt
                 | Mode::Drm
                 | Mode::Adsb
                 | Mode::Vdl2
@@ -1433,6 +1466,7 @@ impl Mode {
     pub fn max_filter_hz(self) -> f32 {
         match self {
             Mode::Wfm => 120_000.0,
+            Mode::Apt => 30_000.0,
             // Not a filter in the sense the others are — there is no channel
             // being carved out of anything, because the decoder reads the whole
             // stream. What the number does is let the panadapter shade the
@@ -1486,6 +1520,7 @@ impl Mode {
                 | Mode::Isb
                 | Mode::Nfm
                 | Mode::Wfm
+                | Mode::Apt
                 | Mode::SstvFm
                 | Mode::RttyFm
                 | Mode::Packet
@@ -1534,6 +1569,11 @@ impl Mode {
             Mode::Nfm | Mode::SstvFm | Mode::RttyFm => {
                 &[("8k", -4000.0, 4000.0), ("16k", -8000.0, 8000.0)]
             }
+            Mode::Apt => &[
+                ("30k", -15_000.0, 15_000.0),
+                ("40k", -20_000.0, 20_000.0),
+                ("50k", -25_000.0, 25_000.0),
+            ],
             Mode::Dsb => &[("5k", -2500.0, 2500.0), ("6k", -3000.0, 3000.0)],
             // Both wider than any filter would be: a Mode S reply reaches its
             // first nulls about 6 MHz out and is read by a slicer rather than
@@ -2143,6 +2183,7 @@ mod tests {
             (Mode::Fst4, 46),
             (Mode::Q65, 47),
             (Mode::Fsk441, 48),
+            (Mode::Apt, 49),
         ];
         for (mode, index) in pinned {
             assert_eq!(mode as u8, index, "{} moved", mode.label());
@@ -2189,7 +2230,7 @@ mod tests {
         // dropped and nothing listed twice.
         // The last variant *by discriminant*, which is the one appended most
         // recently — not the one that reads last in the picker.
-        let last = Mode::Fsk441 as u8;
+        let last = Mode::Apt as u8;
         for i in 0..=last {
             let present = Mode::ALL.iter().filter(|m| **m as u8 == i).count();
             assert_eq!(present, 1, "discriminant {i} appears {present} times in Mode::ALL");
@@ -2226,6 +2267,20 @@ mod tests {
         // The lane is a fixed 24 kHz channel, symmetric about its centre.
         assert_eq!(Mode::Hfdl.default_filter(), (-12_000.0, 12_000.0));
         assert!(Mode::Hfdl.filter_presets().iter().all(|(_, lo, hi)| lo == &-hi));
+    }
+
+    /// NOAA APT is a 40 kHz FM channel on 137 MHz, not a USB sub-band. The
+    /// dial is the carrier; the decoder reads the 2400 Hz AM after the
+    /// discriminator, so a tone-offset would put every pass 2.4 kHz off.
+    #[test]
+    fn apt_is_a_wide_fm_channel_not_a_sideband() {
+        assert!(Mode::Apt.is_digital(), "it has a decoder and a panel");
+        assert!(Mode::Apt.is_apt());
+        assert!(Mode::Apt.is_carrier_centered(), "the dial is the channel centre");
+        assert!(Mode::Apt.is_fm_carrier(), "the downlink is frequency-modulated");
+        assert!(!Mode::Apt.tunes_off_dial());
+        assert_eq!(Mode::Apt.default_filter(), (-20_000.0, 20_000.0));
+        assert_eq!(Mode::Apt.on_air_hz(137_620_000.0, 2400.0), 137_620_000.0);
     }
 
     #[test]

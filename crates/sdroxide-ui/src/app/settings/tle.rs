@@ -184,7 +184,10 @@ fn settings_tle_subscriptions(ui: &mut egui::Ui, io: &mut SettingsIo) {
             theme::GREEN(),
             theme::INK_ON_CYAN(),
         )
-        .on_hover_text("Ask the radio engine to fetch every enabled subscription now")
+        .on_hover_text(
+            "Ask the radio engine to fetch every enabled TLE listing and the SatNOGS \
+             frequency table now",
+        )
         .clicked()
         {
             *io.sat_sub_refresh = true;
@@ -197,9 +200,7 @@ fn settings_tle_subscriptions(ui: &mut egui::Ui, io: &mut SettingsIo) {
         for g in sdroxide_types::CELESTRAK_GROUPS {
             let have = io.sat_edit.has_sub(g.url);
             if crate::chrome::chip(ui, have, g.name).on_hover_text(g.hint).clicked() && !have {
-                let mut sub = sdroxide_types::TleSubscription::new(g.name, g.url);
-                sub.orbits = g.orbits;
-                io.sat_edit.subs.push(sub);
+                io.sat_edit.subs.push(g.subscription());
                 io.sat_ui.note = format!("Subscribed to {}. Press UPDATE NOW to fetch it.", g.name);
             }
         }
@@ -377,9 +378,9 @@ fn settings_tle_freqs(ui: &mut egui::Ui, io: &mut SettingsIo) {
     ui.label(RichText::new("Frequencies").strong());
     ui.label(
         RichText::new(
-            "Shown under the pass table in the solar window. An entry here replaces the \
-             built-in one for that catalogue number outright, so start from a copy of it unless \
-             you mean to drop the rest.",
+            "SatNOGS frequencies load automatically for every satellite in the list. \
+             An entry here replaces that (and the built-in table) for that catalogue \
+             number outright, so start from a copy unless you mean to drop the rest.",
         )
         .weak()
         .size(11.0),

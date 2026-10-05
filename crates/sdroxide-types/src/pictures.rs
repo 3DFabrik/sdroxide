@@ -24,16 +24,19 @@ pub enum ImageKind {
     Sstv,
     /// Weather fax.
     Wefax,
+    /// NOAA APT weather-satellite pictures.
+    Apt,
 }
 
 impl ImageKind {
-    pub const ALL: [ImageKind; 2] = [ImageKind::Sstv, ImageKind::Wefax];
+    pub const ALL: [ImageKind; 3] = [ImageKind::Sstv, ImageKind::Wefax, ImageKind::Apt];
 
     /// The token this store's directory and file names are built from.
     pub fn key(self) -> &'static str {
         match self {
             ImageKind::Sstv => "sstv",
             ImageKind::Wefax => "wefax",
+            ImageKind::Apt => "apt",
         }
     }
 
@@ -42,6 +45,7 @@ impl ImageKind {
         match self {
             ImageKind::Sstv => "pictures",
             ImageKind::Wefax => "charts",
+            ImageKind::Apt => "passes",
         }
     }
 }
@@ -191,6 +195,12 @@ pub fn received_at(kind: ImageKind, name: &str) -> Option<i64> {
             digits.parse::<i64>().ok().map(|ms| ms / 1000)
         }
         ImageKind::Wefax => crate::WefaxChartMeta::from_file_name(name).map(|m| m.unix),
+        ImageKind::Apt => {
+            let rest = name.strip_prefix("apt-")?;
+            let digits = rest.strip_suffix(".png").or_else(|| rest.strip_suffix(".PNG"))?;
+            let stamp = digits.split('-').next()?;
+            stamp.parse::<i64>().ok().map(|ms| if ms > 10_000_000_000 { ms / 1000 } else { ms })
+        }
     }
 }
 
@@ -278,11 +288,13 @@ mod tests {
         );
         // The millisecond names charts were saved under before the date went in.
         assert_eq!(received_at(ImageKind::Wefax, "wefax-1753795200000.png"), Some(1_753_795_200));
+        assert_eq!(received_at(ImageKind::Apt, "apt-1753795200000.png"), Some(1_753_795_200));
         // Anything else has no date to give, and the caller falls back to mtime
         // rather than inventing one.
         for foreign in ["holiday.png", "sstv-.png", "sstv-abc.png", "wefax.png"] {
             assert_eq!(received_at(ImageKind::Sstv, foreign), None, "{foreign}");
             assert_eq!(received_at(ImageKind::Wefax, foreign), None, "{foreign}");
+            assert_eq!(received_at(ImageKind::Apt, foreign), None, "{foreign}");
         }
     }
 

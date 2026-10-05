@@ -8,8 +8,9 @@
 //!
 //! The picker is built from the same element sets the 3D view tracks: the
 //! operator's pasted TLEs and the cached subscription listings (native; the
-//! browser gets the pasted sets and the curated names, and the engine — which
-//! has the caches — resolves the elements when it locks). Pass prediction for
+//! browser gets the pasted sets, the engine's listing text, and the built-in
+//! frequency-table names, and the engine — which has the caches — resolves
+//! the elements when it locks). Pass prediction for
 //! the list is memoized one satellite per frame: a search over 48 hours is
 //! cheap enough to do once, and far too dear to do ninety times per repaint.
 
@@ -59,6 +60,9 @@ pub(in crate::app) struct SatWinState {
 struct SatList {
     cfg: std::sync::Arc<sdroxide_types::SatConfig>,
     built_unix: i64,
+    /// Fingerprint of the subscription listings this was built from, so a
+    /// TLE refresh rebuilds the picker without waiting for the memo timeout.
+    listings_key: u64,
     entries: Vec<SatEntry>,
 }
 
@@ -91,7 +95,23 @@ impl SatEntry {
     }
 }
 
-fn build_list(cfg: &std::sync::Arc<sdroxide_types::SatConfig>, now: i64) -> SatList {
+fn listings_key(listings: &[sdroxide_types::TleSubStatus]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for s in listings {
+        s.url.hash(&mut h);
+        s.fetched_unix.hash(&mut h);
+        s.listing.len().hash(&mut h);
+        s.count.hash(&mut h);
+    }
+    h.finish()
+}
+
+fn build_list(
+    cfg: &std::sync::Arc<sdroxide_types::SatConfig>,
+    listings: &[sdroxide_types::TleSubStatus],
+    now: i64,
+) -> SatList {
     let mut entries: Vec<SatEntry> = Vec::new();
     let add_text = |text: &str, entries: &mut Vec<SatEntry>| {
         for t in sdroxide_types::parse_tle_block(text) {
@@ -116,12 +136,23 @@ fn build_list(cfg: &std::sync::Arc<sdroxide_types::SatConfig>, now: i64) -> SatL
         }
     };
     add_text(&cfg.tle_text(), &mut entries);
-    // The subscription caches live on disk beside the engine — the browser
-    // client has neither, and leans on the engine to resolve elements instead.
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let cache = sdroxide_solar::cache::Cache::open();
-        for sub in cfg.live_subs() {
+    // Prefer the listings the engine already sent — that is what a browser
+    // has, and it is also what a native client sees after UPDATE NOW.
+    for sub in cfg.live_subs() {
+        if let Some(text) = listings
+            .iter()
+            .find(|s| s.url.trim() == sub.url.trim())
+            .map(|s| s.listing.as_str())
+            .filter(|t| !t.is_empty())
+        {
+            add_text(text, &mut entries);
+            continue;
+        }
+        // Native fallback before the first status arrives: read the cache
+        // the engine writes, the way this picker used to do exclusively.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let cache = sdroxide_solar::cache::Cache::open();
             if let Some(text) = sdroxide_solar::tlesub::cached_text(&cache, sub) {
                 add_text(&text, &mut entries);
             }
@@ -140,7 +171,26 @@ fn build_list(cfg: &std::sync::Arc<sdroxide_types::SatConfig>, now: i64) -> SatL
             });
         }
     }
-    SatList { cfg: std::sync::Arc::clone(cfg), built_unix: now, entries }
+    // Same for every satellite in the built-in frequency table. NOAA-15/18/19
+    // live there, not in POPULAR — without this they vanish from the picker
+    // whenever CelesTrak's weather group no longer names them.
+    for f in sdroxide_solar::satfreq::builtin() {
+        if !entries.iter().any(|e| e.norad_id == f.norad_id) {
+            entries.push(SatEntry {
+                norad_id: f.norad_id,
+                name: f.name.clone(),
+                tle: None,
+                sat: None,
+                pass: None,
+            });
+        }
+    }
+    SatList {
+        cfg: std::sync::Arc::clone(cfg),
+        built_unix: now,
+        listings_key: listings_key(listings),
+        entries,
+    }
 }
 
 /// How many points the elevation arc is sampled at. Far too many sgp4 runs to
@@ -529,7 +579,9 @@ fn pass_diagram(ui: &mut egui::Ui, curve: &PassCurve, now: i64, height: f32) {
 /// is USB on the downlink, whatever the band.
 fn mode_for_link(l: &sdroxide_types::SatLink) -> Mode {
     let m = l.mode.to_ascii_uppercase();
-    if m.contains("FM") || m.contains("APT") {
+    if m.contains("APT") {
+        Mode::Apt
+    } else if m.contains("FM") {
         Mode::Nfm
     } else if m.contains("SSB") || m.contains("BPSK") || m.contains("GMSK") || m.contains("AX.25") {
         Mode::Usb
@@ -652,11 +704,14 @@ impl SdroxideApp {
         // (Re)built here rather than down in the picker: the lock pane draws
         // its pass diagram from the same element sets, and it runs first.
         let now = crate::time::now_unix();
+        let key = listings_key(&self.sat_sub_status);
         let stale = win.list.as_ref().is_none_or(|l| {
-            !std::sync::Arc::ptr_eq(&l.cfg, &self.sat_cfg) || now - l.built_unix > MEMO_FRESH_S
+            !std::sync::Arc::ptr_eq(&l.cfg, &self.sat_cfg)
+                || l.listings_key != key
+                || now - l.built_unix > MEMO_FRESH_S
         });
         if stale {
-            win.list = Some(build_list(&self.sat_cfg, now));
+            win.list = Some(build_list(&self.sat_cfg, &self.sat_sub_status, now));
         }
         if let Some(track) = self.sat_track.clone() {
             self.sat_locked_pane(ui, win, cmds, &track);
@@ -892,6 +947,16 @@ impl SdroxideApp {
             if !win.search.is_empty() && ui.small_button("×").clicked() {
                 win.search.clear();
             }
+            if crate::chrome::chip(ui, self.ui_settings.hide_sat_no_freq, "TUNABLE")
+                .on_hover_text(
+                    "Hide satellites that have no published frequency — they cannot be tuned. \
+                     Frequencies load from SatNOGS automatically.",
+                )
+                .clicked()
+            {
+                self.ui_settings.hide_sat_no_freq = !self.ui_settings.hide_sat_no_freq;
+                crate::app::persist::persist_ui_settings(&self.ui_settings);
+            }
             if qth.is_none() {
                 ui.label(
                     RichText::new("set your grid for passes (Settings ▸ General)")
@@ -937,7 +1002,15 @@ impl SdroxideApp {
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| e.matches(&win.search))
+            .filter(|(_, e)| {
+                e.matches(&win.search)
+                    && (!self.ui_settings.hide_sat_no_freq
+                        || sdroxide_solar::satfreq::has_usable(
+                            e.norad_id,
+                            &self.sat_cfg,
+                            &self.sat_freq_db,
+                        ))
+            })
             .map(|(i, e)| {
                 let el = match (&e.sat, qth) {
                     (Some(s), Some((lat, lon))) => {
@@ -1035,10 +1108,7 @@ impl SdroxideApp {
 
         // The operator's own frequency table wins over the built-in one, the
         // same rule the 3D view's pass window applies.
-        let freqs = match self.sat_cfg.freqs_for(id) {
-            Some(f) => Some(f.clone()),
-            None => sdroxide_solar::satfreq::builtin_for(id).cloned(),
-        };
+        let freqs = sdroxide_solar::satfreq::resolve(id, &self.sat_cfg, &self.sat_freq_db).cloned();
         ui.add_space(6.0);
         ui.separator();
         ui.add_space(4.0);
@@ -1063,7 +1133,8 @@ impl SdroxideApp {
         let links: Vec<sdroxide_types::SatLink> =
             freqs.as_ref().map(|f| f.usable_links().cloned().collect()).unwrap_or_default();
         if links.is_empty() {
-            ui.label(dim("No frequencies on file for this one — add them in Settings ▸ TLE."));
+            ui.label(dim("No frequencies yet — SatNOGS fills this in automatically. \
+                 Add your own in Settings ▸ TLE, or press UPDATE NOW."));
             return;
         }
         win.link_idx = win.link_idx.min(links.len() - 1);
@@ -1178,10 +1249,8 @@ impl SdroxideApp {
         self.show_sat = true;
         self.sat_win.selected = Some(norad_id);
         self.sat_win.link_idx = 0;
-        let freqs = match self.sat_cfg.freqs_for(norad_id) {
-            Some(f) => Some(f.clone()),
-            None => sdroxide_solar::satfreq::builtin_for(norad_id).cloned(),
-        };
+        let freqs =
+            sdroxide_solar::satfreq::resolve(norad_id, &self.sat_cfg, &self.sat_freq_db).cloned();
         let links: Vec<sdroxide_types::SatLink> =
             freqs.as_ref().map(|f| f.usable_links().cloned().collect()).unwrap_or_default();
         // Prefer the first link that can be worked both ways; a beacon-only

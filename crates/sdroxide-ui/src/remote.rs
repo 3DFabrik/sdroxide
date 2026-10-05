@@ -422,6 +422,13 @@ impl RemoteController {
                 self.pending.push_back(RadioEvent::WefaxImage { image_id, w, h, png })
             }
             ServerMsg::WefaxStatus(s) => self.pending.push_back(RadioEvent::WefaxStatus(s)),
+            ServerMsg::AptLine { image_id, channel, y, gray } => {
+                self.pending.push_back(RadioEvent::AptLine { image_id, channel, y, gray })
+            }
+            ServerMsg::AptImage { image_id, w, h, png } => {
+                self.pending.push_back(RadioEvent::AptImage { image_id, w, h, png })
+            }
+            ServerMsg::AptStatus(s) => self.pending.push_back(RadioEvent::AptStatus(s)),
             ServerMsg::Rds(d) => self.pending.push_back(RadioEvent::Rds(d)),
             ServerMsg::Drm(d) => self.pending.push_back(RadioEvent::Drm(d)),
             ServerMsg::Hd(d) => self.pending.push_back(RadioEvent::HdRadio(d)),
@@ -478,6 +485,11 @@ impl RemoteController {
             }
             ServerMsg::StationConfig(c) => self.pending.push_back(RadioEvent::StationConfig(c)),
             ServerMsg::TleSubStatus(s) => self.pending.push_back(RadioEvent::TleSubStatus(s)),
+            ServerMsg::SatFreqDb(s) => self.pending.push_back(RadioEvent::SatFreqDb(s)),
+            ServerMsg::WxSched(s) => self.pending.push_back(RadioEvent::WxSched(s)),
+            ServerMsg::WxAudio { name, wav } => {
+                self.pending.push_back(RadioEvent::WxAudio { name, wav })
+            }
             ServerMsg::SatTrack(t) => self.pending.push_back(RadioEvent::SatTrack(t)),
             ServerMsg::RotatorStatus { connected, az_deg, el_deg, error } => self
                 .pending

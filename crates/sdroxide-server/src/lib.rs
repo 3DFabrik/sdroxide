@@ -314,6 +314,14 @@ pub(crate) struct Latest {
     /// What each TLE subscription's cached listing holds, alongside the config
     /// it annotates.
     pub tle_subs: Vec<sdroxide_types::TleSubStatus>,
+    /// SatNOGS transmitter frequencies, replayed on connect like the TLE
+    /// listings: a browser SAT picker has no disk cache of its own.
+    pub sat_freqs: Vec<sdroxide_types::SatFreqs>,
+    /// The weather-satellite pass scheduler. Replayed on connect because, like
+    /// the satellite lock below, it is a *condition* of the station: a client
+    /// attaching has to see what is already armed rather than an empty table
+    /// it might tick a second time.
+    pub wx_sched: Option<Box<sdroxide_types::WxSchedStatus>>,
     /// The satellite lock's latest status. Replayed on connect because a lock
     /// is a *condition*: a client attaching mid-pass has to see it now, not at
     /// the next half-second tick — and above all must not offer to start a
@@ -1364,6 +1372,13 @@ fn handle_event(shared: &Shared, ev: RadioEvent) {
                 Some(ServerMsg::WefaxImage { image_id, w, h, png })
             }
             RadioEvent::WefaxStatus(s) => Some(ServerMsg::WefaxStatus(s)),
+            RadioEvent::AptLine { image_id, channel, y, gray } => {
+                Some(ServerMsg::AptLine { image_id, channel, y, gray })
+            }
+            RadioEvent::AptImage { image_id, w, h, png } => {
+                Some(ServerMsg::AptImage { image_id, w, h, png })
+            }
+            RadioEvent::AptStatus(s) => Some(ServerMsg::AptStatus(s)),
             RadioEvent::RifpRows { image_id, y, w, h, rows } => {
                 Some(ServerMsg::RifpRows { image_id, y, w, h, rows })
             }
@@ -1437,6 +1452,15 @@ fn handle_event(shared: &Shared, ev: RadioEvent) {
                 latest.tle_subs = s.clone();
                 Some(ServerMsg::TleSubStatus(s))
             }
+            RadioEvent::SatFreqDb(s) => {
+                latest.sat_freqs = s.clone();
+                Some(ServerMsg::SatFreqDb(s))
+            }
+            RadioEvent::WxSched(s) => {
+                latest.wx_sched = Some(s.clone());
+                Some(ServerMsg::WxSched(s))
+            }
+            RadioEvent::WxAudio { name, wav } => Some(ServerMsg::WxAudio { name, wav }),
             RadioEvent::RadioConfig(c) => {
                 latest.radio = Some(c.clone());
                 Some(ServerMsg::RadioConfig(c))

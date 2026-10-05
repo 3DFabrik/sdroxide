@@ -626,10 +626,7 @@ pub fn load_user_qso_log(name: &str) -> Vec<sdroxide_types::QsoRecord> {
 }
 
 /// Write one named operator's logbook.
-pub fn save_user_qso_log(
-    name: &str,
-    log: &[sdroxide_types::QsoRecord],
-) -> Result<(), ConfigError> {
+pub fn save_user_qso_log(name: &str, log: &[sdroxide_types::QsoRecord]) -> Result<(), ConfigError> {
     let Some(store) = Store::user(name) else {
         return Err(ConfigError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -1217,6 +1214,19 @@ pub fn wefax_rx_dir() -> Result<PathBuf, ConfigError> {
     Ok(dir)
 }
 
+/// Directory for received NOAA APT pictures: `<Pictures>/sdroxide/apt`, or
+/// `~/.config/sdroxide/apt_rx` when the platform has no pictures folder.
+pub fn apt_rx_dir() -> Result<PathBuf, ConfigError> {
+    let dir = match directories::UserDirs::new()
+        .and_then(|u| u.picture_dir().map(std::path::Path::to_path_buf))
+    {
+        Some(pictures) => pictures.join("sdroxide").join("apt"),
+        None => config_dir()?.join("apt_rx"),
+    };
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
 /// Where charts were kept before they moved to the pictures directory.
 ///
 /// Read-only and never created: the gallery lists it alongside the current
@@ -1290,6 +1300,20 @@ pub fn recordings_dir() -> Result<PathBuf, ConfigError> {
         Some(music) => music.join("sdroxide"),
         None => config_dir()?.join("recordings"),
     };
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// Directory for recorded APT pass audio: `<Music>/sdroxide/apt`, beside the
+/// other recordings rather than in the pictures folder with the pass's own
+/// picture.
+///
+/// Split from [`apt_rx_dir`] on the same grounds the two top-level directories
+/// are split on: a WAV is audio and belongs where the operator's audio is, and
+/// an audio file dropped into a pictures directory is one every photo viewer
+/// and backup rule has to be told to ignore.
+pub fn apt_audio_dir() -> Result<PathBuf, ConfigError> {
+    let dir = recordings_dir()?.join("apt");
     fs::create_dir_all(&dir)?;
     Ok(dir)
 }
@@ -1980,7 +2004,9 @@ pub fn load_sat_config() -> sdroxide_types::SatConfig {
     // install with no file at all — has to be given them once, or the sky comes
     // up empty. Written back immediately so the seeding happens exactly once
     // and unsubscribing sticks.
-    if cfg.seed_defaults() {
+    let seeded = cfg.seed_defaults();
+    let filtered = cfg.fill_empty_group_filters();
+    if seeded || filtered {
         if let Err(e) = save_sat_config(&cfg) {
             warn!("could not write the seeded satellite subscriptions: {e}");
         }
@@ -1990,6 +2016,22 @@ pub fn load_sat_config() -> sdroxide_types::SatConfig {
 
 pub fn save_sat_config(cfg: &sdroxide_types::SatConfig) -> Result<(), ConfigError> {
     save_json("satellites.json", cfg)
+}
+
+/// The weather-satellite pass scheduler: the operator's filter and the passes
+/// they have armed.
+///
+/// Engine-owned for the same reason the satellite config above is, and more so:
+/// the whole point of an armed pass is that it is recorded whether or not any
+/// client is attached when the bird comes over.
+pub fn load_wx_schedule() -> sdroxide_types::WxSchedule {
+    let mut s: sdroxide_types::WxSchedule = load_json("wx_schedule.json");
+    s.cfg = s.cfg.sane();
+    s
+}
+
+pub fn save_wx_schedule(s: &sdroxide_types::WxSchedule) -> Result<(), ConfigError> {
+    save_json("wx_schedule.json", s)
 }
 
 /// The rotctld client a satellite lock steers the antenna through. Owned by

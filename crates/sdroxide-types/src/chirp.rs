@@ -65,7 +65,7 @@ fn mode_name(m: Mode) -> &'static str {
         Mode::Am | Mode::Sam => "AM",
         Mode::Lsb | Mode::Digl => "LSB",
         Mode::Cw => "CW",
-        Mode::Nfm => "FM",
+        Mode::Nfm | Mode::Apt => "FM",
         // Everything else in sdroxide rides a sideband or an FM carrier, and
         // the FM ones are all `Mode::Nfm` and were caught above.
         _ => "USB",

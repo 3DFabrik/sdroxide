@@ -467,6 +467,22 @@ impl TleSubscription {
     }
 }
 
+/// NOAA APT and Meteor-M birds on 137 MHz.
+///
+/// CelesTrak's `GROUP=weather` listing dropped the analog NOAA satellites;
+/// their elements are still served by catalogue number. The Weather
+/// subscription's default filter is this set, so the SAT picker is the handful
+/// of 137 MHz birds rather than seventy geostationary weather platforms.
+pub const WEATHER_APT_CATNRS: &[u64] = &[
+    25338, // NOAA 15
+    28654, // NOAA 18
+    33591, // NOAA 19
+    40069, // METEOR-M 2
+    44387, // METEOR-M2 2
+    57166, // METEOR-M 2-3
+    59051, // METEOR-M 2-4
+];
+
 /// One of the element-set listings offered as a one-click subscription.
 pub struct CelestrakGroup {
     pub name: &'static str,
@@ -478,6 +494,19 @@ pub struct CelestrakGroup {
     pub default_on: bool,
     /// Which satellites in the listing start out ringed and labelled.
     pub orbits: OrbitRings,
+    /// Catalogue numbers the subscription starts filtered to. Empty keeps
+    /// everything the listing has.
+    pub default_only: &'static [u64],
+}
+
+impl CelestrakGroup {
+    /// A new subscription with this group's orbit rings and default filter.
+    pub fn subscription(&self) -> TleSubscription {
+        let mut sub = TleSubscription::new(self.name, self.url);
+        sub.orbits = self.orbits;
+        sub.only.extend_from_slice(self.default_only);
+        sub
+    }
 }
 
 /// CelesTrak group listings worth offering as one-click subscriptions.
@@ -494,6 +523,7 @@ pub const CELESTRAK_GROUPS: &[CelestrakGroup] = &[
         // Ninety rings at once is unreadable, and no rings at all leaves ninety
         // anonymous dots — so the curated few, which is the middle position.
         orbits: OrbitRings::Curated,
+        default_only: &[],
     },
     CelestrakGroup {
         name: "ISS",
@@ -501,6 +531,7 @@ pub const CELESTRAK_GROUPS: &[CelestrakGroup] = &[
         hint: "The ISS on its own, from its own element set — fresher than the copy in the                amateur group, and it keeps working if you unsubscribe from that.",
         default_on: true,
         orbits: OrbitRings::All,
+        default_only: &[],
     },
     CelestrakGroup {
         name: "Weather",
@@ -508,6 +539,7 @@ pub const CELESTRAK_GROUPS: &[CelestrakGroup] = &[
         hint: "The NOAA APT and Meteor LRPT birds on 137 MHz",
         default_on: false,
         orbits: OrbitRings::Curated,
+        default_only: WEATHER_APT_CATNRS,
     },
     CelestrakGroup {
         name: "CubeSats",
@@ -515,6 +547,7 @@ pub const CELESTRAK_GROUPS: &[CelestrakGroup] = &[
         hint: "Everything cubesat-sized, including amateur payloads too new for the amateur group",
         default_on: false,
         orbits: OrbitRings::Curated,
+        default_only: &[],
     },
     CelestrakGroup {
         name: "Space stations",
@@ -522,6 +555,7 @@ pub const CELESTRAK_GROUPS: &[CelestrakGroup] = &[
         hint: "The ISS, Tiangong and the vehicles docked with them",
         default_on: false,
         orbits: OrbitRings::Curated,
+        default_only: &[],
     },
     CelestrakGroup {
         name: "Last 30 days' launches",
@@ -529,6 +563,7 @@ pub const CELESTRAK_GROUPS: &[CelestrakGroup] = &[
         hint: "Anything launched in the last month — where a brand-new amateur satellite shows                up first",
         default_on: false,
         orbits: OrbitRings::Curated,
+        default_only: &[],
     },
     CelestrakGroup {
         name: "Geostationary",
@@ -536,6 +571,7 @@ pub const CELESTRAK_GROUPS: &[CelestrakGroup] = &[
         hint: "The geostationary belt, QO-100 among it",
         default_on: false,
         orbits: OrbitRings::Curated,
+        default_only: &[],
     },
     CelestrakGroup {
         name: "GNSS",
@@ -543,6 +579,7 @@ pub const CELESTRAK_GROUPS: &[CelestrakGroup] = &[
         hint: "GPS, Galileo, GLONASS and BeiDou",
         default_on: false,
         orbits: OrbitRings::Curated,
+        default_only: &[],
     },
 ];
 
@@ -570,6 +607,13 @@ pub struct TleSubStatus {
     /// Why the last attempt failed, if it did. A failure does not clear
     /// `count`: the cached listing is still what is being tracked.
     pub error: Option<String>,
+    /// The cached element-set listing, already filtered to what this
+    /// subscription wants. Empty when nothing has been fetched.
+    ///
+    /// This is what a browser SAT picker has instead of the engine host's disk
+    /// cache: without it, only pasted TLEs and the ten curated amateur names
+    /// appear, so a Weather subscription looks empty even after UPDATE NOW.
+    pub listing: String,
 }
 
 /// The operator's satellite additions, persisted as `satellites.json`.
@@ -660,12 +704,35 @@ impl SatConfig {
             if self.has_sub(g.url) {
                 continue;
             }
-            let mut sub = TleSubscription::new(g.name, g.url);
-            sub.orbits = g.orbits;
-            self.subs.push(sub);
+            self.subs.push(g.subscription());
             added = true;
         }
-        added
+        added || self.fill_empty_group_filters()
+    }
+
+    /// Give an already-subscribed group its advertised filter when the
+    /// operator never set one.
+    ///
+    /// Weather is the case that matters: an empty `only` keeps the whole
+    /// CelesTrak listing, which is now mostly geostationary platforms and no
+    /// longer contains NOAA 15/18/19. Filling the default APT/Meteor set is
+    /// what the group's hint already promises.
+    pub fn fill_empty_group_filters(&mut self) -> bool {
+        let mut changed = false;
+        for sub in &mut self.subs {
+            if !sub.only.is_empty() {
+                continue;
+            }
+            let Some(g) = CELESTRAK_GROUPS.iter().find(|g| g.url == sub.url.trim()) else {
+                continue;
+            };
+            if g.default_only.is_empty() {
+                continue;
+            }
+            sub.only.extend_from_slice(g.default_only);
+            changed = true;
+        }
+        changed
     }
 
     /// The subscriptions worth fetching.
@@ -976,5 +1043,24 @@ ISS (ZARYA)
         );
         let back: SatConfig = serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
         assert_eq!(back, cfg);
+    }
+
+    #[test]
+    fn an_empty_weather_filter_is_filled_with_the_apt_birds() {
+        let weather = CELESTRAK_GROUPS.iter().find(|g| g.name == "Weather").unwrap();
+        assert_eq!(weather.default_only, WEATHER_APT_CATNRS);
+        assert!(weather.default_only.contains(&25338));
+        assert!(weather.default_only.contains(&28654));
+        assert!(weather.default_only.contains(&33591));
+
+        let mut cfg = SatConfig {
+            subs: vec![TleSubscription::new("Weather", weather.url)],
+            seeded: true,
+            ..SatConfig::default()
+        };
+        assert!(cfg.subs[0].only.is_empty());
+        assert!(cfg.fill_empty_group_filters());
+        assert_eq!(cfg.subs[0].only, WEATHER_APT_CATNRS);
+        assert!(!cfg.fill_empty_group_filters(), "filling twice must be a no-op");
     }
 }

@@ -9,6 +9,8 @@
 pub enum Mime {
     Text,
     Png,
+    /// A recorded pass, for WXtoImg and anything else that reads a RIFF file.
+    Wav,
 }
 
 impl Mime {
@@ -17,6 +19,7 @@ impl Mime {
         match self {
             Mime::Text => "text/plain",
             Mime::Png => "image/png",
+            Mime::Wav => "audio/wav",
         }
     }
 }

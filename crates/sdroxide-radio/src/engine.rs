@@ -17,11 +17,11 @@ use sdroxide_adsb::{AdsbAction, AdsbController};
 use sdroxide_ais::{AisAction, AisController};
 use sdroxide_config::BandStacks;
 use sdroxide_digi::{
-    AcarsController, AprsController, AtChatController, CwController, DigiAction, DigiController,
-    DigiEngine, Fsk441Controller, FsqController, Fst4Controller, HellController, Js8Controller,
-    JtController, Msk144Controller, NavtexController, PacketController, Pi4Controller,
-    Q65Controller, RadeController, RfPaintController, RifpController, SstvController,
-    TextModemController, WefaxController, WsprController,
+    AcarsController, AprsController, AptController, AtChatController, CwController, DigiAction,
+    DigiController, DigiEngine, Fsk441Controller, FsqController, Fst4Controller, HellController,
+    Js8Controller, JtController, Msk144Controller, NavtexController, PacketController,
+    Pi4Controller, Q65Controller, RadeController, RfPaintController, RifpController,
+    SstvController, TextModemController, WefaxController, WsprController,
 };
 use sdroxide_drm::DrmDemod;
 use sdroxide_dsp::{
@@ -2051,6 +2051,33 @@ struct ActiveSatLock {
     next_slow_unix: f64,
 }
 
+/// A scheduled weather-satellite pass being recorded, and what the radio was
+/// doing before the schedule took it.
+///
+/// Everything in it is needed to *undo* the takeover. An unattended recording
+/// that leaves the receiver parked on 137 MHz in APT is worse than no recording
+/// at all: the operator comes back to a radio that is not where they left it,
+/// and the next thing they do is blame the band.
+struct WxRecording {
+    /// The job this belongs to, identified the way [`sdroxide_types::WxJob`] is.
+    norad_id: u64,
+    aos_unix: i64,
+    /// Shared leading part of the file names — see
+    /// [`sdroxide_types::pass_stem`].
+    stem: String,
+    /// The audio for an external decoder. `None` when the operator switched
+    /// that off, or when the file could not be opened.
+    wav: Option<crate::apt_wav::AptWavWriter>,
+    /// Pictures written during this pass, newest last. More than one means the
+    /// signal dropped out long enough for the decoder to call it a day and
+    /// start again, which is a real thing on a low pass.
+    pngs: Vec<String>,
+    /// The radio as it was: mode, dial, and whatever lock was running.
+    prev_mode: Mode,
+    prev_dial_hz: f64,
+    prev_lock: Option<Box<sdroxide_types::SatLockConfig>>,
+}
+
 /// How often the lock's geometry is recomputed. LEO Doppler at UHF moves at up
 /// to ~75 Hz/s near closest approach; five recomputes a second keep the applied
 /// correction within ~15 Hz of the truth, and the NCO retunes are free.
@@ -2962,9 +2989,37 @@ struct Engine {
     /// A running [`Command::RefreshTleSubs`], joined when it finishes so the
     /// fetched status reaches the clients that asked for it.
     tle_refresh: Option<std::thread::JoinHandle<Vec<sdroxide_types::TleSubStatus>>>,
+    /// The SatNOGS frequency table as last fetched or read off disk. Kept
+    /// rather than re-read because the pass scheduler consults it once a minute
+    /// and the file is a megabyte of JSON.
+    sat_freqs: Vec<sdroxide_types::SatFreqs>,
+    /// A running SatNOGS transmitter fetch, joined when it finishes.
+    sat_freq_refresh: Option<std::thread::JoinHandle<Vec<sdroxide_types::SatFreqs>>>,
     /// The satellite lock, when one is active — see [`Engine::poll_sat_track`]
     /// for the tracking loop and `start_sat_lock` for how one begins.
     sat_lock: Option<ActiveSatLock>,
+    /// The weather-satellite pass scheduler as persisted (`wx_schedule.json`):
+    /// the operator's filter and the passes they have armed.
+    ///
+    /// Engine-owned, and that is the whole feature: an armed pass is recorded
+    /// whether or not anybody is attached when the bird comes over.
+    wx_sched: sdroxide_types::WxSchedule,
+    /// The prediction the last sweep produced, with the ticks folded in — what
+    /// goes out as [`RadioEvent::WxSched`].
+    wx_passes: Vec<sdroxide_types::WxPass>,
+    /// Why the list is empty or short, for a client that would otherwise show a
+    /// blank table with no explanation.
+    wx_note: String,
+    /// When the next prediction sweep is due, Unix seconds.
+    wx_next_sweep: i64,
+    /// The pass being recorded, and what the radio was doing before the
+    /// schedule took it over.
+    wx_rec: Option<WxRecording>,
+    /// Carries the APT tap to the rate [`crate::apt_wav`] writes at. Rebuilt
+    /// when the demodulator's rate moves, the same way the TCI stream's is.
+    wx_wav_rs: Option<MonoResampler>,
+    wx_wav_in_rate: f64,
+    wx_wav_buf: Vec<f32>,
     /// The rotctld client's config as persisted (`rotator.json`), announced in
     /// the station bundle the way the servers' are.
     rot_cfg: sdroxide_types::RotatorConfig,
@@ -4204,8 +4259,18 @@ fn engine_thread(
         packet_port: None,
         net_cfg: sdroxide_types::NetworkConfig::default(),
         sat_cfg: sdroxide_types::SatConfig::default(),
+        sat_freqs: Vec::new(),
         tle_refresh: None,
+        sat_freq_refresh: None,
         sat_lock: None,
+        wx_sched: sdroxide_types::WxSchedule::default(),
+        wx_passes: Vec::new(),
+        wx_note: String::new(),
+        wx_next_sweep: 0,
+        wx_rec: None,
+        wx_wav_rs: None,
+        wx_wav_in_rate: 0.0,
+        wx_wav_buf: Vec::new(),
         rot_cfg: sdroxide_types::RotatorConfig::default(),
         relay_cfg: sdroxide_types::RelayConfig::default(),
         tr_switch: engine_cfg.tr_switch.clone(),
@@ -4329,6 +4394,13 @@ fn engine_thread(
     // would write them over the real thing.
     engine.emit_station_config();
     engine.emit_tle_sub_status();
+    engine.emit_sat_freq_db();
+    if sdroxide_solar::satnogs::cache_stale() {
+        engine.start_sat_freq_refresh();
+    }
+    // The pass scheduler, which has to survive a restart: an armed pass is a
+    // promise made to an operator who may not be here.
+    engine.load_wx_sched();
     // And this radio's own interface configuration, for the same reason again.
     // It is the only route a remote operator has to the settings that belong to
     // the device rather than to the receiver chain — a dongle's AGC mode, its
@@ -4512,7 +4584,9 @@ fn engine_thread(
         engine.poll_kiss_server();
         engine.poll_images();
         engine.poll_tle_refresh();
+        engine.poll_sat_freq_refresh();
         engine.poll_sat_track();
+        engine.poll_wx_sched();
         engine.poll_rotator_status();
         engine.poll_tr_switch();
         // Attach (or re-attach) the configured radio on its own when the
@@ -5223,6 +5297,22 @@ impl Engine {
             if let (Some(digi), Some(main)) = (self.digi.as_mut(), self.main.as_ref()) {
                 if main.tap_enabled {
                     digi.on_rx_audio(&main.tap_out);
+                }
+            }
+            // The same tap, kept as a file for an external APT decoder while a
+            // scheduled pass is running. This is the discriminator output — the
+            // 2400 Hz subcarrier — which is what WXtoImg reads; the picture
+            // this program makes of it cannot be turned back into one.
+            if let (Some(rec), Some(main)) = (self.wx_rec.as_mut(), self.main.as_ref()) {
+                if main.tap_enabled {
+                    write_wx_wav(
+                        rec,
+                        &mut self.wx_wav_rs,
+                        &mut self.wx_wav_in_rate,
+                        &mut self.wx_wav_buf,
+                        &main.tap_out,
+                        main.audio_rate(),
+                    );
                 }
             }
             // Digital voice: play the decoded speech instead of the demodulated
@@ -6568,6 +6658,27 @@ impl Engine {
                 DigiAction::WefaxStatus(s) => {
                     let _ = self.event_tx.send(RadioEvent::WefaxStatus(s));
                 }
+                DigiAction::AptLine { image_id, channel, y, gray } => {
+                    let _ = self.event_tx.send(RadioEvent::AptLine { image_id, channel, y, gray });
+                }
+                DigiAction::AptImage { image_id, w, h, gray } => {
+                    if let Some(png) = encode_png_gray(&gray, w, h) {
+                        // A picture from a scheduled pass is named after that
+                        // pass, so it sits beside the audio the same pass
+                        // produced rather than under a bare timestamp.
+                        let stem = self.wx_rec.as_ref().map(|r| r.stem.clone());
+                        if let Some(name) = save_apt_rx(&png, stem.as_deref()) {
+                            if let Some(rec) = self.wx_rec.as_mut() {
+                                rec.pngs.push(name.clone());
+                            }
+                            self.gallery.entry(ImageKind::Apt, name, None);
+                        }
+                        let _ = self.event_tx.send(RadioEvent::AptImage { image_id, w, h, png });
+                    }
+                }
+                DigiAction::AptStatus(s) => {
+                    let _ = self.event_tx.send(RadioEvent::AptStatus(s));
+                }
                 DigiAction::RifpRows { image_id, y, w, h, rows } => {
                     let _ = self.event_tx.send(RadioEvent::RifpRows { image_id, y, w, h, rows });
                 }
@@ -6690,6 +6801,8 @@ impl Engine {
             Box::new(SstvController::new(mode, self.digi_config.clone(), tap_rate))
         } else if mode.is_wefax() {
             Box::new(WefaxController::new(self.digi_config.clone(), tap_rate))
+        } else if mode.is_apt() {
+            Box::new(AptController::new(self.digi_config.clone(), tap_rate))
         } else if mode == Mode::Navtex {
             // Ahead of the fall-through: NAVTEX has the shape of a keyboard
             // mode and none of its behaviour — no callsign, no transmitter, and
@@ -9043,6 +9156,33 @@ impl Engine {
                     d.wefax_stop();
                 }
             }
+            AptStart => {
+                if let Some(d) = self.digi.as_mut() {
+                    d.apt_start();
+                }
+            }
+            AptStop => {
+                if let Some(d) = self.digi.as_mut() {
+                    d.apt_stop();
+                }
+            }
+            SetWxSchedConfig(cfg) => {
+                self.wx_sched.cfg = cfg.sane();
+                self.save_wx_sched();
+                // Synchronously, not at the next sweep: the operator moved a
+                // slider and is watching the list for the answer.
+                self.sweep_wx_sched(unix_now_f64() as i64);
+                self.wx_next_sweep = unix_now_f64() as i64 + crate::wxsched::SWEEP_INTERVAL_S;
+                self.emit_wx_sched();
+            }
+            ArmWxPass { norad_id, aos_unix, on } => self.arm_wx_pass(norad_id, aos_unix, on),
+            RefreshWxSched => {
+                self.sweep_wx_sched(unix_now_f64() as i64);
+                self.wx_next_sweep = unix_now_f64() as i64 + crate::wxsched::SWEEP_INTERVAL_S;
+                self.emit_wx_sched();
+            }
+            WxAudioGet(name) => self.send_wx_audio(name),
+            WxAudioDelete(name) => self.delete_wx_audio(&name),
             WefaxNudge(px) => {
                 if let Some(d) = self.digi.as_mut() {
                     d.wefax_nudge(px);
@@ -9583,6 +9723,7 @@ impl Engine {
             }
             RefreshTleSubs => {
                 self.start_tle_refresh();
+                self.start_sat_freq_refresh();
                 return;
             }
 
@@ -11872,6 +12013,501 @@ impl Engine {
             }
         };
         let _ = self.event_tx.send(RadioEvent::TleSubStatus(status));
+        // Fresher elements move every predicted AOS, so the schedule the
+        // operator is looking at is now out of date — and so is the one the
+        // recorder is arming from.
+        self.resweep_wx_sched();
+    }
+
+    /// Announce the cached SatNOGS frequency table. No network.
+    fn emit_sat_freq_db(&mut self) {
+        self.sat_freqs = sdroxide_solar::satnogs::cached();
+        let _ = self.event_tx.send(RadioEvent::SatFreqDb(self.sat_freqs.clone()));
+    }
+
+    /// Re-fetch the SatNOGS transmitter list off the engine thread.
+    fn start_sat_freq_refresh(&mut self) {
+        if self.sat_freq_refresh.as_ref().is_some_and(|h| !h.is_finished()) {
+            return;
+        }
+        self.sat_freq_refresh = std::thread::Builder::new()
+            .name("sdroxide-satnogs".into())
+            .spawn(sdroxide_solar::satnogs::refresh)
+            .map_err(|e| warn!("could not start the SatNOGS refresh: {e}"))
+            .ok();
+    }
+
+    fn poll_sat_freq_refresh(&mut self) {
+        if !self.sat_freq_refresh.as_ref().is_some_and(|h| h.is_finished()) {
+            return;
+        }
+        let freqs = match self.sat_freq_refresh.take().expect("checked above").join() {
+            Ok(v) => v,
+            Err(_) => {
+                warn!("the SatNOGS refresh thread panicked");
+                return;
+            }
+        };
+        self.sat_freqs = freqs;
+        let _ = self.event_tx.send(RadioEvent::SatFreqDb(self.sat_freqs.clone()));
+        // A bird that had no frequency a moment ago may be armable now.
+        self.resweep_wx_sched();
+    }
+
+    // ── The weather-satellite pass scheduler ────────────────────────────────
+
+    /// Read the schedule off disk and make sense of what the last run left.
+    ///
+    /// A job still marked `Recording` means this process went away mid-pass —
+    /// a power cut, a `systemctl restart`, a panic. There is no way to resume
+    /// it (the bird has gone) and leaving it pending would have the recorder
+    /// chase a window that closed hours ago, so it is failed with a note. That
+    /// note is the only trace an operator would ever get of the crash.
+    fn load_wx_sched(&mut self) {
+        self.wx_sched = sdroxide_config::load_wx_schedule();
+        let mut crashed = 0;
+        for j in &mut self.wx_sched.jobs {
+            if j.state == sdroxide_types::WxJobState::Recording {
+                j.state = sdroxide_types::WxJobState::Failed;
+                j.note = "interrupted — sdroxide restarted during the pass".into();
+                crashed += 1;
+            }
+        }
+        if crashed > 0 {
+            warn!(passes = crashed, "a scheduled recording did not survive the last restart");
+            self.save_wx_sched();
+        }
+        self.resweep_wx_sched();
+    }
+
+    fn save_wx_sched(&mut self) {
+        self.wx_sched.prune();
+        if let Err(e) = sdroxide_config::save_wx_schedule(&self.wx_sched) {
+            warn!("could not write the pass schedule: {e}");
+        }
+    }
+
+    /// Have the next tick recompute the prediction.
+    ///
+    /// Not the recomputation itself: this is called from the middle of command
+    /// handling and from refresh callbacks, and a sweep is a few hundred sgp4
+    /// runs — work that belongs on the poll, not on whatever happened to
+    /// trigger it.
+    fn resweep_wx_sched(&mut self) {
+        self.wx_next_sweep = 0;
+    }
+
+    /// Announce the schedule: the filter, the list, and what is recording.
+    fn emit_wx_sched(&self) {
+        let _ = self.event_tx.send(RadioEvent::WxSched(Box::new(sdroxide_types::WxSchedStatus {
+            cfg: self.wx_sched.cfg.clone(),
+            passes: self.wx_passes.clone(),
+            note: self.wx_note.clone(),
+            recording: self.wx_rec.as_ref().map(|r| (r.norad_id, r.aos_unix)),
+        })));
+    }
+
+    /// The freshest element set for each bird the scheduler is set to offer.
+    ///
+    /// The same sources `resolve_sat_tle` competes — the operator's pasted sets
+    /// and every enabled subscription's cached listing, newest epoch wins — but
+    /// resolved for the whole set in one pass over the cache, because this runs
+    /// every minute rather than once per lock.
+    fn wx_satellites(&self) -> Vec<sdroxide_solar::Satellite> {
+        use sdroxide_solar::satellites::{parse_pasted_tles, parse_subscribed_tles};
+        let want = &self.wx_sched.cfg.sats;
+        let mut best: std::collections::BTreeMap<u64, sdroxide_solar::Satellite> =
+            std::collections::BTreeMap::new();
+        let mut consider = |s: sdroxide_solar::Satellite| {
+            if !want.contains(&s.norad_id) {
+                return;
+            }
+            if best.get(&s.norad_id).is_none_or(|b| s.epoch_unix > b.epoch_unix) {
+                best.insert(s.norad_id, s);
+            }
+        };
+        for s in parse_pasted_tles(&self.sat_cfg.tle_text()) {
+            consider(s);
+        }
+        let cache = sdroxide_solar::cache::Cache::open();
+        for sub in self.sat_cfg.live_subs() {
+            if !want.iter().any(|id| sub.wants(*id)) {
+                continue;
+            }
+            if let Some(text) = sdroxide_solar::tlesub::cached_text(&cache, sub) {
+                for s in parse_subscribed_tles(&text) {
+                    consider(s);
+                }
+            }
+        }
+        best.into_values().collect()
+    }
+
+    /// A bird's APT downlink, Hz, or zero when nothing published one.
+    ///
+    /// The operator's override, then SatNOGS, then the built-in table — the
+    /// same order the SAT picker resolves in. Narrowed to the 137–138 MHz
+    /// metsat band, because a NOAA entry also carries the S-band HRPT
+    /// downlink, and tuning a 1.7 GHz carrier for an APT recording would
+    /// produce fifteen minutes of silence from a receiver that cannot even
+    /// reach it.
+    fn wx_downlink_hz(&self, norad_id: u64) -> f64 {
+        let Some(f) = sdroxide_solar::satfreq::resolve(norad_id, &self.sat_cfg, &self.sat_freqs)
+        else {
+            return 0.0;
+        };
+        f.usable_links()
+            .filter_map(|l| l.downlink)
+            .map(|p| p.centre_mhz())
+            .find(|mhz| (137.0..138.0).contains(mhz))
+            .map_or(0.0, |mhz| mhz * 1e6)
+    }
+
+    /// The scheduler's whole loop, once per engine tick.
+    ///
+    /// Cheap on most of them: the prediction sweep is a minute apart, and
+    /// between sweeps this is two comparisons against the clock.
+    fn poll_wx_sched(&mut self) {
+        let now = unix_now_f64() as i64;
+        let mut changed = false;
+
+        if now >= self.wx_next_sweep {
+            self.wx_next_sweep = now + crate::wxsched::SWEEP_INTERVAL_S;
+            self.sweep_wx_sched(now);
+            changed = true;
+        }
+
+        // Windows that closed with nothing recorded. Marked before the next
+        // one is picked, so a missed pass cannot keep winning `due`.
+        let missed = crate::wxsched::missed(&self.wx_sched, now);
+        if !missed.is_empty() {
+            for i in missed {
+                let j = &mut self.wx_sched.jobs[i];
+                j.state = sdroxide_types::WxJobState::Failed;
+                if j.note.is_empty() {
+                    j.note = "missed — the radio never got to it".into();
+                }
+                warn!(norad = j.norad_id, aos = j.aos_unix, "a scheduled pass was missed");
+            }
+            self.save_wx_sched();
+            changed = true;
+        }
+
+        let due = crate::wxsched::due(&self.wx_sched, now)
+            .map(|i| (self.wx_sched.jobs[i].norad_id, self.wx_sched.jobs[i].aos_unix));
+        let running = self.wx_rec.as_ref().map(|r| (r.norad_id, r.aos_unix));
+        if due != running {
+            // One receiver, so a handover is a stop and then a start. The stop
+            // comes first on purpose: `AptStop` is what writes the picture, and
+            // retuning out from under the decoder would lose it.
+            if running.is_some() {
+                self.stop_wx_recording();
+            }
+            if let Some((norad_id, aos_unix)) = due {
+                self.start_wx_recording(norad_id, aos_unix);
+            }
+            changed = true;
+        }
+
+        if changed {
+            self.emit_wx_sched();
+        }
+    }
+
+    /// Recompute the prediction and fold the ticks into it.
+    fn sweep_wx_sched(&mut self, now: i64) {
+        let observer = sdroxide_types::grid_to_latlon(&self.digi_config.my_grid);
+        let Some(observer) = observer else {
+            self.wx_passes =
+                crate::wxsched::merge(Vec::new(), &self.wx_sched, |id| self.wx_downlink_hz(id));
+            self.wx_note =
+                "Set your grid locator in Settings ▸ General — a pass is a pass over somewhere"
+                    .into();
+            return;
+        };
+        let sats = self.wx_satellites();
+        let predicted = crate::wxsched::predict(&sats, &self.wx_sched.cfg, observer, now, |id| {
+            self.wx_downlink_hz(id)
+        });
+        self.wx_passes =
+            crate::wxsched::merge(predicted, &self.wx_sched, |id| self.wx_downlink_hz(id));
+        self.wx_note = if sats.is_empty() {
+            "No element sets for the weather birds — subscribe to Weather in Settings ▸ TLE and \
+             press UPDATE NOW"
+                .into()
+        } else if self.wx_passes.iter().all(|p| !p.is_tunable()) {
+            "No published APT frequency for these birds yet — the SatNOGS table is still being \
+             fetched"
+                .into()
+        } else {
+            String::new()
+        };
+    }
+
+    /// Take the radio and start recording a pass.
+    ///
+    /// The takeover is deliberate and total: mode, dial and a receive-only
+    /// lock. What it is *not* allowed to do is forget how to give the radio
+    /// back, which is what [`WxRecording`]'s `prev_*` fields are for.
+    fn start_wx_recording(&mut self, norad_id: u64, aos_unix: i64) {
+        let Some(job) = self.wx_sched.job(norad_id, aos_unix) else { return };
+        let (name, los_unix) = (job.name.clone(), job.los_unix);
+        let hz = self.wx_downlink_hz(norad_id);
+        if hz <= 0.0 {
+            // Armed before the frequency table arrived, and it still has not.
+            if let Some(j) = self.wx_sched.job_mut(norad_id, aos_unix) {
+                j.state = sdroxide_types::WxJobState::Failed;
+                j.note = "no published APT frequency for this bird".into();
+            }
+            self.save_wx_sched();
+            return;
+        }
+        // Transmitting is the one thing that must not be interrupted. The pass
+        // is left pending, so the next tick tries again — a pass is minutes
+        // long and an over is seconds.
+        if self.tx_active || self.state.tx.ptt {
+            return;
+        }
+
+        let unix_ms = (unix_now_f64() * 1000.0) as i64;
+        let stem = sdroxide_types::pass_stem(unix_ms, &name);
+        let wav = if self.wx_sched.cfg.keep_wav { self.open_wx_wav(&stem) } else { None };
+
+        // Set before the takeover, not after: everything below goes through
+        // `apply`, and the `AptImage` that a stop produces has to find this
+        // here in order to name the file after the pass.
+        self.wx_rec = Some(WxRecording {
+            norad_id,
+            aos_unix,
+            stem,
+            wav,
+            pngs: Vec::new(),
+            prev_mode: self.state.rx[0].mode,
+            prev_dial_hz: self.state.active_freq_hz(),
+            prev_lock: self.sat_lock.as_ref().map(|l| Box::new(l.cfg.clone())),
+        });
+
+        info!(
+            norad = norad_id,
+            %name,
+            mhz = hz / 1e6,
+            seconds = los_unix - aos_unix,
+            "recording a scheduled weather-satellite pass"
+        );
+        self.apply(Command::SetMode { rx: RxId::Main, mode: Mode::Apt });
+        self.apply(Command::SetVfo { vfo: Vfo::A, hz });
+        // Receive only: an APT bird has no uplink, and a rotator chasing it is
+        // the operator's business rather than the schedule's — the 2 m vertical
+        // most APT stations use does not turn.
+        self.apply(Command::SetSatLock(Some(Box::new(sdroxide_types::SatLockConfig {
+            norad_id,
+            name: name.clone(),
+            tle: None,
+            observer: None,
+            downlink_hz: hz,
+            uplink: None,
+            doppler: true,
+            rotator: false,
+        }))));
+        // Without waiting for a sync: the lead-in means the bird is not up
+        // yet, and the decoder has to be collecting when the first line comes.
+        self.apply(Command::AptStart);
+
+        if let Some(j) = self.wx_sched.job_mut(norad_id, aos_unix) {
+            j.state = sdroxide_types::WxJobState::Recording;
+            j.note.clear();
+        }
+        self.save_wx_sched();
+    }
+
+    /// Open the pass's WAV, or say why not.
+    fn open_wx_wav(&self, stem: &str) -> Option<crate::apt_wav::AptWavWriter> {
+        let dir = match sdroxide_config::apt_audio_dir() {
+            Ok(d) => d,
+            Err(e) => {
+                warn!("apt audio dir: {e}");
+                return None;
+            }
+        };
+        let path = dir.join(format!("{stem}.wav"));
+        match crate::apt_wav::AptWavWriter::create(&path) {
+            Ok(w) => Some(w),
+            Err(e) => {
+                warn!(path = %path.display(), "could not open the pass recording: {e}");
+                None
+            }
+        }
+    }
+
+    /// End the recording, write what arrived, and give the radio back.
+    fn stop_wx_recording(&mut self) {
+        if self.wx_rec.is_none() {
+            return;
+        }
+        // Before anything is retuned, and before `wx_rec` is taken: the stop is
+        // what saves the picture, the save lands in `DigiAction::AptImage`, and
+        // that is where the file gets the pass's own name from. Retuning first
+        // would lose the picture; taking the field first would lose the name.
+        self.apply(Command::AptStop);
+        self.poll_digi();
+        let Some(mut rec) = self.wx_rec.take() else { return };
+
+        let seconds = rec.wav.as_ref().map_or(0.0, |w| w.seconds());
+        let wav = match rec.wav.take() {
+            Some(w) => match w.finish() {
+                Ok(path) => {
+                    path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string()
+                }
+                Err(e) => {
+                    warn!("could not close the pass recording: {e}");
+                    String::new()
+                }
+            },
+            None => String::new(),
+        };
+
+        // The radio goes back exactly as it was found, in the same order it was
+        // taken: the lock first, because releasing it after the dial moved
+        // would drag the dial with it.
+        match rec.prev_lock.take() {
+            Some(cfg) => self.apply(Command::SetSatLock(Some(cfg))),
+            None => self.apply(Command::SetSatLock(None)),
+        }
+        self.apply(Command::SetMode { rx: RxId::Main, mode: rec.prev_mode });
+        self.apply(Command::SetVfo { vfo: Vfo::A, hz: rec.prev_dial_hz });
+
+        let png = rec.pngs.last().cloned().unwrap_or_default();
+        let ok = !png.is_empty();
+        info!(
+            norad = rec.norad_id,
+            pictures = rec.pngs.len(),
+            audio_s = seconds as u64,
+            "a scheduled weather-satellite pass is over"
+        );
+        if let Some(j) = self.wx_sched.job_mut(rec.norad_id, rec.aos_unix) {
+            j.state = if ok || !wav.is_empty() {
+                sdroxide_types::WxJobState::Done
+            } else {
+                sdroxide_types::WxJobState::Failed
+            };
+            j.png = png;
+            j.wav = wav;
+            j.note = match (rec.pngs.len(), seconds as u64) {
+                (0, 0) => "nothing came through — check the antenna and the gain".into(),
+                (0, s) => format!("{s} s of audio, no picture decoded"),
+                (1, 0) => "one picture".into(),
+                (n, 0) => format!("{n} pictures"),
+                (1, s) => format!("one picture, {s} s of audio"),
+                (n, s) => format!("{n} pictures, {s} s of audio"),
+            };
+        }
+        self.save_wx_sched();
+        self.wx_wav_rs = None;
+        self.wx_wav_in_rate = 0.0;
+    }
+
+    /// Arm or disarm one predicted pass.
+    fn arm_wx_pass(&mut self, norad_id: u64, aos_unix: i64, on: bool) {
+        if !on {
+            // Disarming the pass on the air stops it: an operator who unticks
+            // a running row wants the radio back, not a note about it later.
+            if self.wx_rec.as_ref().is_some_and(|r| r.norad_id == norad_id) {
+                self.stop_wx_recording();
+            }
+            self.wx_sched.jobs.retain(|j| !j.is(norad_id, aos_unix));
+        } else if self.wx_sched.job(norad_id, aos_unix).is_none() {
+            let Some(p) =
+                self.wx_passes.iter().find(|p| p.norad_id == norad_id && p.aos_unix == aos_unix)
+            else {
+                // Not in the list the client was looking at, which means its
+                // view is older than the last sweep. Say nothing and let the
+                // fresh status it is about to get speak for itself.
+                self.emit_wx_sched();
+                return;
+            };
+            if !p.is_tunable() {
+                let _ = self.event_tx.send(RadioEvent::Notice(Some(format!(
+                    "No published APT frequency for {} — nothing to tune",
+                    p.name
+                ))));
+                return;
+            }
+            self.wx_sched.jobs.push(sdroxide_types::WxJob {
+                norad_id,
+                name: p.name.clone(),
+                aos_unix: p.aos_unix,
+                los_unix: p.los_unix,
+                max_el: p.max_el,
+                state: sdroxide_types::WxJobState::Planned,
+                png: String::new(),
+                wav: String::new(),
+                note: String::new(),
+            });
+        }
+        self.save_wx_sched();
+        self.resweep_wx_sched();
+        // Folded in now rather than at the next sweep, so the tick the operator
+        // just made appears immediately.
+        self.wx_passes = crate::wxsched::merge(
+            self.wx_passes.iter().filter(|p| !p.armed).cloned().collect(),
+            &self.wx_sched,
+            |id| self.wx_downlink_hz(id),
+        );
+        self.emit_wx_sched();
+    }
+
+    /// Hand back one recorded pass's audio, off the engine thread.
+    ///
+    /// A pass is twenty megabytes, read off whatever the recordings directory
+    /// is mounted on. The gallery worker already owns "read a file for a
+    /// client without stalling the audio loop", so this borrows its thread
+    /// pattern rather than inventing a second one.
+    fn send_wx_audio(&self, name: String) {
+        let tx = self.event_tx.clone();
+        let spawned =
+            std::thread::Builder::new().name("sdroxide-wxaudio".into()).spawn(move || {
+                let wav =
+                    wx_audio_path(&name).and_then(|p| std::fs::read(p).ok()).unwrap_or_default();
+                if wav.is_empty() {
+                    warn!(%name, "pass audio fetch refused: not a name in this store");
+                }
+                // An empty payload rather than silence: a client that is waiting
+                // has to be able to stop waiting.
+                let _ = tx.send(RadioEvent::WxAudio { name, wav });
+            });
+        if let Err(e) = spawned {
+            warn!("could not start the pass audio read: {e}");
+        }
+    }
+
+    /// Delete one recorded pass's audio, and forget it in the schedule.
+    fn delete_wx_audio(&mut self, name: &str) {
+        let Some(path) = wx_audio_path(name) else {
+            warn!(%name, "pass audio delete refused: not a name in this store");
+            return;
+        };
+        match std::fs::remove_file(&path) {
+            Ok(()) => info!(%name, "recorded pass audio deleted"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                let _ = self
+                    .event_tx
+                    .send(RadioEvent::Notice(Some(format!("Could not delete {name}: {e}"))));
+                return;
+            }
+        }
+        for j in &mut self.wx_sched.jobs {
+            if j.wav == name {
+                j.wav.clear();
+            }
+        }
+        self.save_wx_sched();
+        for p in &mut self.wx_passes {
+            if p.wav == name {
+                p.wav.clear();
+            }
+        }
+        self.emit_wx_sched();
     }
 
     // ── Satellite lock ──────────────────────────────────────────────────────
@@ -17348,6 +17984,7 @@ fn rig_mode_class(m: Mode) -> u8 {
         // RIFP, VHF packet, APRS, VHF SSTV and VHF RTTY are data on an FM
         // carrier, so a rig reporting plain FM is still where we left it.
         Mode::Nfm
+        | Mode::Apt
         | Mode::Wfm
         | Mode::Rifp
         | Mode::Packet
@@ -17484,6 +18121,97 @@ fn save_image_rx(kind: &str, png: &[u8]) -> Option<String> {
 /// that will ever say which of a station's dozen daily products this one is.
 /// The name is built by `sdroxide-types` so that the panel — which has to label
 /// charts it reads back off disk — reads exactly what is written here.
+/// `stem` names a scheduled pass, so the picture and the pass's audio can be
+/// found together. A pass that produces more than one picture — the signal
+/// dropped out long enough for the decoder to finish and start again — gets a
+/// counter, since overwriting the first one would quietly lose half the pass.
+fn save_apt_rx(png: &[u8], stem: Option<&str>) -> Option<String> {
+    /// Pictures one pass may produce before the names stop being distinct.
+    /// A dropout-riddled low pass makes three or four; sixteen is absurd and
+    /// still bounded.
+    const MAX_PER_PASS: u32 = 16;
+
+    let dir = match sdroxide_config::apt_rx_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            warn!("apt picture dir: {e}");
+            return None;
+        }
+    };
+    let unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let stem = stem.map(str::to_string).unwrap_or_else(|| format!("apt-{unix}"));
+    let (name, path) = (0..MAX_PER_PASS)
+        .map(|n| if n == 0 { format!("{stem}.png") } else { format!("{stem}-{}.png", n + 1) })
+        .map(|name| {
+            let path = dir.join(&name);
+            (name, path)
+        })
+        .find(|(_, path)| !path.exists())?;
+    match std::fs::write(&path, png) {
+        Ok(()) => Some(name),
+        Err(e) => {
+            warn!("saving apt picture {}: {e}", path.display());
+            None
+        }
+    }
+}
+
+/// Hand a block of the APT tap to a pass recording, resampled to the rate the
+/// file is written at.
+///
+/// A free function taking its fields rather than an `Engine` method, so the
+/// caller can borrow `wx_rec` mutably and the receive chain immutably at the
+/// same time — they are disjoint fields and a method would hide that.
+///
+/// On the audio path, which is why there is nothing in it but a rate check and
+/// a write. A failed write drops the recording rather than retrying: the
+/// alternative is a warning per block for the remaining ten minutes.
+fn write_wx_wav(
+    rec: &mut WxRecording,
+    rs: &mut Option<MonoResampler>,
+    rs_in_rate: &mut f64,
+    buf: &mut Vec<f32>,
+    tap: &[f32],
+    in_rate: f64,
+) {
+    if rec.wav.is_none() || tap.is_empty() {
+        return;
+    }
+    if (in_rate - *rs_in_rate).abs() > 0.01 {
+        *rs_in_rate = in_rate;
+        *rs = MonoResampler::new(in_rate, f64::from(crate::apt_wav::RATE_HZ));
+    }
+    buf.clear();
+    match rs.as_mut() {
+        Some(r) => r.push(tap, buf),
+        None => buf.extend_from_slice(tap),
+    }
+    if let Some(w) = rec.wav.as_mut() {
+        if let Err(e) = w.write(buf) {
+            warn!("the pass recording stopped writing: {e}");
+            rec.wav = None;
+        }
+    }
+}
+
+/// Resolve a recorded-pass audio name inside the store, or refuse it.
+///
+/// The same two checks [`crate::image_store::resolve`] makes, and for the same
+/// reason: the name arrives over a socket nothing authenticates and ends up at
+/// `std::fs::read` and `std::fs::remove_file`. Sanitised so it cannot describe
+/// somewhere else, and the resolved file then required to sit directly in the
+/// store, which is what catches a symlink somebody dropped in there.
+fn wx_audio_path(name: &str) -> Option<std::path::PathBuf> {
+    let name = sdroxide_types::safe_wav_name(name)?;
+    let dir = sdroxide_config::apt_audio_dir().ok()?;
+    let real = dir.join(name).canonicalize().ok()?;
+    let root = dir.canonicalize().ok()?;
+    (real.parent() == Some(root.as_path()) && real.is_file()).then_some(real)
+}
+
 fn save_wefax_rx(png: &[u8], dial_hz: f64) -> Option<String> {
     let dir = match sdroxide_config::wefax_rx_dir() {
         Ok(d) => d,

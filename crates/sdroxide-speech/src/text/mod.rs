@@ -120,6 +120,7 @@ impl<'a> Speaker<'a> {
             Mode::Acars => "A cars",
             Mode::Sam => "synchronous A M",
             Mode::Nfm => "narrow F M",
+            Mode::Apt => "A P T",
             Mode::Wfm => "wide F M",
             Mode::Digu => "digital upper",
             Mode::Digl => "digital lower",

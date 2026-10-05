@@ -699,6 +699,12 @@ pub struct UiSettings {
     /// its own.
     #[serde(default)]
     pub solar3d_window: Option<Solar3dWindow>,
+    /// Hide satellites that have no published frequency in the SAT picker.
+    ///
+    /// They still appear in the TLE listing — they just cannot be tuned —
+    /// so this is a reading preference, not a subscription change.
+    #[serde(default)]
+    pub hide_sat_no_freq: bool,
 }
 
 /// Default for [`UiSettings::spot_colors`] — every kind on its stock tint.
@@ -813,6 +819,7 @@ impl Default for UiSettings {
             decode_new_only: false,
             map_cities: true,
             solar3d_window: None,
+            hide_sat_no_freq: false,
         }
     }
 }

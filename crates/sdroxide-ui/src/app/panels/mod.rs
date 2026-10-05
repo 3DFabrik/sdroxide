@@ -23,6 +23,7 @@ mod acars;
 pub(in crate::app) mod adsb;
 pub(in crate::app) mod ais;
 pub(in crate::app) mod aprs;
+pub(in crate::app) mod apt;
 pub(in crate::app) mod atchat;
 pub(in crate::app) mod cw;
 pub(in crate::app) mod decodes;
@@ -98,6 +99,7 @@ pub(in crate::app) fn panel_panes(mode: Mode) -> &'static [&'static str] {
         // the network has located, which move independently.
         Mode::Hfdl => &["DECODES", "MAP"],
         Mode::Wefax => &["CHART", "SAVED"],
+        Mode::Apt => &["IMAGE"],
         Mode::Navtex => &["MESSAGES", "READING"],
         Mode::RfPaint => &["TEXT", "IMAGE"],
         // The decode list alone: the QSO pane is FT8's sequencer, which a

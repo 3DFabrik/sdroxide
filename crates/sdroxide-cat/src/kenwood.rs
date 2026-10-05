@@ -349,6 +349,7 @@ fn mode_digit(m: Mode) -> (char, bool) {
         // 1090 MHz. Grouped with FM so nothing downstream has to special-case
         // a mode a radio can neither be put into nor report back.
         Mode::Nfm
+        | Mode::Apt
         | Mode::Wfm
         | Mode::Adsb
         | Mode::Vdl2
@@ -596,6 +597,7 @@ impl Protocol for Kenwood {
             // carry: their filters are wide, rarely worth narrowing from here,
             // and getting an index wrong in AM costs more than it buys.
             Mode::Nfm
+            | Mode::Apt
             | Mode::Wfm
             | Mode::Am
             | Mode::Sam

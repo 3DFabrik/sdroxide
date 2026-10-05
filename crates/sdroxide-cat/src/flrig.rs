@@ -560,7 +560,7 @@ fn candidates(m: Mode) -> &'static [&'static str] {
         // No rig has an ISB position; DSB is the same filter and AM is the
         // fallback every rig does have.
         Mode::Isb => &["DSB", "AM"],
-        Mode::Nfm => &["FM", "FM-N", "NFM"],
+        Mode::Nfm | Mode::Apt => &["FM", "FM-N", "NFM"],
         // No plain-FM fallback here, unlike the data lists below: a rig with
         // no WFM position would report `FM` back, which reads as NFM and would
         // bounce the app out of a mode it is demodulating itself. Nothing

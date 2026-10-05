@@ -8,6 +8,7 @@ mod adsb;
 mod ais;
 mod alert;
 mod aprs;
+mod apt;
 mod atchat;
 mod awards;
 mod band;
@@ -76,6 +77,7 @@ mod wefax;
 mod winlink;
 mod wsjtx;
 mod wspr;
+mod wxsched;
 
 pub use access::{
     AUTH_BUSY, AUTH_REFUSED, AuthPhase, ClientInfo, ControlStatus, RemoteAccess, RemoteServer,
@@ -99,6 +101,7 @@ pub use aprs::{
     AprsEntryKind, AprsMessage, AprsMsgState, AprsPosition, AprsStation, AprsStatus, AprsSymbol,
     AprsSymbolKind, AprsTraffic, AprsWeather,
 };
+pub use apt::AptStatus;
 pub use atchat::{AtChatChatLine, AtChatFile, AtChatRosterEntry, AtChatStatus, AtChatTransfer};
 pub use awards::{
     Awards, Coverage, EntitySlot, Highlight, LogIndex, Novelty, Status as AwardStatus, US_STATES,
@@ -252,7 +255,8 @@ pub use rigctld::RigctldConfig;
 pub use rotator::RotatorConfig;
 pub use satcfg::{
     CELESTRAK_GROUPS, CelestrakGroup, CustomTle, OrbitRings, Passband, SatConfig, SatFreqs,
-    SatLink, TleSubStatus, TleSubscription, fmt_mhz as fmt_sat_mhz, parse_tle_block,
+    SatLink, TleSubStatus, TleSubscription, WEATHER_APT_CATNRS, fmt_mhz as fmt_sat_mhz,
+    parse_tle_block,
 };
 pub use satlock::{
     C_KM_S, SatLockConfig, SatPass, SatTrackStatus, SatUplink, doppler_rx_hz, doppler_tx_hz,
@@ -305,4 +309,9 @@ pub use wspr::{
     POWERS_W as WSPR_POWERS_W, SLOT_S as WSPR_SLOT_S, TX_OFFSET_S as WSPR_TX_OFFSET_S,
     WINDOW_HI_HZ as WSPR_WINDOW_HI_HZ, WINDOW_LO_HZ as WSPR_WINDOW_LO_HZ, WsprSpot, WsprStatus,
     dbm_to_mw, grid4 as wspr_grid4, power_dbm_for_watts, power_label, round_power_dbm,
+};
+pub use wxsched::{
+    WX_APT_BIRDS, WX_APT_CATNRS, WX_HORIZON_MAX_H, WX_HORIZON_MIN_H, WX_JOBS_MAX, WX_PAD_MAX_S,
+    WX_SAME_PASS_S, WxJob, WxJobState, WxPass, WxSchedConfig, WxSchedStatus, WxSchedule, pass_stem,
+    safe_wav_name, wx_bird_name,
 };

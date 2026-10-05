@@ -234,6 +234,10 @@ pub fn make_demod(mode: Mode, channel_rate: f64) -> Option<Box<dyn Demodulator>>
         Mode::Nfm | Mode::SstvFm | Mode::RttyFm => {
             Some(Box::new(FmDemod::new(channel_rate, lo, hi)))
         }
+        // APT is wide FM (±17 kHz), not a voice channel: the NFM path's
+        // ±5 kHz scale and 3.6 kHz audio low-pass clip the 2400 Hz AM
+        // subcarrier. See [`AptFmDemod`].
+        Mode::Apt => Some(Box::new(AptFmDemod::new(channel_rate, lo, hi))),
         Mode::Wfm => {
             let mut d = WfmDemod::new(channel_rate);
             d.set_filter(lo, hi);
@@ -880,6 +884,77 @@ impl Demodulator for PacketFmDemod {
     }
 }
 
+/// NOAA APT: wide discriminator, scaled to ±17 kHz, then a slow DC block
+/// and an audio low-pass that keeps the 2400 Hz AM subcarrier.
+///
+/// [`FmDemod`] will not do. It is a *voice* path: ±5 kHz deviation and a
+/// 3.6 kHz audio low-pass. APT's downlink swings ±17 kHz and the picture
+/// lives on a 2400 Hz AM tone whose video sidebands reach about 4.4 kHz.
+/// Putting that through the voice chain clips the discriminator and
+/// takes the upper sideband off the subcarrier.
+///
+/// No de-emphasis and no CTCSS high-pass: after the discriminator this is
+/// baseband video, not speech.
+const APT_AUDIO_LPF_HZ: f64 = 6_000.0;
+
+pub struct AptFmDemod {
+    rate: f64,
+    fir: ComplexFir,
+    lpf: RealFir,
+    dc: DcBlock,
+    prev: Complex32,
+    scale: f32,
+    filtered: Vec<Complex32>,
+    raw_audio: Vec<f32>,
+    power: PowerMeter,
+}
+
+impl AptFmDemod {
+    pub fn new(rate: f64, lo: f32, hi: f32) -> Self {
+        AptFmDemod {
+            rate,
+            fir: ComplexFir::new(bandpass_taps(PASSBAND_TAPS, lo as f64, hi as f64, rate)),
+            lpf: RealFir::lowpass(63, APT_AUDIO_LPF_HZ, rate),
+            // 0.2 Hz ≈ 0.8 s: tracks a Doppler-corrected carrier without
+            // drooping the 2400 Hz tone.
+            dc: DcBlock::new(0.2, rate),
+            prev: Complex32::new(1.0, 0.0),
+            scale: (rate / (std::f64::consts::TAU * crate::apt::DEVIATION_HZ)) as f32,
+            filtered: Vec::new(),
+            raw_audio: Vec::new(),
+            power: PowerMeter::new(),
+        }
+    }
+}
+
+impl Demodulator for AptFmDemod {
+    fn process(&mut self, iq: &[Complex32], out: &mut Vec<f32>) {
+        self.filtered.clear();
+        self.fir.process(iq, &mut self.filtered);
+        self.power.update(&self.filtered);
+
+        self.raw_audio.clear();
+        for &z in &self.filtered {
+            let d = z * self.prev.conj();
+            self.prev = z;
+            self.raw_audio.push(self.dc.run(d.arg() * self.scale));
+        }
+        self.lpf.process(&self.raw_audio, out);
+    }
+
+    fn set_filter(&mut self, lo: f32, hi: f32) {
+        self.fir.set_taps(bandpass_taps(PASSBAND_TAPS, lo as f64, hi as f64, self.rate));
+    }
+
+    fn audio_rate(&self) -> f64 {
+        self.rate
+    }
+
+    fn power_dbfs(&self) -> f32 {
+        self.power.dbfs()
+    }
+}
+
 /// WFM broadcast with pilot-tone stereo.
 ///
 /// Wide discriminator at the ~256 kHz channel rate, ±75 kHz deviation, DC
@@ -1353,5 +1428,51 @@ mod tests {
         // Every other mode ignores the dial.
         assert_eq!(channel_target_at(Mode::Wfm, 1_650_000.0), 256_000.0);
         assert_eq!(channel_target_at(Mode::Usb, 1_650_000.0), 48_000.0);
+    }
+
+    /// A NOAA APT downlink is ±17 kHz FM of a 2400 Hz AM subcarrier. The
+    /// voice NFM path clips that deviation and low-passes the tone; this
+    /// one has to hand the decoder a 2400 Hz wave near full scale.
+    #[test]
+    fn apt_recovers_the_2400_hz_subcarrier() {
+        let rate = 48_000.0;
+        let n = rate as usize;
+        let (lo, hi) = Mode::Apt.default_filter();
+        let mut demod = AptFmDemod::new(rate, lo, hi);
+        let mut iq = Vec::with_capacity(n);
+        let mut phase = 0.0f64;
+        for i in 0..n {
+            let t = i as f64 / rate;
+            let inst = crate::apt::DEVIATION_HZ
+                * (std::f64::consts::TAU * crate::apt::CARRIER_HZ * t).sin();
+            phase += std::f64::consts::TAU * inst / rate;
+            iq.push(Complex32::new(phase.cos() as f32, phase.sin() as f32));
+        }
+        let mut audio = Vec::new();
+        demod.process(&iq, &mut audio);
+        assert!(audio.len() >= n / 2, "demod produced {} samples", audio.len());
+        // Skip the FIR/DC settle; then a Goertzel at 2400 Hz should beat
+        // the bins either side, and the recovered tone must not be a
+        // clipped square (those dump energy into odd harmonics).
+        let skip = audio.len() / 4;
+        let x = &audio[skip..];
+        let goertzel = |hz: f64| -> f32 {
+            let w = std::f64::consts::TAU * hz / rate;
+            let coeff = (2.0 * w.cos()) as f32;
+            let (mut s1, mut s2) = (0.0f32, 0.0f32);
+            for &s in x {
+                let s0 = s + coeff * s1 - s2;
+                s2 = s1;
+                s1 = s0;
+            }
+            s1 * s1 + s2 * s2 - coeff * s1 * s2
+        };
+        let tone = goertzel(crate::apt::CARRIER_HZ);
+        let neighbour = goertzel(1800.0).max(goertzel(3200.0));
+        let harmonic = goertzel(3.0 * crate::apt::CARRIER_HZ);
+        assert!(tone > neighbour * 8.0, "2400 Hz {tone} vs nearby {neighbour}");
+        assert!(tone > harmonic * 4.0, "2400 Hz {tone} vs 3rd harmonic {harmonic} (clipped?)");
+        let peak = x.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+        assert!(peak > 0.4 && peak < 1.6, "recovered peak {peak} (want ~1.0 at ±17 kHz)");
     }
 }

@@ -240,6 +240,7 @@ impl Solar3d {
         awards: Arc<Vec<sdroxide_types::EntitySlot>>,
         prop: Arc<sdroxide_types::PropField>,
         sat_cfg: Arc<sdroxide_types::SatConfig>,
+        sat_freq_db: Arc<Vec<sdroxide_types::SatFreqs>>,
         sat_lock: Option<u64>,
     ) -> Option<LockChange> {
         if !self.open {
@@ -276,6 +277,7 @@ impl Solar3d {
             st.awards = awards;
             st.prop = prop;
             st.sat_cfg = sat_cfg;
+            st.sat_freq_db = sat_freq_db;
             st.sat_lock = sat_lock;
         }
 

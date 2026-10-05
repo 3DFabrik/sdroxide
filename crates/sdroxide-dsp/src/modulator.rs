@@ -73,6 +73,7 @@ pub fn make_modulator(mode: Mode, rate: f64, passband: (f32, f32)) -> Option<Box
         Mode::Isb => None,
         // ACARS is receive only — an airline service, not an amateur one.
         Mode::Acars => None,
+        Mode::Apt => None,
         // VHF SSTV modulates the carrier through the voice FM path — see the
         // demodulator, which is its other half: the picture goes into an FM
         // transmitter exactly as speech would.

@@ -30,6 +30,7 @@ pub mod meteor;
 pub mod planets;
 pub mod satellites;
 pub mod satfreq;
+pub mod satnogs;
 pub mod smallbody;
 pub mod swpc;
 pub mod timefmt;

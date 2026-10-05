@@ -3,6 +3,7 @@
 //! NATIVE ONLY — this crate links the SoapySDR C library and must never be a
 //! dependency of any wasm-targeted crate.
 
+pub mod apt_wav;
 #[cfg(feature = "soapy")]
 mod device;
 pub mod engine;
@@ -15,6 +16,7 @@ mod source;
 mod tr_switch;
 mod tx_gate;
 mod voice;
+pub mod wxsched;
 
 #[cfg(feature = "soapy")]
 pub use device::{DeviceInfo, SoapyDevice, SoapyRxSource, enumerate_devices};

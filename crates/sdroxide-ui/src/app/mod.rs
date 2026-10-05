@@ -968,6 +968,9 @@ pub struct SdroxideApp {
     sat_cfg_seeded: bool,
     sat_ui: SatEditState,
     sat_sub_status: Vec<sdroxide_types::TleSubStatus>,
+    /// SatNOGS transmitter table, announced by the engine. Empty until the
+    /// first cache or fetch arrives.
+    sat_freq_db: std::sync::Arc<Vec<sdroxide_types::SatFreqs>>,
     /// The engine's satellite lock, mirrored from [`RadioEvent::SatTrack`].
     /// `Some` while a lock is active — the SAT window's live pane, the top-bar
     /// accent and the 3D view's highlight all read this one field.
@@ -1009,6 +1012,7 @@ pub struct SdroxideApp {
     region_edit: sdroxide_types::Region,
     /// Weather fax: the chart being painted and the gallery of saved ones.
     wefax: crate::wefax::WefaxUi,
+    apt: crate::apt::AptUi,
     /// Whether the operator has dismissed the out-of-band transmit warning
     /// this session. Never persisted: `--oob-tx` has to be passed again on the
     /// next launch, so the warning has to be acknowledged again too.
@@ -1632,7 +1636,9 @@ impl SdroxideApp {
             region_edit: sdroxide_types::region(),
             sat_ui: Default::default(),
             sat_sub_status: Vec::new(),
+            sat_freq_db: std::sync::Arc::new(Vec::new()),
             wefax: Default::default(),
+            apt: Default::default(),
             oob_tx_ack: false,
             login: Default::default(),
             remote_access: persist::load_remote_access(),

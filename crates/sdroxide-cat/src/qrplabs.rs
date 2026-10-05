@@ -210,6 +210,7 @@ fn mode_digit(m: Mode) -> char {
         // 1090 MHz. Grouped with FM so nothing downstream has to special-case
         // a mode a radio can neither be put into nor report back.
         Mode::Nfm
+        | Mode::Apt
         | Mode::Wfm
         | Mode::Rifp
         | Mode::Packet

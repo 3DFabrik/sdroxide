@@ -1494,10 +1494,8 @@ fn pass_window(ui: &egui::Ui, st: &mut SolarUi, data: Option<&SolarData>, sim_no
 
             // The operator's own entry wins over the built-in table: they have
             // either corrected it or added a satellite it never knew about.
-            let (freqs, mine) = match st.sat_cfg.freqs_for(id) {
-                Some(f) => (Some(f), true),
-                None => (sdroxide_solar::satfreq::builtin_for(id), false),
-            };
+            let mine = st.sat_cfg.freqs_for(id).is_some();
+            let freqs = sdroxide_solar::satfreq::resolve(id, &st.sat_cfg, &st.sat_freq_db);
             freq_table(ui, freqs, mine, &cache.name);
         });
     if !open {

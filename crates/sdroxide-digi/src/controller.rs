@@ -62,6 +62,9 @@ pub enum DigiAction {
     WefaxImage { image_id: u32, w: u16, h: u16, gray: Vec<u8> },
     /// Weather fax: receiver status (tuning, phasing, line count).
     WefaxStatus(sdroxide_types::WefaxStatus),
+    AptLine { image_id: u32, channel: u8, y: u16, gray: Vec<u8> },
+    AptImage { image_id: u32, w: u16, h: u16, gray: Vec<u8> },
+    AptStatus(sdroxide_types::AptStatus),
     /// RIFP: reassembled raster rows of an incoming picture — `rows` grayscale
     /// bytes starting at row `y`, `w` per row. Only the unencoded raster can be
     /// painted before the object is whole.

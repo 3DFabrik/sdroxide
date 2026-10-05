@@ -121,7 +121,7 @@ pub fn to_hamlib_mode(m: Mode) -> &'static str {
         // a receiver set to AM.
         Mode::Am | Mode::Drm | Mode::Acars => "AM",
         Mode::Sam => "SAM",
-        Mode::Nfm => "FM",
+        Mode::Nfm | Mode::Apt => "FM",
         // RIFP, VHF packet and VHF SSTV are data on an FM carrier, not on a
         // sideband.
         Mode::Rifp | Mode::Packet | Mode::Aprs | Mode::SstvFm | Mode::RttyFm => "PKTFM",

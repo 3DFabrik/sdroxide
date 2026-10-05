@@ -14,6 +14,7 @@
 
 pub mod acars_controller;
 pub mod aprs_controller;
+pub mod apt_controller;
 pub mod atchat_controller;
 pub(crate) mod ax25_channel;
 pub mod clock;
@@ -52,6 +53,7 @@ pub mod wspr_controller;
 
 pub use acars_controller::AcarsController;
 pub use aprs_controller::AprsController;
+pub use apt_controller::AptController;
 pub use atchat_controller::AtChatController;
 pub use clock::ClockMonitor;
 pub use controller::{DigiAction, DigiController};
@@ -230,6 +232,10 @@ pub trait DigiEngine: Send {
     /// Weather fax: shift the line alignment by whole pixels, to straighten a
     /// chart whose phasing pulse was missed.
     fn wefax_nudge(&mut self, _pixels: i32) {}
+
+    fn apt_start(&mut self) {}
+
+    fn apt_stop(&mut self) {}
     /// RIFP: queue a composed image (interleaved RGB) and start transmitting.
     /// The controller encodes, chunks and frames it per the operator's config.
     fn set_rifp_image(&mut self, _rgb: Vec<u8>, _w: u16, _h: u16) {}
@@ -343,6 +349,8 @@ mod dispatch_tests {
             "sstv"
         } else if mode.is_wefax() {
             "wefax"
+        } else if mode.is_apt() {
+            "apt"
         } else if mode == Mode::Navtex {
             "navtex"
         } else if mode == Mode::Acars {
@@ -412,6 +420,7 @@ mod dispatch_tests {
         // would hand it an FT8 decoder and its NET station would never join.
         assert_eq!(pick(Mode::AtChat), "atchat");
         assert_eq!(pick(Mode::Wefax), "wefax");
+        assert_eq!(pick(Mode::Apt), "apt");
         assert_eq!(pick(Mode::Navtex), "navtex");
         assert_eq!(pick(Mode::Acars), "acars");
         // Both packet modes reach the one packet controller. HF packet is the

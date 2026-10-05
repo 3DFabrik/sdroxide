@@ -12,6 +12,7 @@ mod ais_map;
 mod app;
 mod aprs_icons;
 mod aprs_map;
+mod apt;
 /// The world the flat maps are drawn from — the globe's own land raster,
 /// sampled on the CPU, plus the border and river geometry and the city table.
 mod basemap;

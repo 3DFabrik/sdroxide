@@ -29,6 +29,35 @@ pub fn builtin_for(norad_id: u64) -> Option<&'static SatFreqs> {
     builtin().iter().find(|s| s.norad_id == norad_id)
 }
 
+/// Frequencies for a satellite: the operator's override, else the SatNOGS
+/// fetch, else the built-in table.
+///
+/// An operator entry wins even when it is empty — that is how deleting the
+/// last link of an override falls back only after [`SatConfig::prune`].
+pub fn resolve<'a>(
+    norad_id: u64,
+    operator: &'a sdroxide_types::SatConfig,
+    fetched: &'a [SatFreqs],
+) -> Option<&'a SatFreqs> {
+    if let Some(f) = operator.freqs_for(norad_id) {
+        return Some(f);
+    }
+    fetched
+        .iter()
+        .find(|f| f.norad_id == norad_id)
+        .filter(|f| f.usable_links().next().is_some())
+        .or_else(|| builtin_for(norad_id))
+}
+
+/// True when there is at least one frequency we can tune to.
+pub fn has_usable(
+    norad_id: u64,
+    operator: &sdroxide_types::SatConfig,
+    fetched: &[SatFreqs],
+) -> bool {
+    resolve(norad_id, operator, fetched).is_some_and(|f| f.usable_links().next().is_some())
+}
+
 fn build() -> Vec<SatFreqs> {
     use Passband as P;
     let (down, duplex) = (SatLink::down, SatLink::duplex);
@@ -335,5 +364,29 @@ mod tests {
         for (id, name) in crate::satellites::POPULAR {
             assert!(builtin_for(*id).is_some(), "{name} ({id}) has no frequencies");
         }
+    }
+
+    #[test]
+    fn resolve_prefers_the_operator_then_the_fetch_then_the_table() {
+        let mut cfg = sdroxide_types::SatConfig::default();
+        let fetched = vec![SatFreqs::new(
+            27607,
+            "SO-50 fetched",
+            vec![SatLink::down("x", "FM", Passband::at(436.800))],
+        )];
+        // No override: SatNOGS wins over the built-in 436.795.
+        let so = resolve(27607, &cfg, &fetched).expect("fetched");
+        assert_eq!(so.links[0].downlink, Some(Passband::at(436.800)));
+        // A bird only in the built-in table still resolves.
+        assert!(resolve(25338, &cfg, &fetched).is_some());
+        // Operator override wins.
+        cfg.freqs.push(SatFreqs::new(
+            27607,
+            "mine",
+            vec![SatLink::down("x", "FM", Passband::at(436.700))],
+        ));
+        let mine = resolve(27607, &cfg, &fetched).expect("override");
+        assert_eq!(mine.links[0].downlink, Some(Passband::at(436.700)));
+        assert!(!has_usable(99999, &cfg, &fetched));
     }
 }

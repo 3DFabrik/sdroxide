@@ -244,11 +244,8 @@ fn apply_operator_identity(shared: &Shared, slot: u64) {
     };
     if let Some(load) = roster.load_user.as_ref() {
         let settings = load(&name);
-        let call = if settings.my_call.trim().is_empty() {
-            name.to_uppercase()
-        } else {
-            settings.my_call
-        };
+        let call =
+            if settings.my_call.trim().is_empty() { name.to_uppercase() } else { settings.my_call };
         if let Some(d) = shared.latest.lock().unwrap().digi.clone() {
             let mut cfg = d.config;
             cfg.my_call = call;
@@ -460,6 +457,8 @@ async fn run_session(
         notice,
         station,
         tle_subs,
+        sat_freqs,
+        wx_sched,
         sat_track,
         radio,
         rds,
@@ -486,6 +485,8 @@ async fn run_session(
             latest.notice.clone(),
             latest.station.clone(),
             latest.tle_subs.clone(),
+            latest.sat_freqs.clone(),
+            latest.wx_sched.clone(),
             latest.sat_track.clone(),
             latest.radio.clone(),
             latest.rds.clone(),
@@ -601,6 +602,15 @@ async fn run_session(
     if let Some(s) = station {
         let _ = socket.send(msg(&ServerMsg::StationConfig(station_config_for(&who, s)))).await;
         let _ = socket.send(msg(&ServerMsg::TleSubStatus(tle_subs))).await;
+        if !sat_freqs.is_empty() {
+            let _ = socket.send(msg(&ServerMsg::SatFreqDb(sat_freqs))).await;
+        }
+        // The pass scheduler is a condition of the station rather than a view:
+        // what is armed was armed by somebody, possibly days ago, and a client
+        // that came up with an empty table would offer to tick it all again.
+        if let Some(s) = wx_sched {
+            let _ = socket.send(msg(&ServerMsg::WxSched(s))).await;
+        }
     }
     // And which interface this machine has open, with every backend's settings.
     // Same reason again, and the same failure without it: the Radio tab would

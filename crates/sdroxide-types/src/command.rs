@@ -388,9 +388,11 @@ pub enum Command {
     /// runs on, which is the only one a browser client can reach.
     SetSatConfig(SatConfig),
     /// Re-fetch every enabled TLE subscription now, rather than waiting for the
-    /// six-hourly cadence (the settings dialog's UPDATE NOW). One HTTPS round
-    /// trip per subscription, off the engine thread; the outcome comes back as
-    /// [`crate::RadioEvent::TleSubStatus`].
+    /// six-hourly cadence (the settings dialog's UPDATE NOW). Also refreshes
+    /// the SatNOGS transmitter list. One HTTPS round trip per subscription
+    /// plus one for the frequency table, off the engine thread; the outcome
+    /// comes back as [`crate::RadioEvent::TleSubStatus`] and
+    /// [`crate::RadioEvent::SatFreqDb`].
     RefreshTleSubs,
 
     // Culling a received store. Appended for the usual reason: postcard numbers
@@ -1146,4 +1148,40 @@ pub enum Command {
     ResetModeDefaults {
         mode: Option<Mode>,
     },
+
+    /// NOAA APT: begin a picture now, without waiting for the first sync.
+    AptStart,
+    /// NOAA APT: end the picture in progress and save what has arrived.
+    AptStop,
+
+    // The weather-satellite pass scheduler. Appended for the usual reason:
+    // postcard numbers variants by position.
+    /// Apply (and persist) the scheduler's filter: how far ahead to look, which
+    /// birds, how high they have to get, and how much to record either side.
+    /// Answered with a fresh [`crate::RadioEvent::WxSched`].
+    SetWxSchedConfig(crate::WxSchedConfig),
+    /// Arm or disarm one predicted pass, identified the way
+    /// [`crate::WxJob::is`] identifies it — a recomputed AOS within a few
+    /// minutes is the same pass.
+    ///
+    /// Disarming a pass that is already being recorded stops it and saves what
+    /// has arrived, which is what an operator who wants the radio back means.
+    ArmWxPass {
+        norad_id: u64,
+        aos_unix: i64,
+        on: bool,
+    },
+    /// Recompute the schedule now rather than waiting for the next sweep —
+    /// after a TLE refresh, or when the operator's grid has just been set.
+    RefreshWxSched,
+    /// Fetch one recorded pass's discriminator audio, by the name the schedule
+    /// gave it. Answered with [`crate::RadioEvent::WxAudio`].
+    ///
+    /// Its own command rather than [`Command::ImageGet`] with another kind: the
+    /// store holds pictures, the name has a different extension, and twenty
+    /// megabytes of WAV is not something to hand to a gallery's thumbnailer.
+    WxAudioGet(String),
+    /// Delete one recorded pass's audio. The picture is
+    /// [`Command::ImageDelete`]'s business, the same as any other.
+    WxAudioDelete(String),
 }

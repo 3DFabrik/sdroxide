@@ -49,7 +49,7 @@ fn cache_name(url: &str) -> String {
 /// No network: this is what the tracker uses at startup and what it falls back
 /// to when a refresh fails.
 pub fn cached(cache: &Cache, sub: &TleSubscription) -> Vec<Satellite> {
-    match cache.read_string(&cache_name(&sub.url)) {
+    match cached_listing(cache, sub) {
         Some(text) => parse(sub, &text),
         None => Vec::new(),
     }
@@ -73,7 +73,143 @@ pub fn cached_status(cache: &Cache, sub: &TleSubscription) -> SubStatus {
         count: sats.len(),
         curated: curated_count(&sats),
         error: None,
+        listing: listing_text(cache, sub),
     }
+}
+
+/// The cached listing, reduced to the satellites this subscription wants.
+///
+/// Re-emitted as a three-line element set so a remote SAT picker can parse it
+/// the same way it parses a paste. The browser has no disk cache of its own.
+fn listing_text(cache: &Cache, sub: &TleSubscription) -> String {
+    match cached_listing(cache, sub) {
+        Some(text) => filter_listing(sub, &text),
+        None => String::new(),
+    }
+}
+
+/// Cached body plus any weather extras already fetched by catalogue number.
+fn cached_listing(cache: &Cache, sub: &TleSubscription) -> Option<String> {
+    let text = cached_text(cache, sub)?;
+    Some(with_weather_extras(cache, &sub.url, &text))
+}
+
+fn is_weather_group(url: &str) -> bool {
+    url.contains("GROUP=weather")
+}
+
+fn weather_catnr_url(id: u64) -> String {
+    format!("https://celestrak.org/NORAD/elements/gp.php?CATNR={id}&FORMAT=tle")
+}
+
+fn listing_norads(text: &str) -> std::collections::HashSet<u64> {
+    sdroxide_types::parse_tle_block(text).into_iter().filter_map(|t| t.norad_id()).collect()
+}
+
+/// Append element sets whose catalogue numbers are not already in `base`.
+fn merge_tle_listings(base: &str, extra: &str) -> String {
+    let have = listing_norads(base);
+    let mut out = base.to_string();
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    for t in sdroxide_types::parse_tle_block(extra) {
+        if !t.is_valid() {
+            continue;
+        }
+        let Some(id) = t.norad_id() else { continue };
+        if have.contains(&id) {
+            continue;
+        }
+        out.push_str(t.name.trim());
+        out.push('\n');
+        out.push_str(t.line1.trim_end());
+        out.push('\n');
+        out.push_str(t.line2.trim_end());
+        out.push('\n');
+    }
+    out
+}
+
+/// Fold previously fetched NOAA/Meteor CATNR caches into a weather listing.
+fn with_weather_extras(cache: &Cache, url: &str, text: &str) -> String {
+    if !is_weather_group(url) {
+        return text.to_string();
+    }
+    let mut out = text.to_string();
+    for &id in sdroxide_types::WEATHER_APT_CATNRS {
+        if let Some(extra) = cache.read_string(&cache_name(&weather_catnr_url(id))) {
+            out = merge_tle_listings(&out, &extra);
+        }
+    }
+    out
+}
+
+/// Fetch the APT/Meteor element sets CelesTrak dropped from GROUP=weather.
+fn append_weather_extras(
+    agent: &ureq::Agent,
+    cache: &mut Cache,
+    text: &str,
+    now_unix: i64,
+) -> String {
+    let mut out = text.to_string();
+    let mut have = listing_norads(&out);
+    for &id in sdroxide_types::WEATHER_APT_CATNRS {
+        if have.contains(&id) {
+            continue;
+        }
+        let url = weather_catnr_url(id);
+        let extra = match crate::feed::http_get(agent, &url, &cache.validators(&url), BODY_LIMIT) {
+            Ok(None) => cache.read_string(&cache_name(&url)).unwrap_or_default(),
+            Ok(Some((bytes, validators, _))) => match String::from_utf8(bytes) {
+                Ok(t) if !crate::satellites::parse_tles(&t).is_empty() => {
+                    cache.write(
+                        &cache_name(&url),
+                        &url,
+                        t.as_bytes(),
+                        Validators { fetched_unix: now_unix, ..validators },
+                    );
+                    t
+                }
+                _ => cache.read_string(&cache_name(&url)).unwrap_or_default(),
+            },
+            Err(e) => {
+                tracing::warn!("TLE weather extra {url}: {e}");
+                cache.read_string(&cache_name(&url)).unwrap_or_default()
+            }
+        };
+        if extra.is_empty() {
+            continue;
+        }
+        out = merge_tle_listings(&out, &extra);
+        have = listing_norads(&out);
+    }
+    out
+}
+
+fn store_listing(cache: &mut Cache, url: &str, text: &str, validators: Validators) {
+    cache.write(&cache_name(url), url, text.as_bytes(), validators);
+}
+
+/// Keep only the element sets this subscription's filter accepts.
+fn filter_listing(sub: &TleSubscription, text: &str) -> String {
+    let mut out = String::new();
+    for t in sdroxide_types::parse_tle_block(text) {
+        if !t.is_valid() {
+            continue;
+        }
+        let Some(id) = t.norad_id() else { continue };
+        if !sub.wants(id) {
+            continue;
+        }
+        out.push_str(t.name.trim());
+        out.push('\n');
+        out.push_str(t.line1.trim_end());
+        out.push('\n');
+        out.push_str(t.line2.trim_end());
+        out.push('\n');
+    }
+    out
 }
 
 /// How many of these are in [`crate::satellites::POPULAR`].
@@ -123,13 +259,29 @@ pub fn refresh(
     let mut status = SubStatus { url: url.clone(), ..Default::default() };
 
     match crate::feed::http_get(agent, &url, &cache.validators(&url), BODY_LIMIT) {
-        // 304: what is on disk is current.
+        // 304: what is on disk is current — extras may still be missing.
         Ok(None) => {
             cache.touch(&url, now_unix);
-            let sats = cached(cache, sub);
+            let text = cached_text(cache, sub).unwrap_or_default();
+            let text = if is_weather_group(&url) {
+                let merged = append_weather_extras(agent, cache, &text, now_unix);
+                if merged != text {
+                    store_listing(
+                        cache,
+                        &url,
+                        &merged,
+                        Validators { fetched_unix: now_unix, ..cache.validators(&url) },
+                    );
+                }
+                merged
+            } else {
+                text
+            };
+            let sats = parse(sub, &text);
             status.fetched_unix = now_unix;
             status.count = sats.len();
             status.curated = curated_count(&sats);
+            status.listing = filter_listing(sub, &text);
             (sats, status)
         }
         Ok(Some((bytes, validators, _))) => {
@@ -141,10 +293,10 @@ pub fn refresh(
                     status.fetched_unix = cache.fetched_at(&url);
                     status.count = sats.len();
                     status.curated = curated_count(&sats);
+                    status.listing = listing_text(cache, sub);
                     return (sats, status);
                 }
             };
-            let sats = parse(sub, &text);
             // An empty parse means the URL served something that is not an
             // element set — an HTML error page is the usual culprit. Keeping
             // the previous body is better than caching the error page.
@@ -154,17 +306,25 @@ pub fn refresh(
                 status.fetched_unix = cache.fetched_at(&url);
                 status.count = old.len();
                 status.curated = curated_count(&old);
+                status.listing = listing_text(cache, sub);
                 return (old, status);
             }
+            let text = if is_weather_group(&url) {
+                append_weather_extras(agent, cache, &text, now_unix)
+            } else {
+                text
+            };
             cache.write(
                 &name,
                 &url,
                 text.as_bytes(),
                 Validators { fetched_unix: now_unix, ..validators },
             );
+            let sats = parse(sub, &text);
             status.fetched_unix = now_unix;
             status.count = sats.len();
             status.curated = curated_count(&sats);
+            status.listing = filter_listing(sub, &text);
             (sats, status)
         }
         Err(e) => {
@@ -174,6 +334,7 @@ pub fn refresh(
             status.fetched_unix = cache.fetched_at(&url);
             status.count = sats.len();
             status.curated = curated_count(&sats);
+            status.listing = listing_text(cache, sub);
             (sats, status)
         }
     }
@@ -284,6 +445,17 @@ mod tests {
         assert!(s.wants(1) && s.wants(2));
     }
 
+    #[test]
+    fn a_filtered_listing_is_what_the_browser_picker_receives() {
+        let mut s = sub();
+        s.only = vec![25544];
+        let text = filter_listing(&s, AMATEUR);
+        let parsed = sdroxide_types::parse_tle_block(&text);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].norad_id(), Some(25544));
+        assert!(text.contains("25544"));
+    }
+
     /// The curated position only means something for a listing that contains
     /// curated satellites — ten amateur ones — and the settings dialog greys it
     /// out on the strength of this count, so it has to be right.
@@ -366,5 +538,23 @@ mod tests {
         let iss = CELESTRAK_GROUPS.iter().find(|g| g.name == "ISS").unwrap();
         assert!(iss.url.contains("CATNR=25544"));
         assert_eq!(iss.orbits, sdroxide_types::OrbitRings::All);
+
+        let weather = CELESTRAK_GROUPS.iter().find(|g| g.name == "Weather").unwrap();
+        assert!(weather.default_only.contains(&25338));
+        assert!(weather.default_only.contains(&28654));
+        assert!(weather.default_only.contains(&33591));
+        assert_eq!(weather.subscription().only, sdroxide_types::WEATHER_APT_CATNRS);
+    }
+
+    #[test]
+    fn weather_extras_are_merged_without_duplicating_a_bird_already_in_the_group() {
+        let mut only_iss = sub();
+        only_iss.only = vec![25544];
+        let iss = filter_listing(&only_iss, AMATEUR);
+        let merged = merge_tle_listings(&iss, AMATEUR);
+        let parsed = sdroxide_types::parse_tle_block(&merged);
+        let iss_hits = parsed.iter().filter(|t| t.norad_id() == Some(25544)).count();
+        assert_eq!(iss_hits, 1, "the extra listing must not duplicate ISS");
+        assert!(parsed.len() > 80, "only {} after merge", parsed.len());
     }
 }

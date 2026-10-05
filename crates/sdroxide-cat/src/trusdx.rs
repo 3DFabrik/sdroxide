@@ -166,6 +166,7 @@ fn mode_digit(m: Mode) -> char {
         // No (tr)uSDX is a general-coverage FM set, but it has the position and
         // the firmware answers it, so the modes sdroxide maps to FM go there.
         Mode::Nfm
+        | Mode::Apt
         | Mode::Wfm
         | Mode::Rifp
         | Mode::Packet

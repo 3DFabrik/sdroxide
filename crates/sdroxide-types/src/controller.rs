@@ -1,4 +1,3 @@
-
 use crate::{
     CallsignInfo, Command, ControlStatus, Decode, DeviceCaps, DigiStatus, MemoryChannel,
     MemoryFolder, Meters, NetworkConfig, QsoRecord, RadioState, RifpMeta, RifpStatus, SkimmerSpot,
@@ -85,6 +84,21 @@ pub enum RadioEvent {
     },
     /// Weather fax: receiver status (tuning, phasing, line count).
     WefaxStatus(crate::WefaxStatus),
+    /// NOAA APT: one video line of one channel.
+    AptLine {
+        image_id: u32,
+        channel: u8,
+        y: u16,
+        gray: Vec<u8>,
+    },
+    /// NOAA APT: a finished pass as a side-by-side PNG.
+    AptImage {
+        image_id: u32,
+        w: u16,
+        h: u16,
+        png: Vec<u8>,
+    },
+    AptStatus(crate::AptStatus),
     /// RIFP: freshly reassembled raster rows of an incoming picture — `rows`
     /// grayscale bytes starting at row `y`, `w` bytes per row. Only the raster
     /// content-encodings can be painted before the object completes; a PNG,
@@ -390,6 +404,31 @@ pub enum RadioEvent {
     ///
     /// Appended last, for the usual reason.
     Pi4Spots(Vec<crate::Pi4Spot>),
+    /// Published satellite frequencies fetched from SatNOGS (and the disk
+    /// cache). The operator's overrides in [`crate::SatConfig::freqs`] still
+    /// win; this is everything else the picker can tune to.
+    ///
+    /// Appended last, for the usual reason.
+    SatFreqDb(Vec<crate::SatFreqs>),
+    /// The weather-satellite pass scheduler: the filter, the predicted passes
+    /// with the operator's ticks folded in, and what is being recorded now.
+    ///
+    /// Recomputed on the engine host every few minutes and whenever something
+    /// it rests on moves — a config edit, a TLE refresh, a pass finishing — so
+    /// a client never predicts anything itself and two clients cannot disagree
+    /// about what is armed.
+    ///
+    /// Appended last, for the usual reason.
+    WxSched(Box<crate::WxSchedStatus>),
+    /// One recorded pass's discriminator audio, answering
+    /// [`crate::Command::WxAudioGet`]. Empty when the name is not one in the
+    /// store, because a client that is waiting has to be able to stop waiting.
+    ///
+    /// Appended last, for the usual reason.
+    WxAudio {
+        name: String,
+        wav: Vec<u8>,
+    },
 }
 
 /// Snapshot of the frontend's switchable sound devices (native clients).
