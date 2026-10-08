@@ -11992,7 +11992,7 @@ stored in plaintext in `net.json`. How the features behave is
   instead of only on the **LOOKUP** button.
 - **Upload** — **Auto-upload each new QSO** is the master switch, and under it
   is **a tab per logging service**: **QRZ**, **eQSL**, **HamQTH**,
-  **Club Log** and **WRL**. Each tab holds everything about that one service — whether a new
+  **Club Log**, **WRL** and **Wavelog**. Each tab holds everything about that one service — whether a new
   QSO is pushed to it, its login, and the button that checks that login. So
   setting up a service means opening its tab and filling in what is on it,
   rather than picking your fields out of all four services' at once.
@@ -12017,6 +12017,27 @@ stored in plaintext in `net.json`. How the features behave is
     works. **Test WRL** says both whether the key is good and whether that
     default is set, which is the one thing you would otherwise find out a
     contact at a time.
+  - **Wavelog** — for a [Wavelog](https://www.wavelog.org/) or Cloudlog
+    logbook you run yourself. Three boxes: **Wavelog URL** (the address you
+    open it at, e.g. `https://log.example.com`; plain `http://` works for a
+    server on your LAN), **API key** (a *read+write* key from the account menu →
+    *API Keys*) and **Station ID** (the number in the URL of the station
+    location you log to, from *Station Locations*). QSOs go in through
+    Wavelog's `api/qso`, with its duplicate check applied on its side.
+
+    The same tab has **Send frequency and mode to Wavelog**: while it is on,
+    sdroxide posts the dial frequency and mode to Wavelog's radio interface
+    (`api/radio`) whenever they change, so Wavelog's logging form follows the
+    radio and a QSO you enter there already has the right frequency and mode.
+    A dial being turned is sent once it has been still for half a second, never
+    more than once a second, and an unchanged radio is refreshed every five
+    minutes so Wavelog keeps showing it as live. Under split the transmit
+    frequency is the one sent and the receive frequency goes as `frequency_rx`.
+    Wavelog lists the radio under **Radio name** (default `SDROxide`). On a
+    station with several radios only the first reports, so they do not overwrite
+    one another under the one name. Needs the URL and key above, but not the
+    master auto-upload switch. **Test Wavelog** checks the key, that it can
+    write, and that the station ID exists.
 
   A service's own tickbox only takes effect while the master **Auto-upload each
   new QSO** is on; with it off the tab says so, and the per-QSO **UP** button in
@@ -12030,7 +12051,7 @@ At the bottom of the tab, **APPLY** saves everything above, and
 #### Testing the credentials
 
 Each upload service's tab carries its own **Test** button — **Test QRZ Logbook /
-Test eQSL / Test HamQTH / Test Club Log / Test World Radio League** — and there
+Test eQSL / Test HamQTH / Test Club Log / Test World Radio League / Test Wavelog** — and there
 is a **Test LoTW** beside
 the confirmation login. It asks that service, there and then, whether the login
 you have typed works, and prints what came back — a green tick with the account

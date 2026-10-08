@@ -322,6 +322,28 @@ pub struct NetworkConfig {
     /// wire requires.
     #[serde(default)]
     pub auto_upload_wrl: bool,
+
+    // ── Wavelog / Cloudlog ──
+    /// Base URL of the Wavelog or Cloudlog instance, e.g. `https://log.example.com`.
+    /// Appended last, as the wire requires.
+    #[serde(default)]
+    pub wavelog_url: String,
+    /// API key with read+write rights (Wavelog → account menu → API Keys).
+    #[serde(default)]
+    pub wavelog_api_key: String,
+    /// Numeric station-profile (station location) id that QSOs are logged to.
+    #[serde(default)]
+    pub wavelog_station_id: String,
+    /// Auto-upload each new QSO to Wavelog.
+    #[serde(default)]
+    pub auto_upload_wavelog: bool,
+    /// Tell Wavelog the dial frequency and mode whenever they change, so its
+    /// logging form follows the radio.
+    #[serde(default)]
+    pub wavelog_push_qrg: bool,
+    /// The radio's name as Wavelog lists it under its CAT interface.
+    #[serde(default)]
+    pub wavelog_radio_name: String,
 }
 
 impl NetworkConfig {
@@ -339,6 +361,7 @@ impl NetworkConfig {
         n.qrz_logbook_key.clear();
         n.clublog_api_key.clear();
         n.wrl_api_key.clear();
+        n.wavelog_api_key.clear();
         n.winlink.password.clear();
         n
     }
@@ -373,6 +396,12 @@ impl Default for NetworkConfig {
             auto_upload_hamqth: false,
             wrl_api_key: String::new(),
             auto_upload_wrl: false,
+            wavelog_url: String::new(),
+            wavelog_api_key: String::new(),
+            wavelog_station_id: String::new(),
+            auto_upload_wavelog: false,
+            wavelog_push_qrg: false,
+            wavelog_radio_name: "SDROxide".into(),
         }
     }
 }
@@ -389,6 +418,7 @@ mod tests {
         n.qrz.password = "secret".into();
         n.qrz_logbook_key = "key".into();
         n.wrl_api_key = "wrl".into();
+        n.wavelog_api_key = "wl".into();
         n.winlink.callsign = "DL1A".into();
         n.winlink.password = "cms".into();
         let stripped = n.without_secrets();
@@ -397,6 +427,7 @@ mod tests {
         assert!(stripped.qrz.user.is_empty());
         assert!(stripped.qrz_logbook_key.is_empty());
         assert!(stripped.wrl_api_key.is_empty());
+        assert!(stripped.wavelog_api_key.is_empty());
         assert_eq!(stripped.winlink.callsign, "DL1A");
         assert!(stripped.winlink.password.is_empty());
     }

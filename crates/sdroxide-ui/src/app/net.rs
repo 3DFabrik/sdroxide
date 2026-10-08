@@ -49,6 +49,9 @@ fn auto_upload_targets(cfg: &NetworkConfig) -> Vec<UploadTarget> {
     if cfg.auto_upload_wrl {
         t.push(UploadTarget::Wrl);
     }
+    if cfg.auto_upload_wavelog {
+        t.push(UploadTarget::Wavelog);
+    }
     t
 }
 
@@ -72,6 +75,12 @@ pub(in crate::app) fn configured_upload_targets(cfg: &NetworkConfig) -> Vec<Uplo
     }
     if !cfg.wrl_api_key.trim().is_empty() {
         t.push(UploadTarget::Wrl);
+    }
+    if !cfg.wavelog_url.trim().is_empty()
+        && !cfg.wavelog_api_key.trim().is_empty()
+        && !cfg.wavelog_station_id.trim().is_empty()
+    {
+        t.push(UploadTarget::Wavelog);
     }
     t
 }
@@ -209,6 +218,7 @@ impl SdroxideApp {
                     UploadTarget::ClubLog => rec.clublog_sent = true,
                     UploadTarget::HamQth => rec.hamqth_sent = true,
                     UploadTarget::Wrl => rec.wrl_sent = true,
+                    UploadTarget::Wavelog => rec.wavelog_sent = true,
                 }
                 self.persist_operator_log();
             }

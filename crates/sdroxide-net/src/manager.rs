@@ -68,6 +68,9 @@ pub struct SpotManager {
     rep_tx: bool,
     rep_visible: bool,
 
+    /// When to tell Wavelog about a change of dial frequency or mode.
+    wavelog_qrg: crate::wavelog::QrgPusher,
+
     /// Whether this manager may hold the station's long-lived feeds.
     ///
     /// A station has one DX cluster login, one RBN reader and one FreeDV
@@ -108,6 +111,7 @@ impl SpotManager {
             rep_freq: 0,
             rep_tx: false,
             rep_visible: false,
+            wavelog_qrg: crate::wavelog::QrgPusher::default(),
             station: true,
         }
     }
@@ -144,6 +148,13 @@ impl SpotManager {
         }
         if old.wspr != self.cfg.wspr {
             self.rebuild_wspr();
+        }
+        if old.wavelog_url != self.cfg.wavelog_url
+            || old.wavelog_api_key != self.cfg.wavelog_api_key
+            || old.wavelog_radio_name != self.cfg.wavelog_radio_name
+            || old.wavelog_push_qrg != self.cfg.wavelog_push_qrg
+        {
+            self.wavelog_qrg.reset();
         }
         // The reporter sends its settings at connect, so a change to them has
         // to restart the session. The status message is the one field that can
@@ -296,6 +307,41 @@ impl SpotManager {
     /// right slice.
     pub fn set_dial(&self, hz: f64) {
         self.dial_bits.store(hz.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Report the dial to Wavelog's radio interface, when that is switched on.
+    ///
+    /// Called on every engine tick; [`crate::wavelog::QrgPusher`] decides when
+    /// something is actually worth sending. Only the station's primary radio
+    /// reports: Wavelog lists one radio by name, and several engines posting
+    /// under it would overwrite each other.
+    pub fn set_wavelog_radio(&mut self, tx_hz: f64, rx_hz: Option<f64>, mode: sdroxide_types::Mode) {
+        let cfg = &self.cfg;
+        if !self.station
+            || !cfg.wavelog_push_qrg
+            || cfg.wavelog_url.trim().is_empty()
+            || cfg.wavelog_api_key.trim().is_empty()
+        {
+            return;
+        }
+        let radio = crate::wavelog::Radio {
+            freq_hz: tx_hz.round().max(0.0) as u64,
+            rx_hz: rx_hz.map(|f| f.round().max(0.0) as u64),
+            mode: crate::wavelog::mode_name(mode, tx_hz),
+        };
+        if !self.wavelog_qrg.tick(std::time::Instant::now(), radio) {
+            return;
+        }
+        let cfg = self.cfg.clone();
+        let tx = self.event_tx.clone();
+        std::thread::Builder::new()
+            .name("sdroxide-wavelog".into())
+            .spawn(move || {
+                if let Err(e) = crate::wavelog::push_radio(&cfg, &radio) {
+                    let _ = tx.send(NetEvent::Status(Some(e)));
+                }
+            })
+            .ok();
     }
 
     /// Kick off a callsign lookup; the result arrives via [`SpotManager::poll`].

@@ -64,6 +64,30 @@ pub fn post_json_status(url: &str, bearer: &str, json: &str) -> Result<(u16, Str
     Ok((status, body))
 }
 
+/// POST `json` as `application/json` with no authorisation header, keeping the
+/// HTTP status alongside the body.
+///
+/// For APIs that carry the key inside the JSON document — Wavelog's does.
+pub fn post_json_plain_status(url: &str, json: &str) -> Result<(u16, String), String> {
+    let mut resp = agent()
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .send(json)
+        .map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    let body = resp.body_mut().read_to_string().map_err(|e| e.to_string())?;
+    Ok((status, body))
+}
+
+/// GET `url`, keeping the HTTP status alongside the body.
+pub fn get_status(url: &str) -> Result<(u16, String), String> {
+    let mut resp = agent().get(url).call().map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    let body = resp.body_mut().read_to_string().map_err(|e| e.to_string())?;
+    Ok((status, body))
+}
+
 /// GET `url` with a bearer token, keeping the HTTP status alongside the body.
 pub fn get_bearer_status(url: &str, bearer: &str) -> Result<(u16, String), String> {
     let mut resp = agent()

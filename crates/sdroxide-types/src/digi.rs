@@ -1156,6 +1156,10 @@ pub struct QsoRecord {
     /// the reason [`Self::hamqth_sent`] gives.
     #[serde(default)]
     pub wrl_sent: bool,
+    /// Uploaded to a Wavelog / Cloudlog logbook. Appended for the reason
+    /// [`Self::hamqth_sent`] gives.
+    #[serde(default)]
+    pub wavelog_sent: bool,
 }
 
 impl QsoRecord {

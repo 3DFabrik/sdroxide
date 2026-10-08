@@ -3157,6 +3157,7 @@ impl SdroxideApp {
                     UploadTarget::HamQth => &mut io.net_edit.auto_upload_hamqth,
                     UploadTarget::ClubLog => &mut io.net_edit.auto_upload_clublog,
                     UploadTarget::Wrl => &mut io.net_edit.auto_upload_wrl,
+                    UploadTarget::Wavelog => &mut io.net_edit.auto_upload_wavelog,
                 };
                 ui.add_enabled_ui(auto_on, |ui| {
                     crate::chrome::checkbox(
@@ -3222,6 +3223,33 @@ impl SdroxideApp {
                         net_row(ui, "Club Log email", &mut io.net_edit.clublog.user, 200.0);
                         net_secret(ui, "Club Log pass", &mut io.net_edit.clublog.password, 140.0);
                         net_secret(ui, "Club Log key", &mut io.net_edit.clublog_api_key, 200.0);
+                    }
+                    UploadTarget::Wavelog => {
+                        net_row(ui, "Wavelog URL", &mut io.net_edit.wavelog_url, 240.0);
+                        net_secret(ui, "API key", &mut io.net_edit.wavelog_api_key, 240.0);
+                        net_row(ui, "Station ID", &mut io.net_edit.wavelog_station_id, 60.0);
+                        ui.label(
+                            RichText::new(
+                                "Works with Wavelog and Cloudlog. The URL is the address you open \
+                                 it at, e.g. https://log.example.com. The API key must be \
+                                 read+write (account menu → API Keys). The station ID is the \
+                                 number in the URL of the station location you log to.",
+                            )
+                            .size(10.5)
+                            .color(crate::theme::gray(140)),
+                        );
+                        ui.add_space(4.0);
+                        crate::chrome::checkbox(
+                            ui,
+                            &mut io.net_edit.wavelog_push_qrg,
+                            "Send frequency and mode to Wavelog",
+                        )
+                        .on_hover_text(
+                            "Wavelog's logging form follows the radio. Sent when the dial or mode \
+                             changes, from the station's first radio only. Needs the API key and \
+                             URL above.",
+                        );
+                        net_row(ui, "Radio name", &mut io.net_edit.wavelog_radio_name, 140.0);
                     }
                     UploadTarget::Wrl => {
                         net_secret(ui, "WRL API key", &mut io.net_edit.wrl_api_key, 240.0);

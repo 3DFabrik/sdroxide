@@ -21,6 +21,7 @@ mod rbn;
 mod socketio;
 mod sota;
 mod upload;
+mod wavelog;
 mod wsprnet;
 
 pub use event::NetEvent;

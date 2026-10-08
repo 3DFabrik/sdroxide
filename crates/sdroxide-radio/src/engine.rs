@@ -13235,6 +13235,18 @@ impl Engine {
     fn poll_spots(&mut self) {
         self.spots.set_dial(self.state.active_freq_hz());
 
+        // Wavelog radio interface: under split the logged frequency is the
+        // transmit one, and the receive one rides along.
+        if self.state.split {
+            self.spots.set_wavelog_radio(
+                self.state.tx_freq_hz(),
+                Some(self.state.rx_freq_hz()),
+                self.state.rx[0].mode,
+            );
+        } else {
+            self.spots.set_wavelog_radio(self.state.rx_freq_hz(), None, self.state.rx[0].mode);
+        }
+
         // FreeDV Reporter. Pushed unconditionally every tick and deduplicated
         // on the reporter thread, so this one place also catches a CAT rig's
         // dial being turned, a mode change made on the radio itself, and a

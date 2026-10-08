@@ -1537,7 +1537,16 @@ use sdroxide_types::{
 /// surviving discriminant moved. A v175 client never sees the schedule and
 /// cannot arm a pass; the recording itself is the engine's and runs regardless
 /// of what is attached.
-pub const PROTO_VERSION: u16 = 176;
+///
+/// v177: a Wavelog / Cloudlog logbook as an upload target and as the radio
+/// interface's QRG/mode sink. [`sdroxide_types::QsoRecord`] gains
+/// `wavelog_sent`, [`sdroxide_types::NetworkConfig`] gains six `wavelog_*` /
+/// `auto_upload_wavelog` fields, and `UploadTarget` and `LoginTarget` each gain
+/// `Wavelog`. The variants and fields are all appended, so no surviving
+/// discriminant moved, but both structs ride whole inside
+/// `Command::SetNetworkConfig` and `RadioEvent::Ft8QsoLogged`, so a v176 peer
+/// reads the tail of each out of step.
+pub const PROTO_VERSION: u16 = 177;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]

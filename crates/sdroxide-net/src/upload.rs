@@ -22,6 +22,7 @@ pub fn upload(
         UploadTarget::ClubLog => upload_clublog(cfg, my_call, adif),
         UploadTarget::HamQth => upload_hamqth(cfg, my_call, adif),
         UploadTarget::Wrl => upload_wrl(cfg, my_call, adif),
+        UploadTarget::Wavelog => crate::wavelog::upload(cfg, adif),
     }
 }
 
@@ -490,6 +491,7 @@ pub fn test_login(
         LoginTarget::Lotw => test_lotw(cfg),
         LoginTarget::HamQth => test_hamqth(cfg),
         LoginTarget::Wrl => test_wrl(cfg),
+        LoginTarget::Wavelog => crate::wavelog::test(cfg),
     }
 }
 
@@ -769,7 +771,7 @@ fn strip_html(s: &str) -> String {
     out
 }
 
-fn urlencode(s: &str) -> String {
+pub(crate) fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {

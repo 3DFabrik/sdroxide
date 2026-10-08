@@ -68,6 +68,9 @@ pub enum UploadTarget {
     /// The World Radio League logbook, via its developer API (issue #337).
     /// Appended for the reason [`UploadTarget::HamQth`] gives.
     Wrl,
+    /// A Wavelog (or Cloudlog) logbook, via its `api/qso` endpoint. Appended
+    /// for the reason [`UploadTarget::HamQth`] gives.
+    Wavelog,
 }
 
 impl UploadTarget {
@@ -78,6 +81,7 @@ impl UploadTarget {
             UploadTarget::ClubLog => "Club Log",
             UploadTarget::HamQth => "HamQTH",
             UploadTarget::Wrl => "WRL",
+            UploadTarget::Wavelog => "Wavelog",
         }
     }
 
@@ -95,18 +99,20 @@ impl UploadTarget {
             UploadTarget::ClubLog => LoginTarget::ClubLog,
             UploadTarget::HamQth => LoginTarget::HamQth,
             UploadTarget::Wrl => LoginTarget::Wrl,
+            UploadTarget::Wavelog => LoginTarget::Wavelog,
         }
     }
 
     /// Display order, which is deliberately not the declaration order above:
     /// the variants are numbered by the wire and appended to, while this is
     /// what the operator reads along a tab strip.
-    pub const ALL: [UploadTarget; 5] = [
+    pub const ALL: [UploadTarget; 6] = [
         UploadTarget::QrzLogbook,
         UploadTarget::Eqsl,
         UploadTarget::HamQth,
         UploadTarget::ClubLog,
         UploadTarget::Wrl,
+        UploadTarget::Wavelog,
     ];
 }
 
@@ -129,6 +135,9 @@ pub enum LoginTarget {
     /// The World Radio League developer API key (issue #337). Appended for the
     /// reason [`UploadTarget::HamQth`] gives.
     Wrl,
+    /// The Wavelog / Cloudlog API key. Appended for the reason
+    /// [`UploadTarget::HamQth`] gives.
+    Wavelog,
 }
 
 impl LoginTarget {
@@ -140,16 +149,18 @@ impl LoginTarget {
             LoginTarget::Lotw => "LoTW",
             LoginTarget::HamQth => "HamQTH",
             LoginTarget::Wrl => "World Radio League",
+            LoginTarget::Wavelog => "Wavelog",
         }
     }
 
-    pub const ALL: [LoginTarget; 6] = [
+    pub const ALL: [LoginTarget; 7] = [
         LoginTarget::Eqsl,
         LoginTarget::QrzLogbook,
         LoginTarget::HamQth,
         LoginTarget::ClubLog,
         LoginTarget::Lotw,
         LoginTarget::Wrl,
+        LoginTarget::Wavelog,
     ];
 }
 
