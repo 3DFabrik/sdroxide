@@ -305,6 +305,18 @@ fn hhmm(unix: i64) -> String {
     format!("{h:02}:{mi:02}")
 }
 
+/// `13:08 UTC (14:08 local)` — a pass time in both zones. Pass times are UTC,
+/// and read as local they are wrong by the operator's offset (#635), so the
+/// local clock goes beside it wherever the two differ.
+fn utc_and_local(unix: i64) -> String {
+    let offset = crate::time::local_offset_at(unix);
+    if offset == 0 {
+        format!("{} UTC", hhmm(unix))
+    } else {
+        format!("{} UTC ({} local)", hhmm(unix), hhmm(unix + offset))
+    }
+}
+
 /// Paint the pass profile: elevation up the side, the clock and the compass
 /// along the bottom, and a marker down the arc at the satellite's present
 /// position.
@@ -760,11 +772,8 @@ impl SdroxideApp {
                 if let Some(p) = &t.next_pass {
                     if (p.rise_unix..=p.set_unix).contains(&now) {
                         ui.label(dim(&format!(
-                            "Pass until {} UTC · max {:.0}°",
-                            sdroxide_solar::timefmt::ymd_hm(p.set_unix)
-                                .split(' ')
-                                .nth(1)
-                                .unwrap_or(""),
+                            "Pass until {} · max {:.0}°",
+                            utc_and_local(p.set_unix),
                             p.max_el
                         )));
                     }
@@ -772,8 +781,9 @@ impl SdroxideApp {
             }
             (Some(p), false) => {
                 ui.label(dim(&format!(
-                    "Next pass {} UTC ({}) · rises {:.0}° {} · max {:.0}°",
-                    sdroxide_solar::timefmt::ymd_hm(p.rise_unix),
+                    "Next pass {} {} ({}) · rises {:.0}° {} · max {:.0}°",
+                    sdroxide_solar::timefmt::ymd(p.rise_unix),
+                    utc_and_local(p.rise_unix),
                     in_words(p.rise_unix - now),
                     p.rise_az,
                     compass(p.rise_az),

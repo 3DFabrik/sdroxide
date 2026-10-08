@@ -2134,7 +2134,9 @@ working it. Either tab carries a dot while its own work is running, and the
 subscription, anything you pasted into the TLE tab
 ([6.10](#610-tle-satellites-and-their-frequencies)), and the curated set — with
 a search box and, once your grid locator is set, live elevation and the next
-pass for each. Pick one and its published links appear: transponders,
+pass for each. Pass times are worked out in UTC and shown in UTC with your
+own local time beside them (`13:08 UTC (14:08 local)`). Pick one and its
+published links appear: transponders,
 repeaters, beacons, each with its passbands and mode, inverting transponders
 marked `inv`. **TUNE** just sets the dial and mode to the link, nothing more.
 **LOCK ON** is the mode itself. An SSTV link — the ISS lists both its 70 cm
