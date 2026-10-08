@@ -2137,7 +2137,9 @@ a search box and, once your grid locator is set, live elevation and the next
 pass for each. Pick one and its published links appear: transponders,
 repeaters, beacons, each with its passbands and mode, inverting transponders
 marked `inv`. **TUNE** just sets the dial and mode to the link, nothing more.
-**LOCK ON** is the mode itself.
+**LOCK ON** is the mode itself. An SSTV link — the ISS lists both its 70 cm
+(437.550 MHz) and 2 m (145.800 MHz) SSTV downlinks — tunes and locks in
+**SSTV FM**, so the picture is decoded with the Doppler corrected.
 
 **What a lock does.** The engine — not the screen — propagates the orbit with
 SGP4 a few times a second and:
