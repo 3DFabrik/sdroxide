@@ -4782,6 +4782,11 @@ Everything is in the `STATUS` pane; WSPR has no separate setup dialog.
   transmission. On by default: two hundred hertz shared by everyone only works
   if nobody parks in the middle of it.
 
+**TRANSMIT**, **POWER** and the band-hop settings belong to the radio they are
+set on. With several radios open, each beacons — or doesn't — on its own say:
+switching one on leaves the others as they were, and a radio added later starts
+with its beacon off.
+
 Your **callsign and grid come from the General tab of Settings** — the same
 identity the rest of the program reports under. The panel says which it is
 transmitting as, and says so in yellow if either is still blank.
