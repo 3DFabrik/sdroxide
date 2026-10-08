@@ -1980,6 +1980,12 @@ key** action in Settings → Controls ([6.4.1](#641-keyboard)), so you can put i
 on any key you like. A space bar's travel is long for keying, and a key with a
 shorter throw is easier to send a decent fist on.
 
+**A MIDI key.** The same action can be bound to a MIDI note — the key-down
+note of a keyer or paddle interface — in Settings → Controls
+([6.4.3](#643-midi-controller)). The note keys while it is on, whatever button
+mode the binding has, and its first press switches **KEY** on by itself. Bind
+the key note, not **PTT**: PTT in CW transmits a steady carrier.
+
 - The first press keys the transmitter; there is no need to press **TX**. Between
   elements the transmitter holds the frequency the way **TX** does, and releases
   itself once the key has been up for as long as **IDLE** says.
