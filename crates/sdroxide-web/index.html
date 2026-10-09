@@ -20,7 +20,8 @@
     <meta name="apple-mobile-web-app-title" content="sdroxide" />
     <link rel="apple-touch-icon" href="sdroxide-192.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="sdroxide-192.png" />
-    <link data-trunk rel="rust" data-wasm-opt="z" />
+    <!-- Current rustc emits bulk-memory and sat-float ops that Trunk's wasm-opt rejects unless told. -->
+    <link data-trunk rel="rust" data-wasm-opt="z" data-wasm-opt-params="--enable-bulk-memory --enable-bulk-memory-opt --enable-nontrapping-float-to-int" />
     <link data-trunk rel="copy-file" href="assets/audio_bridge.js" />
     <link data-trunk rel="copy-file" href="assets/pcm_worklet.js" />
     <link data-trunk rel="copy-file" href="assets/ws_arraybuffer.js" />
