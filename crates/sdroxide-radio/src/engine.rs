@@ -9446,6 +9446,12 @@ impl Engine {
                 }
                 return;
             }
+            SetAntennaRemoteAntenna(n) => {
+                if let Some(client) = self.antenna_remote.as_ref() {
+                    client.set_antenna(n);
+                }
+                return;
+            }
 
             // WSJT-X UDP broadcast (no RadioState change → return before the
             // State emit below).

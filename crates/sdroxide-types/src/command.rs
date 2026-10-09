@@ -1198,4 +1198,12 @@ pub enum Command {
     ///
     /// Appended last, for the usual reason.
     SetAntennaRemoteAuto(bool),
+    /// Select antenna `n` (from 1) on the Antenna Remote. The switch goes to manual
+    /// mode with it, so automatic selection is off afterwards. Only reaches a
+    /// switch that is connected; a number the switch does not have is refused
+    /// there. The state comes back through the next
+    /// [`crate::RadioEvent::AntennaRemoteStatus`].
+    ///
+    /// Appended last, for the usual reason.
+    SetAntennaRemoteAntenna(u8),
 }

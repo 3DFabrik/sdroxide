@@ -15,19 +15,20 @@
 //! |------------|------------------------------------------------|
 //! | `v`        | `AntennaRemote 1` then `RPRT 0`                |
 //! | `F <hz>`   | `RPRT 0` — the radio's frequency in whole hertz |
-//! | `s`        | `ant=<1-8> auto=<0\|1> band=<m> name=<text>` then `RPRT 0` |
+//! | `s`        | `ant=<1-8> auto=<0\|1> band=<m> n=<count> name=<text>` then `RPRT 0` |
 //! | `M <0\|1>`  | `RPRT 0` — automatic mode off or on                |
+//! | `A <n>`    | `RPRT 0` — selects antenna `n` and switches to manual |
 //!
 //! `name=` is last on its line because an antenna's name may contain spaces.
-//! `band` is `0` when the frequency is outside every band. A refusal is
-//! `RPRT -1`, which is also what a firmware that predates `M` answers; sdroxide
-//! keeps the connection in that case. Reserved for later and not sent today:
-//! `A <n>` selects an antenna and switches to manual.
+//! `band` is `0` when the frequency is outside every band, and `n=` is how many
+//! antennas the switch has (a firmware that predates it leaves it out). A refusal
+//! is `RPRT -1`, which is also what a firmware that predates `M` or `A` answers;
+//! sdroxide keeps the connection in that case.
 //!
 //! sdroxide sends `v` once after connecting, `F` whenever the frequency has
-//! settled on a new value, `M` when the operator toggles automatic mode, and `s`
-//! once a second — which doubles as the keep-alive, so the switch can fall back
-//! to a safe antenna when it stops arriving.
+//! settled on a new value, `M` and `A` when the operator asks, and `s` once a
+//! second — which doubles as the keep-alive, so the switch can fall back to a
+//! safe antenna when it stops arriving.
 
 use serde::{Deserialize, Serialize};
 
@@ -83,10 +84,13 @@ pub struct AntennaRemoteStatus {
     pub band: u16,
     /// Why it is not connected, when it is not.
     pub error: Option<String>,
+    /// How many antennas the switch has, from its `n=`; `0` when the firmware does
+    /// not say. Appended last, so it is the tail of the struct on the wire.
+    pub count: u8,
 }
 
 impl AntennaRemoteStatus {
-    /// Read an `s` reply line: `ant=3 auto=1 band=20 name=Dipole 20 m`.
+    /// Read an `s` reply line: `ant=3 auto=1 band=20 n=8 name=Dipole 20 m`.
     ///
     /// Unknown keys are skipped, so a later firmware can say more. `None` when
     /// the line carries no antenna number at all, which is not a status.
@@ -106,6 +110,7 @@ impl AntennaRemoteStatus {
                 }
                 "auto" => st.auto = v == "1",
                 "band" => st.band = v.parse().unwrap_or(0),
+                "n" => st.count = v.parse().unwrap_or(0),
                 _ => {}
             }
         }
@@ -129,6 +134,15 @@ mod tests {
         assert_eq!(AntennaRemoteStatus::parse_line("auto=1 band=20"), None);
         assert_eq!(AntennaRemoteStatus::parse_line("RPRT 0"), None);
         assert_eq!(AntennaRemoteStatus::parse_line("ant=x"), None);
+    }
+
+    #[test]
+    fn the_antenna_count_is_read_when_the_firmware_gives_one() {
+        let s = AntennaRemoteStatus::parse_line("ant=2 auto=0 band=40 n=4 name=City Windom").unwrap();
+        assert_eq!((s.antenna, s.count), (2, 4));
+        assert_eq!(s.name, "City Windom");
+        let old = AntennaRemoteStatus::parse_line("ant=2 auto=0 band=40 name=City Windom").unwrap();
+        assert_eq!(old.count, 0);
     }
 
     #[test]

@@ -3994,7 +3994,8 @@ impl SdroxideApp {
             + crate::chrome::text_width(ui, &"0".repeat(ANTSW_NAME_CHARS), mono);
         let bottom = crate::chrome::text_width(ui, "AUTO", body)
             + gap
-            + crate::chrome::chip_width(ui, "OFF", None);
+            + crate::chrome::chip_width(ui, "OFF", None)
+            + 2.0 * (gap + crate::chrome::chip_width(ui, "−", None));
         top.max(bottom) + 2.0 * crate::chrome::MODULE_MARGIN_X
     }
 
@@ -4059,6 +4060,35 @@ impl SdroxideApp {
                     s.auto = on; // optimistic echo
                 }
                 cmds.push(Command::SetAntennaRemoteAuto(on));
+            }
+            // By hand: while automatic is off the switch keeps its antenna, and
+            // these step to the one before or after it. Not offered in automatic
+            // mode, where a click would silently take the switch out of it.
+            if st.connected && !st.auto && st.antenna > 0 && st.count > 1 {
+                let stay = "The switch is in manual mode: it keeps this antenna until you \
+                            choose another or switch AUTO on again.";
+                if crate::chrome::chip(ui, false, "−")
+                    .on_hover_text(format!("Previous antenna.\n\n{stay}"))
+                    .clicked()
+                    && st.antenna > 1
+                {
+                    let n = st.antenna - 1;
+                    if let Some(s) = self.antenna_remote_status.as_mut() {
+                        s.antenna = n; // optimistic echo
+                    }
+                    cmds.push(Command::SetAntennaRemoteAntenna(n));
+                }
+                if crate::chrome::chip(ui, false, "+")
+                    .on_hover_text(format!("Next antenna.\n\n{stay}"))
+                    .clicked()
+                    && st.antenna < st.count
+                {
+                    let n = st.antenna + 1;
+                    if let Some(s) = self.antenna_remote_status.as_mut() {
+                        s.antenna = n; // optimistic echo
+                    }
+                    cmds.push(Command::SetAntennaRemoteAntenna(n));
+                }
             }
         });
     }

@@ -1556,7 +1556,12 @@ use sdroxide_types::{
 /// v179: `Command::SetAntennaRemoteAuto`, the operator's switch for the Antenna
 /// Remote's automatic mode, appended last so no surviving discriminant moved. A
 /// v178 peer cannot send it.
-pub const PROTO_VERSION: u16 = 179;
+///
+/// v180: `Command::SetAntennaRemoteAntenna`, choosing an antenna on the switch by
+/// hand, appended last as before, and [`sdroxide_types::AntennaRemoteStatus`]
+/// gains `count` at its tail. The status rides `ServerMsg::AntennaRemoteStatus`
+/// whole, so a v179 peer reads the end of it out of step.
+pub const PROTO_VERSION: u16 = 180;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]
