@@ -1552,7 +1552,11 @@ use sdroxide_types::{
 /// moved, and `StationConfig` gains `antenna_remote` at its tail. `StationConfig`
 /// rides `ServerMsg::StationConfig` whole, so a v177 peer reads the end of it out
 /// of step rather than merely missing a field.
-pub const PROTO_VERSION: u16 = 178;
+///
+/// v179: `Command::SetAntennaRemoteAuto`, the operator's switch for the Antenna
+/// Remote's automatic mode, appended last so no surviving discriminant moved. A
+/// v178 peer cannot send it.
+pub const PROTO_VERSION: u16 = 179;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]

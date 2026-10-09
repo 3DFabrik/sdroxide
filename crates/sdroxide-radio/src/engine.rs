@@ -9440,6 +9440,12 @@ impl Engine {
                 self.emit_station_config();
                 return;
             }
+            SetAntennaRemoteAuto(on) => {
+                if let Some(client) = self.antenna_remote.as_ref() {
+                    client.set_auto(on);
+                }
+                return;
+            }
 
             // WSJT-X UDP broadcast (no RadioState change → return before the
             // State emit below).

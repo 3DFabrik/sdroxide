@@ -1190,4 +1190,12 @@ pub enum Command {
     ///
     /// Appended last, for the usual reason.
     SetAntennaRemoteConfig(crate::AntennaRemoteConfig),
+    /// Switch the Antenna Remote's automatic mode on or off: on, the switch
+    /// picks the antenna from the frequency; off, it keeps the one it has until
+    /// someone chooses another on the switch itself. Only reaches a switch that
+    /// is connected. The state comes back through the next
+    /// [`crate::RadioEvent::AntennaRemoteStatus`].
+    ///
+    /// Appended last, for the usual reason.
+    SetAntennaRemoteAuto(bool),
 }

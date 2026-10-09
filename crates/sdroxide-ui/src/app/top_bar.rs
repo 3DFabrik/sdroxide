@@ -47,6 +47,11 @@ const LINK_GAP: f32 = 4.0;
 /// What the RIG box's receiving-antenna chip says, in the one place the width
 /// measurement and the chip itself both read it from.
 const RX_ANT_LABEL: &str = "RX ANT";
+/// What the Antenna Remote box and its menu chip are called.
+const ANTSW_LABEL: &str = "ANT SW";
+/// How many characters of the switch's antenna name the box makes room for; a
+/// longer one is cut, with the whole name on hover.
+const ANTSW_NAME_CHARS: usize = 14;
 /// Width of the frequency box's right column (inactive VFO + band/mode chip).
 const RIGHT_W: f32 = 96.0;
 /// Width of the S-meter box at its design size. It has no ceiling: the bar and
@@ -347,6 +352,8 @@ enum MenuChip {
     Div,
     Sub,
     Rig,
+    /// The Antenna Remote network antenna switch.
+    Sw,
     Tx,
     Disp,
     Sys,
@@ -360,6 +367,7 @@ impl MenuChip {
             Self::Div => "DIV",
             Self::Sub => "SUB",
             Self::Rig => "RIG",
+            Self::Sw => ANTSW_LABEL,
             Self::Tx => "TX",
             Self::Disp => "DISP",
             Self::Sys => "SYS",
@@ -722,6 +730,7 @@ impl SdroxideApp {
             Div,
             Sub,
             Rig,
+            Sw,
             Tx,
             Display,
             System,
@@ -763,6 +772,12 @@ impl SdroxideApp {
             let w = self.rig_rows_w(ui);
             boxes.push((Kind::Rig, StripBox { w, flex: 1.0, max_w: w * CHIP_STRETCH_FACTOR }));
         }
+        // Only while the Antenna Remote is there to show: the box appearing is the
+        // confirmation that the switch is being driven.
+        if self.antsw_shown() {
+            let w = self.antsw_rows_w(ui);
+            boxes.push((Kind::Sw, StripBox { w, flex: 1.0, max_w: w * CHIP_STRETCH_FACTOR }));
+        }
         if self.tx_capable() {
             let w = self.tx_rows_w(ui);
             boxes.push((Kind::Tx, StripBox { w, flex: 2.0, max_w: w + RAIL_STRETCH_MAX }));
@@ -801,6 +816,7 @@ impl SdroxideApp {
                         Kind::Div => self.div_module(ui, cmds, w),
                         Kind::Sub => self.sub_rx_module(ui, cmds, w),
                         Kind::Rig => self.rig_module(ui, cmds, w),
+                        Kind::Sw => self.antsw_module(ui, cmds, w),
                         Kind::Tx => self.tx_condensed(ui, cmds, w),
                         Kind::Display => self.display_condensed(ui, cmds, w),
                         Kind::System => self.windows_condensed(ui, w, cmds),
@@ -828,6 +844,9 @@ impl SdroxideApp {
         if self.rig_box_shown() {
             chips.push(MenuChip::Rig);
         }
+        if self.antsw_shown() {
+            chips.push(MenuChip::Sw);
+        }
         if tx_capable {
             chips.push(MenuChip::Tx);
         }
@@ -849,6 +868,10 @@ impl SdroxideApp {
             }),
             MenuChip::Sub => true,
             MenuChip::Tx => self.state.tx.tune,
+            // Lit while the switch is choosing the antenna by itself.
+            MenuChip::Sw => {
+                self.antenna_remote_status.as_ref().is_some_and(|s| s.connected && s.auto)
+            }
             // Nothing here reads back: the socket is a name rather than an
             // on/off, and a radio that is switched off answers nothing at all.
             MenuChip::Rig | MenuChip::Rx | MenuChip::Disp | MenuChip::Sys => false,
@@ -905,6 +928,7 @@ impl SdroxideApp {
         let sub = self.state.sub_rx_enabled;
         let div = self.has_diversity();
         let rig = self.rig_box_shown();
+        let sw = self.antsw_shown();
         let gap = ui.spacing().item_spacing.x;
         let chip_h = crate::chrome::chip_height(ui, None);
         let fit = ReadoutFit::measure(ui, self.readout_digits());
@@ -942,6 +966,9 @@ impl SdroxideApp {
                 }
                 if rig {
                     r1.push("RIG");
+                }
+                if sw {
+                    r1.push(ANTSW_LABEL);
                 }
                 (r1.len(), widest(&r1))
             },
@@ -1043,6 +1070,11 @@ impl SdroxideApp {
                     if rig {
                         let btn = crate::chrome::chip_sized(ui, false, "RIG", cell1);
                         self.rig_menu(ui, btn, cmds);
+                    }
+                    if sw {
+                        let lit = self.menu_chip_lit(MenuChip::Sw);
+                        let btn = crate::chrome::chip_sized(ui, lit, ANTSW_LABEL, cell1);
+                        self.antsw_menu(ui, btn, cmds);
                     }
                 });
                 let cell2 = egui::vec2(plan.cell2_w, chip_h);
@@ -1215,6 +1247,7 @@ impl SdroxideApp {
                 MenuChip::Div => self.div_menu(ui, btn, cmds),
                 MenuChip::Sub => self.sub_menu(ui, btn, cmds),
                 MenuChip::Rig => self.rig_menu(ui, btn, cmds),
+                MenuChip::Sw => self.antsw_menu(ui, btn, cmds),
                 MenuChip::Tx => self.tx_menu(ui, btn, cmds),
                 MenuChip::Disp => self.disp_menu(ui, btn, cmds),
                 MenuChip::Sys => self.sys_menu(ui, btn, cmds),
@@ -3921,6 +3954,122 @@ impl SdroxideApp {
                 }
             });
         }
+    }
+
+    /// Whether the Antenna Remote has anything to show: it is connected, or it
+    /// is switched on and failing, in which case the box says why. Switched off
+    /// (or never set up) the box stays away, like DIV and SUB.
+    fn antsw_shown(&self) -> bool {
+        self.antenna_remote_status.as_ref().is_some_and(|s| s.connected || s.error.is_some())
+    }
+
+    /// The antenna the switch has selected, as the box shows it: its number and
+    /// name, cut to the room the box has.
+    fn antsw_text(st: &sdroxide_types::AntennaRemoteStatus) -> String {
+        if !st.connected || st.antenna == 0 {
+            return "—".to_string();
+        }
+        let full = if st.name.is_empty() {
+            st.antenna.to_string()
+        } else {
+            format!("{} {}", st.antenna, st.name)
+        };
+        if full.chars().count() <= ANTSW_NAME_CHARS {
+            full
+        } else {
+            let cut: String = full.chars().take(ANTSW_NAME_CHARS - 1).collect();
+            format!("{cut}…")
+        }
+    }
+
+    /// The Antenna Remote box's natural width: the wider of its two rows. The
+    /// antenna row is measured against a full-length name, so the box does not
+    /// resize as the switch moves from a short name to a long one.
+    fn antsw_rows_w(&self, ui: &egui::Ui) -> f32 {
+        let gap = MODULE_ROW_SPACING;
+        let body = egui::TextStyle::Body.resolve(ui.style());
+        let mono = egui::FontId::monospace(body.size);
+        let top = crate::chrome::text_width(ui, ANTSW_LABEL, body.clone())
+            + gap
+            + crate::chrome::text_width(ui, &"0".repeat(ANTSW_NAME_CHARS), mono);
+        let bottom = crate::chrome::text_width(ui, "AUTO", body)
+            + gap
+            + crate::chrome::chip_width(ui, "OFF", None);
+        top.max(bottom) + 2.0 * crate::chrome::MODULE_MARGIN_X
+    }
+
+    /// The Antenna Remote box: which antenna the switch has, and its automatic
+    /// mode.
+    fn antsw_module(&mut self, ui: &mut egui::Ui, cmds: &mut Vec<Command>, w: f32) {
+        crate::chrome::module_bare_h(ui, w, crate::chrome::MODULE_TALL_H, |ui| {
+            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(MODULE_ROW_SPACING, MODULE_ROW_SPACING);
+                self.antsw_controls(ui, cmds, false);
+            });
+        });
+    }
+
+    /// The Antenna Remote's two readings — the body of its box and of its menu.
+    /// See [`crate::chrome::control_row`] for `narrow`.
+    ///
+    /// AUTO is a toggle that reads the switch back rather than remembering the
+    /// last click: the lit state is whatever the switch reported on its last
+    /// poll, and a click echoes optimistically only until the next report. With
+    /// no connection there is nothing to switch, so the chip is inert.
+    fn antsw_controls(&mut self, ui: &mut egui::Ui, cmds: &mut Vec<Command>, narrow: bool) {
+        let st = self.antenna_remote_status.clone().unwrap_or_default();
+        crate::chrome::control_row(ui, narrow, |ui| {
+            ui.label(ANTSW_LABEL).on_hover_text(
+                "The Antenna Remote antenna switch: the antenna it has selected right now.",
+            );
+            let ink = if st.connected {
+                crate::theme::CYAN()
+            } else {
+                crate::theme::ALERT()
+            };
+            let hover = match (&st.error, st.connected) {
+                (Some(e), _) => format!("Not connected: {e}"),
+                (None, true) if st.band > 0 => {
+                    format!("{} - band {} m", st.name, st.band)
+                }
+                (None, true) => st.name.clone(),
+                (None, false) => "Not connected".to_string(),
+            };
+            ui.label(RichText::new(Self::antsw_text(&st)).monospace().strong().color(ink))
+                .on_hover_text(hover);
+        });
+        crate::chrome::control_row(ui, narrow, |ui| {
+            ui.label("AUTO").on_hover_text(
+                "On, the switch picks the antenna from the frequency by itself, from the \
+                 band table kept on the switch. Off, it keeps the antenna it has until you \
+                 choose another on the switch or its web page.",
+            );
+            let label = if st.auto { "ON" } else { "OFF" };
+            if crate::chrome::chip(ui, st.connected && st.auto, label)
+                .on_hover_text(if st.connected {
+                    "Switch the automatic antenna selection on or off"
+                } else {
+                    "The switch is not connected"
+                })
+                .clicked()
+                && st.connected
+            {
+                let on = !st.auto;
+                if let Some(s) = self.antenna_remote_status.as_mut() {
+                    s.auto = on; // optimistic echo
+                }
+                cmds.push(Command::SetAntennaRemoteAuto(on));
+            }
+        });
+    }
+
+    /// The ANT SW menu, shown only while the Antenna Remote is there.
+    fn antsw_menu(&mut self, ui: &mut egui::Ui, btn: egui::Response, cmds: &mut Vec<Command>) {
+        let btn = btn.on_hover_text("The Antenna Remote switch: its antenna and automatic mode");
+        crate::chrome::menu_popup(ui, &btn, |ui| {
+            crate::chrome::menu_caption(ui, "Antenna switch");
+            self.antsw_controls(ui, cmds, true);
+        });
     }
 
     /// Whether two coherent aerials are being combined into the span on

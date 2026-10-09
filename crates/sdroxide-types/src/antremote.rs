@@ -16,16 +16,18 @@
 //! | `v`        | `AntennaRemote 1` then `RPRT 0`                |
 //! | `F <hz>`   | `RPRT 0` — the radio's frequency in whole hertz |
 //! | `s`        | `ant=<1-8> auto=<0\|1> band=<m> name=<text>` then `RPRT 0` |
+//! | `M <0\|1>`  | `RPRT 0` — automatic mode off or on                |
 //!
 //! `name=` is last on its line because an antenna's name may contain spaces.
 //! `band` is `0` when the frequency is outside every band. A refusal is
-//! `RPRT -1`. Reserved for later and not sent today: `A <n>` selects an
-//! antenna and switches to manual, `M <0|1>` switches automatic off or on.
+//! `RPRT -1`, which is also what a firmware that predates `M` answers; sdroxide
+//! keeps the connection in that case. Reserved for later and not sent today:
+//! `A <n>` selects an antenna and switches to manual.
 //!
 //! sdroxide sends `v` once after connecting, `F` whenever the frequency has
-//! settled on a new value, and `s` once a second — which doubles as the
-//! keep-alive, so the switch can fall back to a safe antenna when it stops
-//! arriving.
+//! settled on a new value, `M` when the operator toggles automatic mode, and `s`
+//! once a second — which doubles as the keep-alive, so the switch can fall back
+//! to a safe antenna when it stops arriving.
 
 use serde::{Deserialize, Serialize};
 

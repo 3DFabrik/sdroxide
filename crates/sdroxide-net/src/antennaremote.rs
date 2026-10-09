@@ -36,7 +36,12 @@ const REPLY_TIMEOUT: Duration = Duration::from_secs(2);
 
 enum Cmd {
     Freq(u64),
+    Auto(bool),
 }
+
+/// What a refusal's message starts with, so a refused request can be told from
+/// a connection that broke.
+const REFUSED: &str = "the switch refused";
 
 /// Handle to the worker thread. Dropping it closes the channel, which is the
 /// worker's signal to stop; the drop joins the thread so a socket mid-write
@@ -70,6 +75,15 @@ impl AntennaRemoteClient {
         }
     }
 
+    /// Switch the switch's automatic mode. Sent once, and only if the switch is
+    /// connected when the worker gets to it: the next status poll shows whether
+    /// it took.
+    pub fn set_auto(&self, on: bool) {
+        if let Some(tx) = &self.tx {
+            let _ = tx.try_send(Cmd::Auto(on));
+        }
+    }
+
     pub fn status(&self) -> AntennaRemoteStatus {
         self.status.lock().map(|s| s.clone()).unwrap_or_default()
     }
@@ -95,6 +109,7 @@ fn worker(cfg: AntennaRemoteConfig, rx: Receiver<Cmd>, status: Arc<Mutex<Antenna
     let mut retry_at = Instant::now();
     let mut retry_every = RECONNECT_FIRST;
     let mut want: Option<u64> = None;
+    let mut want_auto: Option<bool> = None;
     // What the switch was last told on *this* connection: a fresh connection
     // starts from nothing, so the current frequency goes out straight away.
     let mut sent: Option<u64> = None;
@@ -125,13 +140,22 @@ fn worker(cfg: AntennaRemoteConfig, rx: Receiver<Cmd>, status: Arc<Mutex<Antenna
 
         match rx.recv_timeout(TICK) {
             Ok(Cmd::Freq(hz)) => want = Some(hz),
+            Ok(Cmd::Auto(on)) => want_auto = Some(on),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
         }
-        while let Ok(Cmd::Freq(hz)) = rx.try_recv() {
-            want = Some(hz);
+        while let Ok(cmd) = rx.try_recv() {
+            match cmd {
+                Cmd::Freq(hz) => want = Some(hz),
+                Cmd::Auto(on) => want_auto = Some(on),
+            }
         }
-        let Some(c) = conn.as_mut() else { continue };
+        let Some(c) = conn.as_mut() else {
+            // A switch that is not there cannot be told anything, and the
+            // request must not wait around to surprise the next connection.
+            want_auto = None;
+            continue;
+        };
 
         let now = Instant::now();
         let r = (|| -> Result<(), String> {
@@ -142,6 +166,10 @@ fn worker(cfg: AntennaRemoteConfig, rx: Receiver<Cmd>, status: Arc<Mutex<Antenna
                 sent = Some(hz);
                 last_send = now;
                 // The answer to a retune is worth having at once.
+                next_poll = now;
+            }
+            if let Some(on) = want_auto.take() {
+                c.send_auto(on)?;
                 next_poll = now;
             }
             if now >= next_poll {
@@ -212,7 +240,7 @@ impl Conn {
             if let Some(code) = l.strip_prefix("RPRT ") {
                 return match code.trim().parse::<i32>() {
                     Ok(0) => Ok(body),
-                    Ok(n) => Err(format!("the switch refused `{line}` (RPRT {n})")),
+                    Ok(n) => Err(format!("{REFUSED} `{line}` (RPRT {n})")),
                     Err(_) => Err(format!("unreadable reply {l:?}")),
                 };
             }
@@ -223,6 +251,18 @@ impl Conn {
 
     fn send_freq(&mut self, hz: u64) -> Result<(), String> {
         self.command(&format!("F {hz}")).map(|_| ())
+    }
+
+    /// A switch whose firmware predates `M` refuses it; that is no reason to
+    /// drop a connection that is otherwise doing its job.
+    fn send_auto(&mut self, on: bool) -> Result<(), String> {
+        match self.command(&format!("M {}", u8::from(on))) {
+            Err(e) if e.starts_with(REFUSED) => {
+                warn!("Antenna Remote: {e}");
+                Ok(())
+            }
+            r => r.map(|_| ()),
+        }
     }
 
     fn status(&mut self) -> Result<AntennaRemoteStatus, String> {
@@ -242,12 +282,24 @@ mod tests {
     /// A switch that speaks the protocol, on a loopback port. Reports every
     /// `F` it is sent.
     fn fake_switch(greeting: &'static str) -> (u16, mpsc::Receiver<u64>) {
+        let (port, freq, _auto) = fake_switch_with(greeting, true);
+        (port, freq)
+    }
+
+    /// The same, also reporting every `M`. With `knows_m` false it answers `M`
+    /// the way a firmware that predates it does: `RPRT -1`.
+    fn fake_switch_with(
+        greeting: &'static str,
+        knows_m: bool,
+    ) -> (u16, mpsc::Receiver<u64>, mpsc::Receiver<bool>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = mpsc::channel();
+        let (auto_tx, auto_rx) = mpsc::channel();
         std::thread::spawn(move || {
             let Ok((stream, _)) = listener.accept() else { return };
             let mut out = stream.try_clone().unwrap();
+            let mut auto = true;
             for line in BufReader::new(stream).lines() {
                 let Ok(line) = line else { return };
                 let reply = match line.split_whitespace().next() {
@@ -257,7 +309,14 @@ mod tests {
                         let _ = tx.send(hz);
                         "RPRT 0\n".to_string()
                     }
-                    Some("s") => "ant=3 auto=1 band=20 name=Dipole 20 m\nRPRT 0\n".to_string(),
+                    Some("M") if knows_m => {
+                        auto = line[1..].trim() == "1";
+                        let _ = auto_tx.send(auto);
+                        "RPRT 0\n".to_string()
+                    }
+                    Some("s") => {
+                        format!("ant=3 auto={} band=20 name=Dipole 20 m\nRPRT 0\n", u8::from(auto))
+                    }
                     _ => "RPRT -1\n".to_string(),
                 };
                 if out.write_all(reply.as_bytes()).is_err() {
@@ -265,7 +324,7 @@ mod tests {
                 }
             }
         });
-        (port, rx)
+        (port, rx, auto_rx)
     }
 
     fn cfg(port: u16) -> AntennaRemoteConfig {
@@ -294,6 +353,32 @@ mod tests {
         // An unchanged frequency is not sent again.
         client.set_freq(14_074_000);
         assert!(got.recv_timeout(Duration::from_millis(400)).is_err());
+    }
+
+    #[test]
+    fn the_automatic_switch_goes_out_and_the_answer_comes_back() {
+        let (port, _freq, autos) = fake_switch_with("AntennaRemote 1", true);
+        let client = AntennaRemoteClient::start(cfg(port));
+        assert!(wait_for(&client, |s| s.connected && s.auto), "{:?}", client.status());
+        client.set_auto(false);
+        assert!(!autos.recv_timeout(Duration::from_secs(3)).unwrap());
+        assert!(wait_for(&client, |s| s.connected && !s.auto), "{:?}", client.status());
+        client.set_auto(true);
+        assert!(autos.recv_timeout(Duration::from_secs(3)).unwrap());
+        assert!(wait_for(&client, |s| s.auto), "{:?}", client.status());
+    }
+
+    #[test]
+    fn a_firmware_without_the_automatic_switch_keeps_its_connection() {
+        let (port, _freq, _autos) = fake_switch_with("AntennaRemote 1", false);
+        let client = AntennaRemoteClient::start(cfg(port));
+        assert!(wait_for(&client, |s| s.connected), "{:?}", client.status());
+        client.set_auto(false);
+        // Longer than a status poll: had the refusal dropped the connection, the
+        // fake (which serves one connection) would be gone and the status with it.
+        std::thread::sleep(Duration::from_millis(1500));
+        let s = client.status();
+        assert!(s.connected && s.error.is_none() && s.antenna == 3, "{s:?}");
     }
 
     #[test]
