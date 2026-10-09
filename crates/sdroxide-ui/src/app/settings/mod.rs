@@ -51,7 +51,8 @@ use self::radio::{
 #[cfg(not(target_arch = "wasm32"))]
 use self::remote::settings_remote_tab;
 use self::servers::{
-    settings_rigctld_tab, settings_rotator_tab, settings_tci_server_tab, settings_wsjtx_tab,
+    settings_antenna_remote_tab, settings_rigctld_tab, settings_rotator_tab,
+    settings_tci_server_tab, settings_wsjtx_tab,
 };
 use self::tle::settings_tle_tab;
 use self::ui_tab::settings_ui_tab;
@@ -275,6 +276,10 @@ pub(in crate::app) struct SettingsIo<'a> {
     /// "NET rigctl" client speaks.
     rigctld_edit: &'a mut sdroxide_types::RigctldConfig,
     rigctld_apply: &'a mut bool,
+    /// This radio's network antenna switch: whether its dial steers it, and
+    /// where it is. The checkbox is on the Radio tab, the address on Servers.
+    antenna_remote_edit: &'a mut sdroxide_types::AntennaRemoteConfig,
+    antenna_remote_apply: &'a mut bool,
     /// The WSJT-X UDP broadcast — decodes, status and logged QSOs for
     /// GridTracker, JTAlert, N1MM+ and Log4OM.
     wsjtx_edit: &'a mut sdroxide_types::WsjtxConfig,
@@ -1088,6 +1093,8 @@ impl SdroxideApp {
         let mut tci_srv_apply = false;
         let mut rigctld_edit = self.rigctld_edit.clone();
         let mut rigctld_apply = false;
+        let mut antenna_remote_edit = self.antenna_remote_edit.clone();
+        let mut antenna_remote_apply = false;
         let mut wsjtx_edit = self.wsjtx_edit.clone();
         let mut wsjtx_apply = false;
         let mut rot_edit = self.rot_cfg_edit.clone();
@@ -1257,6 +1264,8 @@ impl SdroxideApp {
                             tci_srv_apply: &mut tci_srv_apply,
                             rigctld_edit: &mut rigctld_edit,
                             rigctld_apply: &mut rigctld_apply,
+                            antenna_remote_edit: &mut antenna_remote_edit,
+                            antenna_remote_apply: &mut antenna_remote_apply,
                             wsjtx_edit: &mut wsjtx_edit,
                             wsjtx_apply: &mut wsjtx_apply,
                             rot_edit: &mut rot_edit,
@@ -1349,6 +1358,11 @@ impl SdroxideApp {
         if rigctld_apply {
             // The engine persists rigctld.json when it binds (or fails to).
             cmds.push(Command::SetRigctldConfig(self.rigctld_edit.clone()));
+        }
+        self.antenna_remote_edit = antenna_remote_edit;
+        if antenna_remote_apply {
+            // The engine persists antennaremote.json and (re)connects to the switch.
+            cmds.push(Command::SetAntennaRemoteConfig(self.antenna_remote_edit.clone()));
         }
         self.wsjtx_edit = wsjtx_edit;
         if wsjtx_apply {
@@ -1937,6 +1951,26 @@ impl SdroxideApp {
                 // hidden until there is more than one — where the second radio
                 // is added in the first place.
                 self.settings_radio_roster(ui, io.radio_tabs, io.radio_name_edit);
+                // Here, and not only on Servers, because it is a decision about this
+                // radio: should its dial steer the antenna switch. Applied at once, so
+                // there is nothing to forget to press. Shown to a remote client too —
+                // the switch is on the station's network, not the client's.
+                if self.antenna_remote_seeded {
+                    if crate::chrome::checkbox(
+                        ui,
+                        &mut io.antenna_remote_edit.enabled,
+                        "Use Antenna Remote",
+                    )
+                    .on_hover_text(
+                        "Let this radio's frequency choose the antenna on the network antenna \
+                         switch. Its address is set on the Servers tab.",
+                    )
+                    .changed()
+                    {
+                        *io.antenna_remote_apply = true;
+                    }
+                    ui.add_space(6.0);
+                }
                 let Some(cfg) = io.radio_edit.as_mut() else {
                     // A remote client cannot choose the server's interface or
                     // edit its config — that file lives on the other machine.
@@ -3268,8 +3302,23 @@ impl SdroxideApp {
 
                 // Only where the engine is in this process: the result is not
                 // sent to remote clients, so a button there would spin for ever.
-                if !self.ctrl.engine_is_remote() {
+                // Wavelog is the exception: its answer also goes out as a status
+                // line, which remote clients do receive and the tab shows below.
+                if !self.ctrl.engine_is_remote() || target == UploadTarget::Wavelog {
                     self.login_test_row(ui, cmds, io.net_edit, target.login_target());
+                }
+                if target == UploadTarget::Wavelog {
+                    let (text, colour) = match &self.wavelog_status {
+                        Some(s) if s.contains("failed") || s.contains("FAIL") || s.contains("HTTP") => {
+                            (s.as_str(), Color32::from_rgb(255, 120, 120))
+                        }
+                        Some(s) => (s.as_str(), crate::theme::GREEN()),
+                        None => (
+                            "No message yet. Press Test Wavelog, or change the dial.",
+                            crate::theme::gray(140),
+                        ),
+                    };
+                    ui.label(RichText::new(text).size(10.5).color(colour));
                 }
 
                 net_heading(ui, "Confirmations (download)");
@@ -3362,6 +3411,16 @@ impl SdroxideApp {
                     self.rot_cfg_seeded,
                     &self.rotator_status,
                     io.rot_apply,
+                );
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
+                settings_antenna_remote_tab(
+                    ui,
+                    io.antenna_remote_edit,
+                    self.antenna_remote_seeded,
+                    &self.antenna_remote_status,
+                    io.antenna_remote_apply,
                 );
             }
             SettingsTab::TrSwitch => {

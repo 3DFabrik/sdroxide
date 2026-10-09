@@ -88,4 +88,9 @@ pub struct StationConfig {
     ///
     /// Appended last, for the usual reason.
     pub digi_presets: Vec<crate::DigiPreset>,
+    /// This radio's Antenna Remote settings: whether its dial steers the network
+    /// antenna switch, and the switch's address.
+    ///
+    /// Appended last, for the usual reason.
+    pub antenna_remote: crate::AntennaRemoteConfig,
 }

@@ -55,6 +55,7 @@ pub mod region;
 mod relay;
 mod repeater;
 mod rifp;
+mod antremote;
 mod rigctld;
 mod rotator;
 mod satcfg;
@@ -251,6 +252,7 @@ pub use rifp::{
     RIFP_CALLING_HZ, RIFP_MAP_MAX_CHUNKS, RifpEncoding, RifpMeta, RifpProfile, RifpSession,
     RifpSize, RifpStatus,
 };
+pub use antremote::{AntennaRemoteConfig, AntennaRemoteStatus};
 pub use rigctld::RigctldConfig;
 pub use rotator::RotatorConfig;
 pub use satcfg::{

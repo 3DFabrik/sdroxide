@@ -883,6 +883,13 @@ pub struct SdroxideApp {
     /// Live status from `RadioEvent::RigctldStatus`. Same shape as the TCI
     /// server's, so the two share one status type.
     rigctld_status: Option<TciServerStatus>,
+    // ── Antenna Remote (network antenna switch) ──
+    /// UI-owned editable copy of this radio's Antenna Remote settings, seeded from
+    /// the engine like the server configs above.
+    antenna_remote_edit: sdroxide_types::AntennaRemoteConfig,
+    antenna_remote_seeded: bool,
+    /// What the switch last reported, from `RadioEvent::AntennaRemoteStatus`.
+    antenna_remote_status: Option<sdroxide_types::AntennaRemoteStatus>,
     /// Editable "extra cluster commands" (one per line), split into
     /// `net_cfg_edit.cluster.commands` on apply.
     net_cluster_cmds: String,
@@ -898,6 +905,9 @@ pub struct SdroxideApp {
     login_tests:
         std::collections::HashMap<sdroxide_types::LoginTarget, sdroxide_types::LoginTestResult>,
     login_tests_pending: std::collections::HashSet<sdroxide_types::LoginTarget>,
+    /// Latest Wavelog message (push, test or upload), for the Wavelog tab. Arrives as
+    /// `NetStatus`, which reaches remote clients; `LoginTest` does not.
+    wavelog_status: Option<String>,
     /// Inbox for an ADIF file chosen via the native "Import" dialog (a picker
     /// thread writes; the UI drains it each frame).
     adif_import_inbox: crate::download::LoadInbox,
@@ -1584,6 +1594,9 @@ impl SdroxideApp {
             wsjtx_edit: sdroxide_types::WsjtxConfig::default(),
             wsjtx_seeded: false,
             rigctld_status: None,
+            antenna_remote_edit: Default::default(),
+            antenna_remote_seeded: false,
+            antenna_remote_status: None,
             tci_srv_edit: sdroxide_types::TciServerConfig::default(),
             tci_srv_seeded: false,
             tci_srv_status: None,
@@ -1592,6 +1605,7 @@ impl SdroxideApp {
             net_log: Vec::new(),
             login_tests: std::collections::HashMap::new(),
             login_tests_pending: std::collections::HashSet::new(),
+            wavelog_status: None,
             adif_import_inbox: Arc::new(Mutex::new(None)),
             settings_import_inbox: Arc::new(Mutex::new(None)),
             settings_transfer_note: None,

@@ -404,6 +404,108 @@ pub(in crate::app) fn settings_rotator_tab(
     }
 }
 
+/// The Antenna Remote switch — another place where sdroxide dials out. Tells
+/// the switch where the radio's dial is, and shows which antenna it chose.
+pub(in crate::app) fn settings_antenna_remote_tab(
+    ui: &mut egui::Ui,
+    cfg: &mut sdroxide_types::AntennaRemoteConfig,
+    seeded: bool,
+    status: &Option<sdroxide_types::AntennaRemoteStatus>,
+    apply: &mut bool,
+) {
+    ui.label(
+        RichText::new("Antenna Remote (antenna switch)")
+            .size(14.0)
+            .strong()
+            .color(crate::theme::CYAN()),
+    );
+    ui.add_space(4.0);
+    if !seeded {
+        ui.label(RichText::new("Waiting for the station's Antenna Remote configuration…").weak());
+        return;
+    }
+    ui.label(
+        RichText::new(
+            "Sends this radio's frequency to the network antenna switch, which picks the \
+             antenna for the band by itself. The switch keeps its own band table and its own \
+             automatic or manual mode; this only tells it where the dial is and shows what it \
+             chose. It serves one client at a time, so tick it on one radio only.",
+        )
+        .weak(),
+    );
+    ui.add_space(6.0);
+    crate::chrome::checkbox(ui, &mut cfg.enabled, "Use Antenna Remote");
+    ui.add_space(6.0);
+    ui.add_enabled_ui(cfg.enabled, |ui| {
+        egui::Grid::new("antenna-remote-grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+            ui.label("Address");
+            crate::chrome::field(
+                ui,
+                egui::TextEdit::singleline(&mut cfg.host)
+                    .desired_width(160.0)
+                    .hint_text("192.168.1.50"),
+            )
+            .on_hover_text("The switch's IP address or name on your local network");
+            ui.end_row();
+
+            ui.label("Port");
+            ui.add(egui::DragValue::new(&mut cfg.port).range(1..=65535)).on_hover_text(
+                "4540 unless the switch's firmware says otherwise",
+            );
+            ui.end_row();
+        });
+    });
+
+    ui.add_space(8.0);
+    match status {
+        Some(s) if s.connected && s.antenna > 0 => {
+            let name = if s.name.is_empty() { String::new() } else { format!(" ({})", s.name) };
+            let mode = if s.auto { "automatic" } else { "manual" };
+            ui.label(
+                RichText::new(format!("● Connected — antenna {}{name}, {mode}", s.antenna))
+                    .color(Color32::from_rgb(90, 200, 110)),
+            );
+        }
+        Some(s) if s.connected => {
+            ui.label(
+                RichText::new("● Connected — waiting for the switch to report")
+                    .color(Color32::from_rgb(90, 200, 110)),
+            );
+        }
+        Some(s) => match &s.error {
+            Some(e) => {
+                ui.label(
+                    RichText::new(format!("Not connected: {e}")).color(Color32::from_rgb(230, 90, 80)),
+                );
+            }
+            None if cfg.enabled => {
+                ui.label(RichText::new("Connecting…").weak());
+            }
+            None => {
+                ui.label(RichText::new("Not in use.").weak());
+            }
+        },
+        None if cfg.enabled => {
+            ui.label(RichText::new("Status unknown — press APPLY.").weak());
+        }
+        None => {}
+    }
+
+    ui.add_space(8.0);
+    if crate::chrome::chip_accent(
+        ui,
+        false,
+        RichText::new(" APPLY ").strong(),
+        crate::theme::GREEN(),
+        crate::theme::INK_ON_CYAN(),
+    )
+    .on_hover_text("Persist and (re)connect to the switch")
+    .clicked()
+    {
+        *apply = true;
+    }
+}
+
 pub(in crate::app) fn settings_tci_server_tab(
     ui: &mut egui::Ui,
     cfg: &mut sdroxide_types::TciServerConfig,

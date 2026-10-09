@@ -490,6 +490,9 @@ impl RemoteController {
             ServerMsg::WxAudio { name, wav } => {
                 self.pending.push_back(RadioEvent::WxAudio { name, wav })
             }
+            ServerMsg::AntennaRemoteStatus(s) => {
+                self.pending.push_back(RadioEvent::AntennaRemoteStatus(s))
+            }
             ServerMsg::SatTrack(t) => self.pending.push_back(RadioEvent::SatTrack(t)),
             ServerMsg::RotatorStatus { connected, az_deg, el_deg, error } => self
                 .pending

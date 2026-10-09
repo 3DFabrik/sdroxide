@@ -982,6 +982,19 @@ impl Store {
         self.save("rigctld.json", cfg)
     }
 
+    /// This radio's Antenna Remote settings. Per radio, like the servers: each
+    /// radio decides whether its dial steers the network antenna switch.
+    pub fn load_antenna_remote_config(&self) -> sdroxide_types::AntennaRemoteConfig {
+        self.load("antennaremote.json")
+    }
+
+    pub fn save_antenna_remote_config(
+        &self,
+        cfg: &sdroxide_types::AntennaRemoteConfig,
+    ) -> Result<(), ConfigError> {
+        self.save("antennaremote.json", cfg)
+    }
+
     pub fn load_wsjtx_config(&self) -> sdroxide_types::WsjtxConfig {
         self.load("wsjtx.json")
     }

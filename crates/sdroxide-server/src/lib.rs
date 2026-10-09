@@ -1461,6 +1461,7 @@ fn handle_event(shared: &Shared, ev: RadioEvent) {
                 Some(ServerMsg::WxSched(s))
             }
             RadioEvent::WxAudio { name, wav } => Some(ServerMsg::WxAudio { name, wav }),
+            RadioEvent::AntennaRemoteStatus(s) => Some(ServerMsg::AntennaRemoteStatus(s)),
             RadioEvent::RadioConfig(c) => {
                 latest.radio = Some(c.clone());
                 Some(ServerMsg::RadioConfig(c))

@@ -12380,6 +12380,44 @@ particular contest's rules say it means, and a number invented here would be a
 claim about a contest that was not being worked; the logger receiving the
 contact is the thing that knows the rules.
 
+#### Antenna Remote (antenna switch)
+
+The same page has a connection *out* to a network antenna switch — the ESP32-based
+**Antenna Remote**, which selects one of up to eight antennas. sdroxide tells it where
+the radio's dial is; the switch picks the antenna from its own band table and has its
+own automatic and manual mode, so nothing about that is configured here. The page shows
+what it chose.
+
+- **Use Antenna Remote** — also on the **Radio** tab, where it is applied at once. It is
+  a per-radio setting: the radio whose dial should steer the switch gets the tick. The
+  switch serves one client at a time, so tick it on one radio only; a second one is
+  turned away.
+- **Address** and **Port** — the switch's address on your local network and its port
+  (4540 by default).
+- The line below shows the state: *Connected — antenna 3 (Dipole 20 m), automatic*, or why
+  it is not connected. While the radio transmits, the frequency sent is the transmit one
+  (split and XIT move it).
+
+Keep the switch on the local network; it has no authentication. From outside you reach
+it through sdroxide's own login, not by opening its port.
+
+**For the switch's firmware.** Plain text over TCP in the manner of `rotctld`, one
+command per line, every reply closed by an `RPRT` line (`RPRT 0` is success, `RPRT -1` a
+refusal). The switch is the server:
+
+| sdroxide sends | The switch answers |
+|---|---|
+| `v` | `AntennaRemote 1`, then `RPRT 0` |
+| `F <hz>` | `RPRT 0` — the radio's frequency in whole hertz; the switch chooses the band and antenna |
+| `s` | `ant=<1-8> auto=<0\|1> band=<metres> name=<text>`, then `RPRT 0` |
+
+`name=` comes last on its line because an antenna's name may contain spaces, and `band`
+is `0` outside every band. sdroxide sends `v` after connecting, `F` whenever the
+frequency has settled on a new value (at most about seven times a second), and `s` once a
+second — which doubles as a keep-alive, so a switch that stops hearing it can fall back
+to a safe antenna. Reserved and not sent yet: `A <n>` to select an antenna (manual) and
+`M <0|1>` to set automatic off or on. You can try it by hand with `nc <address> 4540`.
+
 ### 6.10 TLE: satellites and their frequencies
 
 The **TLE** tab decides which satellites the tracker in the 3D view

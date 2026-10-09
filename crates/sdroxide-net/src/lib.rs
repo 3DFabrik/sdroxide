@@ -7,6 +7,7 @@
 //! threadless model: the [`SpotManager`] owns every feed/worker thread and the
 //! engine only drains it (non-blocking) on its existing poll loop.
 
+mod antennaremote;
 mod cluster;
 mod event;
 mod freedvreporter;
@@ -24,6 +25,7 @@ mod upload;
 mod wavelog;
 mod wsprnet;
 
+pub use antennaremote::AntennaRemoteClient;
 pub use event::NetEvent;
 pub use manager::SpotManager;
 pub use pskupload::MAX_REPORT_HZ as MAX_PSK_REPORT_HZ;

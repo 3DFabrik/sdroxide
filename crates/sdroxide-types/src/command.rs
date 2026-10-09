@@ -1184,4 +1184,10 @@ pub enum Command {
     /// Delete one recorded pass's audio. The picture is
     /// [`Command::ImageDelete`]'s business, the same as any other.
     WxAudioDelete(String),
+    /// Apply (and persist) this radio's Antenna Remote settings: whether its dial
+    /// steers the network antenna switch, and where the switch is. The state
+    /// comes back as [`crate::RadioEvent::AntennaRemoteStatus`].
+    ///
+    /// Appended last, for the usual reason.
+    SetAntennaRemoteConfig(crate::AntennaRemoteConfig),
 }

@@ -210,6 +210,9 @@ impl SdroxideApp {
     pub(in crate::app) fn on_upload_result(&mut self, r: UploadResult) {
         let status = if r.ok { "OK" } else { "FAIL" };
         self.push_net_log(format!("{} → {}: {}", r.target.label(), status, r.message));
+        if r.target == UploadTarget::Wavelog {
+            self.wavelog_status = Some(format!("Wavelog upload {status}: {}", r.message));
+        }
         if r.ok {
             if let Some(rec) = self.qso_log.iter_mut().find(|q| q.id == r.qso_id) {
                 match r.target {

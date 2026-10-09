@@ -70,6 +70,8 @@ pub struct SpotManager {
 
     /// When to tell Wavelog about a change of dial frequency or mode.
     wavelog_qrg: crate::wavelog::QrgPusher,
+    /// Whether the operator has been told that this radio is not the one that reports.
+    wavelog_note: bool,
 
     /// Whether this manager may hold the station's long-lived feeds.
     ///
@@ -112,6 +114,7 @@ impl SpotManager {
             rep_tx: false,
             rep_visible: false,
             wavelog_qrg: crate::wavelog::QrgPusher::default(),
+            wavelog_note: false,
             station: true,
         }
     }
@@ -155,6 +158,7 @@ impl SpotManager {
             || old.wavelog_push_qrg != self.cfg.wavelog_push_qrg
         {
             self.wavelog_qrg.reset();
+            self.wavelog_note = false;
         }
         // The reporter sends its settings at connect, so a change to them has
         // to restart the session. The status message is the one field that can
@@ -317,11 +321,21 @@ impl SpotManager {
     /// under it would overwrite each other.
     pub fn set_wavelog_radio(&mut self, tx_hz: f64, rx_hz: Option<f64>, mode: sdroxide_types::Mode) {
         let cfg = &self.cfg;
-        if !self.station
-            || !cfg.wavelog_push_qrg
+        if !cfg.wavelog_push_qrg
             || cfg.wavelog_url.trim().is_empty()
             || cfg.wavelog_api_key.trim().is_empty()
         {
+            return;
+        }
+        if !self.station {
+            // Said once: nothing else would tell the operator why this radio never reports.
+            if !self.wavelog_note {
+                self.wavelog_note = true;
+                let _ = self.event_tx.send(NetEvent::Status(Some(
+                    "Wavelog: frequency and mode are sent by the station's first radio, not this one"
+                        .into(),
+                )));
+            }
             return;
         }
         let radio = crate::wavelog::Radio {
@@ -337,9 +351,15 @@ impl SpotManager {
         std::thread::Builder::new()
             .name("sdroxide-wavelog".into())
             .spawn(move || {
-                if let Err(e) = crate::wavelog::push_radio(&cfg, &radio) {
-                    let _ = tx.send(NetEvent::Status(Some(e)));
-                }
+                let line = match crate::wavelog::push_radio(&cfg, &radio) {
+                    Ok(()) => format!(
+                        "Wavelog radio: {:.4} MHz {} sent",
+                        radio.freq_hz as f64 / 1e6,
+                        radio.mode
+                    ),
+                    Err(e) => e,
+                };
+                let _ = tx.send(NetEvent::Status(Some(line)));
             })
             .ok();
     }
@@ -405,6 +425,16 @@ impl SpotManager {
                     Ok(m) => (true, m),
                     Err(e) => (false, e),
                 };
+                // LoginTest is not forwarded to remote clients, so a browser would
+                // otherwise never learn the answer. Status is, and carries no account name.
+                if target == sdroxide_types::LoginTarget::Wavelog {
+                    let line = if ok {
+                        "Wavelog test: OK".to_string()
+                    } else {
+                        format!("Wavelog test failed: {message}")
+                    };
+                    let _ = tx.send(NetEvent::Status(Some(line)));
+                }
                 let _ = tx.send(NetEvent::LoginTest(sdroxide_types::LoginTestResult {
                     target,
                     ok,

@@ -2815,6 +2815,16 @@ struct Engine {
     /// Last bind failure, kept so the settings dialog can show why it is not
     /// running — usually a real `rigctld` already holding the port.
     rigctld_err: Option<String>,
+    /// This radio's Antenna Remote settings (`antennaremote.json`), announced in
+    /// the station bundle the way the servers' are.
+    antenna_remote_cfg: sdroxide_types::AntennaRemoteConfig,
+    /// The client for the network antenna switch, while enabled. The dial feeds
+    /// it from `poll_antenna_remote`, which also reads its state back.
+    antenna_remote: Option<sdroxide_net::AntennaRemoteClient>,
+    /// What was last told to the clients, and when to repeat it regardless, so a
+    /// client that attaches late is not left without a status.
+    antenna_remote_last: Option<sdroxide_types::AntennaRemoteStatus>,
+    next_antenna_remote_emit: Instant,
     /// Digest of the last state published to rigctld clients. Comparing scalars
     /// keeps the per-tick check allocation-free; the full snapshot is only
     /// built when something actually moved.
@@ -4202,6 +4212,10 @@ fn engine_thread(
         rigctld: None,
         rigctld_cfg: RigctldConfig::default(),
         rigctld_err: None,
+        antenna_remote_cfg: sdroxide_types::AntennaRemoteConfig::default(),
+        antenna_remote: None,
+        antenna_remote_last: None,
+        next_antenna_remote_emit: Instant::now(),
         rigctld_seen: None,
         last_s_dbm: -127.0,
         rds_dial_hz: 0.0,
@@ -4369,6 +4383,8 @@ fn engine_thread(
     // commonly already taken by a real rigctld, and it has no authentication.
     engine.rigctld_cfg = engine.store.load_rigctld_config();
     engine.sync_rigctld();
+    engine.antenna_remote_cfg = engine.store.load_antenna_remote_config();
+    engine.sync_antenna_remote();
     // WSJT-X UDP broadcast is likewise off unless the operator turned it on.
     engine.wsjtx_cfg = engine.store.load_wsjtx_config();
     engine.sync_wsjtx();
@@ -4577,6 +4593,7 @@ fn engine_thread(
         engine.poll_scanner();
         engine.poll_tci_server();
         engine.poll_rigctld();
+        engine.poll_antenna_remote();
         engine.poll_band_change();
         engine.wsjtx_heartbeat();
         engine.poll_spots();
@@ -9412,6 +9429,18 @@ impl Engine {
                 return;
             }
 
+            // The network antenna switch (no RadioState change → return before the
+            // State emit below).
+            SetAntennaRemoteConfig(cfg) => {
+                if let Err(e) = self.store.save_antenna_remote_config(&cfg) {
+                    warn!("saving antenna remote config: {e}");
+                }
+                self.antenna_remote_cfg = cfg;
+                self.sync_antenna_remote();
+                self.emit_station_config();
+                return;
+            }
+
             // WSJT-X UDP broadcast (no RadioState change → return before the
             // State emit below).
             SetWsjtxConfig(cfg) => {
@@ -11528,6 +11557,44 @@ impl Engine {
         }
     }
 
+    /// (Re)build the Antenna Remote client to match the config. Rebuilding on
+    /// every change is fine: the client is a thread and a socket, and a config
+    /// edit is a human-speed event.
+    fn sync_antenna_remote(&mut self) {
+        self.antenna_remote = None;
+        self.antenna_remote_last = None;
+        if self.antenna_remote_cfg.enabled {
+            self.antenna_remote =
+                Some(sdroxide_net::AntennaRemoteClient::start(self.antenna_remote_cfg.clone()));
+        } else {
+            // Say the client has gone, so a status line does not keep showing a
+            // switch that is no longer being used.
+            let _ = self.event_tx.send(RadioEvent::AntennaRemoteStatus(
+                sdroxide_types::AntennaRemoteStatus::default(),
+            ));
+        }
+    }
+
+    /// Feed the dial to the antenna switch and relay its state to the clients.
+    ///
+    /// Called every tick: the client only forwards a frequency that has changed,
+    /// and a change of state goes out at once. It is repeated every few seconds
+    /// as well, because nothing replays it to a client that attaches later.
+    fn poll_antenna_remote(&mut self) {
+        let Some(client) = self.antenna_remote.as_ref() else { return };
+        // Where the signal will actually be: the transmit frequency while keyed
+        // (split and XIT move it), the receive frequency otherwise.
+        let hz = if self.tx_active { self.state.tx_freq_hz() } else { self.state.rx_freq_hz() };
+        client.set_freq(hz.round().max(0.0) as u64);
+        let st = client.status();
+        let now = Instant::now();
+        if now >= self.next_antenna_remote_emit || self.antenna_remote_last.as_ref() != Some(&st) {
+            self.next_antenna_remote_emit = now + Duration::from_secs(5);
+            self.antenna_remote_last = Some(st.clone());
+            let _ = self.event_tx.send(RadioEvent::AntennaRemoteStatus(st));
+        }
+    }
+
     /// Service the rigctld server: carry out what clients asked for and
     /// republish the state they read.
     fn poll_rigctld(&mut self) {
@@ -11951,6 +12018,7 @@ impl Engine {
                 region: sdroxide_types::region(),
                 band_plan: sdroxide_types::band_plan().clone(),
                 digi_presets: sdroxide_types::digi_presets().to_vec(),
+                antenna_remote: self.antenna_remote_cfg.clone(),
             },
         )));
     }

@@ -429,6 +429,13 @@ pub enum RadioEvent {
         name: String,
         wav: Vec<u8>,
     },
+    /// The Antenna Remote switch: whether the connection is up, which antenna
+    /// it has selected and whether it is following the dial by itself. Emitted on
+    /// every change and re-sent every few seconds, so a client that attaches late
+    /// is not left guessing.
+    ///
+    /// Appended last, for the usual reason.
+    AntennaRemoteStatus(crate::AntennaRemoteStatus),
 }
 
 /// Snapshot of the frontend's switchable sound devices (native clients).

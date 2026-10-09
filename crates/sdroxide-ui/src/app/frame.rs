@@ -1584,6 +1584,12 @@ impl SdroxideApp {
                     self.adopted_spots_gen = None;
                 }
                 RadioEvent::NetStatus(s) => {
+                    if let Some(line) = s.as_ref().filter(|l| l.starts_with("Wavelog")) {
+                        self.wavelog_status = Some(line.clone());
+                        if line.starts_with("Wavelog test") {
+                            self.login_tests_pending.remove(&sdroxide_types::LoginTarget::Wavelog);
+                        }
+                    }
                     self.net_status = s;
                     self.spots_gen += 1;
                     self.adopted_spots_gen = None;
@@ -1594,6 +1600,7 @@ impl SdroxideApp {
                 RadioEvent::RigctldStatus { running, addr, clients, error } => {
                     self.rigctld_status = Some(TciServerStatus { running, addr, clients, error });
                 }
+                RadioEvent::AntennaRemoteStatus(s) => self.antenna_remote_status = Some(s),
                 RadioEvent::VoiceStatus(v) => self.voice = v,
                 RadioEvent::ImagePresets(p) => self.sstv.on_presets(p, &ctx),
                 RadioEvent::ImageSlotSource { slot, version, png } => {
@@ -1625,6 +1632,10 @@ impl SdroxideApp {
                     if !self.rigctld_seeded {
                         self.rigctld_edit = c.rigctld.clone();
                         self.rigctld_seeded = true;
+                    }
+                    if !self.antenna_remote_seeded {
+                        self.antenna_remote_edit = c.antenna_remote.clone();
+                        self.antenna_remote_seeded = true;
                     }
                     if !self.tci_srv_seeded {
                         self.tci_srv_edit = c.tci_server.clone();

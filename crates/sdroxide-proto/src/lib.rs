@@ -1546,7 +1546,13 @@ use sdroxide_types::{
 /// discriminant moved, but both structs ride whole inside
 /// `Command::SetNetworkConfig` and `RadioEvent::Ft8QsoLogged`, so a v176 peer
 /// reads the tail of each out of step.
-pub const PROTO_VERSION: u16 = 177;
+///
+/// v178: the Antenna Remote switch. `Command::SetAntennaRemoteConfig` and
+/// `ServerMsg::AntennaRemoteStatus`, appended last so no surviving discriminant
+/// moved, and `StationConfig` gains `antenna_remote` at its tail. `StationConfig`
+/// rides `ServerMsg::StationConfig` whole, so a v177 peer reads the end of it out
+/// of step rather than merely missing a field.
+pub const PROTO_VERSION: u16 = 178;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]
@@ -2121,6 +2127,10 @@ pub enum ServerMsg {
         name: String,
         wav: Vec<u8>,
     },
+    /// The Antenna Remote switch's connection and selected antenna. Re-sent every
+    /// few seconds by the engine, so nothing is replayed on connect.
+    /// Appended last, for the usual reason.
+    AntennaRemoteStatus(sdroxide_types::AntennaRemoteStatus),
 }
 
 /// One radio in a station's roster, as a client sees it.
