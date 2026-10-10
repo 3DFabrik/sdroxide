@@ -7,7 +7,7 @@
 
 use std::time::{Duration, Instant};
 
-use sdroxide_types::{Mode, NetworkConfig};
+use sdroxide_types::{Mode, NetworkConfig, WavelogStation};
 use serde_json::{Value, json};
 
 use crate::http;
@@ -144,6 +144,56 @@ pub fn test(cfg: &NetworkConfig) -> Result<String, String> {
             Err(format!("key accepted, but station ID {station} is not one of: {}", ids.join(", ")))
         }
     }
+}
+
+/// The account's station locations, so the operator need not dig the ID out of a URL.
+pub fn stations(cfg: &NetworkConfig) -> Result<Vec<WavelogStation>, String> {
+    let key = key(cfg).map_err(|e| format!("Wavelog: {e}"))?;
+    let url = api_url(&cfg.wavelog_url, &format!("station_info/{}", urlencode(key)))
+        .map_err(|e| format!("Wavelog: {e}"))?;
+    let (status, body) = http::get_status(&url)?;
+    if status != 200 {
+        return Err(match status {
+            404 => "Wavelog: this server has no station list; enter the ID by hand".into(),
+            _ => format!("Wavelog: {}", reason(status, &body)),
+        });
+    }
+    let list = parse_stations(&body)
+        .ok_or_else(|| "Wavelog: unexpected reply — is the URL the Wavelog base address?".to_string())?;
+    if list.is_empty() {
+        return Err("Wavelog: the account has no station locations".into());
+    }
+    Ok(list)
+}
+
+/// `None` when the body is not a station list; rows without a numeric ID are skipped.
+fn parse_stations(body: &str) -> Option<Vec<WavelogStation>> {
+    let rows: Vec<Value> = serde_json::from_str(body).ok()?;
+    let text = |r: &Value, k: &str| r.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    Some(
+        rows.iter()
+            .filter_map(|r| {
+                let id = match r.get("station_id")? {
+                    Value::String(s) => s.trim().parse().ok()?,
+                    Value::Number(n) => u32::try_from(n.as_u64()?).ok()?,
+                    _ => return None,
+                };
+                let active = match r.get("station_active") {
+                    Some(Value::String(s)) => s.trim() == "1",
+                    Some(Value::Number(n)) => n.as_u64() == Some(1),
+                    Some(Value::Bool(b)) => *b,
+                    _ => true,
+                };
+                Some(WavelogStation {
+                    id,
+                    name: text(r, "station_profile_name"),
+                    callsign: text(r, "station_callsign"),
+                    grid: text(r, "station_gridsquare"),
+                    active,
+                })
+            })
+            .collect(),
+    )
 }
 
 /// What the radio is doing, as Wavelog wants to hear it.
@@ -293,6 +343,22 @@ mod tests {
             "Station mismatch"
         );
         assert_eq!(reason(404, "<html>not found</html>"), "HTTP 404");
+    }
+
+    #[test]
+    fn station_list_is_read_whatever_the_id_type() {
+        let body = r#"[
+            {"station_id":"3","station_profile_name":"Home","station_callsign":"DL1ABC",
+             "station_gridsquare":"JO31","station_active":"1"},
+            {"station_id":7,"station_profile_name":" Portable ","station_callsign":"DL1ABC/P",
+             "station_active":0},
+            {"station_profile_name":"no id"}
+        ]"#;
+        let s = parse_stations(body).unwrap();
+        assert_eq!(s.len(), 2);
+        assert_eq!((s[0].id, s[0].active, s[0].grid.as_str()), (3, true, "JO31"));
+        assert_eq!((s[1].id, s[1].active, s[1].name.as_str()), (7, false, "Portable"));
+        assert!(parse_stations(r#"{"status":"failed"}"#).is_none());
     }
 
     #[test]

@@ -1097,6 +1097,11 @@ impl eframe::App for SdroxideApp {
                 self.login_tests_pending.insert(*t);
                 self.login_tests.remove(t);
             }
+            if matches!(c, Command::FindWavelogStations) {
+                self.wavelog_find_pending = true;
+                self.wavelog_find_msg = None;
+                self.wavelog_pick.clear();
+            }
             self.ctrl.send(c);
         }
 
@@ -1708,6 +1713,7 @@ impl SdroxideApp {
                 RadioEvent::CallsignResult(info) => self.apply_callsign(info),
                 RadioEvent::Upload(r) => self.on_upload_result(r),
                 RadioEvent::Confirmations(recs) => self.apply_confirmations(recs),
+                RadioEvent::WavelogStations(r) => self.on_wavelog_stations(r),
                 // Folded here rather than queued for the map's own pass: these
                 // arrive whether or not a map is on screen, and a queue nobody
                 // drained would grow all session. The display settings are

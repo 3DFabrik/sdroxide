@@ -122,7 +122,10 @@ pub use band_segments::{
 };
 pub use bandplan::{BandPlan, BandPlanError, RegionPlan, band_plan, set_band_plan};
 pub use broadcast::{BroadcastStation, BroadcastStations};
-pub use callsign::{CallsignInfo, LoginTarget, LoginTestResult, UploadResult, UploadTarget};
+pub use callsign::{
+    CallsignInfo, LoginTarget, LoginTestResult, UploadResult, UploadTarget, WavelogStation,
+    wavelog_candidates,
+};
 pub use caps::{DeviceCaps, DeviceSetting, Direction, GainElement, GainUnit, SettingKind};
 pub use chirp::{chirp_csv_to_memories, memories_to_chirp_csv};
 pub use command::Command;

@@ -22,6 +22,8 @@ pub enum NetEvent {
     LoginTest(sdroxide_types::LoginTestResult),
     /// Parsed confirmation records downloaded from LoTW/eQSL.
     Confirmations(Vec<QsoRecord>),
+    /// The station locations of the Wavelog account, or why they could not be listed.
+    WavelogStations(Result<Vec<sdroxide_types::WavelogStation>, String>),
     /// WSPR reception reports fetched from WSPRnet — normally reports of *our*
     /// own transmissions, which is the only feedback a beacon ever gets.
     ///

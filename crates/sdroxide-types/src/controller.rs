@@ -436,6 +436,11 @@ pub enum RadioEvent {
     ///
     /// Appended last, for the usual reason.
     AntennaRemoteStatus(crate::AntennaRemoteStatus),
+    /// The station locations of the Wavelog account, answering
+    /// [`crate::Command::FindWavelogStations`], or why they could not be listed.
+    ///
+    /// Appended last, for the usual reason.
+    WavelogStations(Result<Vec<crate::WavelogStation>, String>),
 }
 
 /// Snapshot of the frontend's switchable sound devices (native clients).

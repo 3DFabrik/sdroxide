@@ -233,6 +233,47 @@ impl SdroxideApp {
         self.net_log.truncate(50);
     }
 
+    /// Fill in the Wavelog station ID from the account's locations, or offer the
+    /// candidates when the operator's callsign does not settle it.
+    ///
+    /// The answer is broadcast to every client of a shared radio, so one nobody
+    /// here asked for is dropped.
+    pub(in crate::app) fn on_wavelog_stations(
+        &mut self,
+        r: Result<Vec<sdroxide_types::WavelogStation>, String>,
+    ) {
+        if !std::mem::take(&mut self.wavelog_find_pending) {
+            return;
+        }
+        self.wavelog_pick.clear();
+        self.wavelog_find_msg = Some(match r {
+            Err(e) => (e, false),
+            Ok(list) => {
+                let found: Vec<_> =
+                    sdroxide_types::wavelog_candidates(&list, &self.digi_cfg_edit.my_call)
+                        .into_iter()
+                        .cloned()
+                        .collect();
+                match found.as_slice() {
+                    [one] => {
+                        self.net_cfg_edit.wavelog_station_id = one.id.to_string();
+                        (
+                            format!(
+                                "Station {}: {} ({}). Apply to keep it.",
+                                one.id, one.name, one.callsign
+                            ),
+                            true,
+                        )
+                    }
+                    _ => {
+                        self.wavelog_pick = found;
+                        ("Several station locations: pick one.".to_string(), true)
+                    }
+                }
+            }
+        });
+    }
+
     /// Drain a pending ADIF import: parse, lightly de-dup against the current
     /// log (same call+band within 2 minutes), append with fresh ids, persist.
     ///

@@ -173,6 +173,40 @@ pub struct LoginTestResult {
     pub message: String,
 }
 
+/// One station location in a Wavelog account, as `api/station_info` lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WavelogStation {
+    pub id: u32,
+    pub name: String,
+    pub callsign: String,
+    pub grid: String,
+    pub active: bool,
+}
+
+/// The station locations worth offering for `my_call`.
+///
+/// Inactive locations are dropped unless nothing else is left, and when several
+/// remain the ones logged under the operator's own callsign win. One entry
+/// means the choice is made; more means the operator has to pick.
+pub fn wavelog_candidates<'a>(
+    stations: &'a [WavelogStation],
+    my_call: &str,
+) -> Vec<&'a WavelogStation> {
+    let mut c: Vec<&WavelogStation> = stations.iter().filter(|s| s.active).collect();
+    if c.is_empty() {
+        c = stations.iter().collect();
+    }
+    let call = my_call.trim();
+    if c.len() > 1 && !call.is_empty() {
+        let own: Vec<&WavelogStation> =
+            c.iter().copied().filter(|s| s.callsign.trim().eq_ignore_ascii_case(call)).collect();
+        if !own.is_empty() {
+            c = own;
+        }
+    }
+    c
+}
+
 /// The outcome of an upload attempt for one QSO to one target.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UploadResult {
@@ -182,4 +216,46 @@ pub struct UploadResult {
     pub ok: bool,
     /// Server message or error detail.
     pub message: String,
+}
+
+#[cfg(test)]
+mod wavelog_tests {
+    use super::*;
+
+    fn st(id: u32, call: &str, active: bool) -> WavelogStation {
+        WavelogStation {
+            id,
+            name: format!("loc{id}"),
+            callsign: call.into(),
+            grid: String::new(),
+            active,
+        }
+    }
+
+    #[test]
+    fn single_station_is_chosen() {
+        let s = [st(3, "DL1ABC", true)];
+        assert_eq!(wavelog_candidates(&s, "").len(), 1);
+    }
+
+    #[test]
+    fn inactive_dropped_unless_all_are() {
+        let s = [st(1, "DL1ABC", false), st(2, "DL1ABC", true)];
+        assert_eq!(wavelog_candidates(&s, "")[0].id, 2);
+        let s = [st(1, "DL1ABC", false), st(2, "DL9XYZ", false)];
+        assert_eq!(wavelog_candidates(&s, "").len(), 2);
+    }
+
+    #[test]
+    fn own_callsign_narrows_case_insensitively() {
+        let s = [st(1, "DL9XYZ", true), st(2, "DL1ABC", true), st(4, "DL1ABC/P", true)];
+        let c = wavelog_candidates(&s, " dl1abc ");
+        assert_eq!(c.iter().map(|x| x.id).collect::<Vec<_>>(), vec![2]);
+    }
+
+    #[test]
+    fn unknown_callsign_leaves_the_choice_to_the_operator() {
+        let s = [st(1, "DL9XYZ", true), st(2, "DL8AAA", true)];
+        assert_eq!(wavelog_candidates(&s, "DL1ABC").len(), 2);
+    }
 }

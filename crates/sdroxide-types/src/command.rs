@@ -1206,4 +1206,11 @@ pub enum Command {
     ///
     /// Appended last, for the usual reason.
     SetAntennaRemoteAntenna(u8),
+    /// List the station locations of the Wavelog account the APPLIED network
+    /// config points at, so the settings dialog can fill in the station ID. Like
+    /// [`Command::TestLogin`] it is preceded by `SetNetworkConfig`. The answer
+    /// comes back as [`crate::RadioEvent::WavelogStations`].
+    ///
+    /// Appended last, for the usual reason.
+    FindWavelogStations,
 }

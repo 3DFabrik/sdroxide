@@ -9383,6 +9383,7 @@ impl Engine {
             // Network cockpit (no RadioState change → return before the State
             // emit below).
             TestLogin(target) => self.spots.test_login(target),
+            FindWavelogStations => self.spots.find_wavelog_stations(),
             SetNetworkConfig(cfg) => {
                 if let Err(e) = sdroxide_config::save_network_config(&cfg) {
                     warn!("saving network config: {e}");
@@ -13369,6 +13370,7 @@ impl Engine {
                 sdroxide_net::NetEvent::Upload(r) => RadioEvent::Upload(r),
                 sdroxide_net::NetEvent::LoginTest(r) => RadioEvent::LoginTest(r),
                 sdroxide_net::NetEvent::Confirmations(r) => RadioEvent::Confirmations(r),
+                sdroxide_net::NetEvent::WavelogStations(r) => RadioEvent::WavelogStations(r),
                 sdroxide_net::NetEvent::WsprSpots(s) => RadioEvent::WsprSpots(s),
                 sdroxide_net::NetEvent::PropPaths(p) => RadioEvent::PropPaths(p),
             };

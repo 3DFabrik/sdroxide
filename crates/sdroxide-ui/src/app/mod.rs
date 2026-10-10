@@ -908,6 +908,12 @@ pub struct SdroxideApp {
     /// Latest Wavelog message (push, test or upload), for the Wavelog tab. Arrives as
     /// `NetStatus`, which reaches remote clients; `LoginTest` does not.
     wavelog_status: Option<String>,
+    /// The Wavelog station-location lookup: in flight, what it said, and the
+    /// locations to choose between when it could not choose itself. Not
+    /// persisted, for the reason `login_tests` is not.
+    wavelog_find_pending: bool,
+    wavelog_find_msg: Option<(String, bool)>,
+    wavelog_pick: Vec<sdroxide_types::WavelogStation>,
     /// Inbox for an ADIF file chosen via the native "Import" dialog (a picker
     /// thread writes; the UI drains it each frame).
     adif_import_inbox: crate::download::LoadInbox,
@@ -1606,6 +1612,9 @@ impl SdroxideApp {
             login_tests: std::collections::HashMap::new(),
             login_tests_pending: std::collections::HashSet::new(),
             wavelog_status: None,
+            wavelog_find_pending: false,
+            wavelog_find_msg: None,
+            wavelog_pick: Vec::new(),
             adif_import_inbox: Arc::new(Mutex::new(None)),
             settings_import_inbox: Arc::new(Mutex::new(None)),
             settings_transfer_note: None,

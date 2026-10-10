@@ -12024,6 +12024,13 @@ stored in plaintext in `net.json`. How the features behave is
     *API Keys*) and **Station ID** (the number in the URL of the station
     location you log to, from *Station Locations*). QSOs go in through
     Wavelog's `api/qso`, with its duplicate check applied on its side.
+    **Find station ID** asks Wavelog for the account's station locations and
+    fills the number in: when only one location fits (inactive ones are left
+    out, and with several the one logged under your callsign wins) it is taken
+    at once, otherwise the candidates are listed to pick from. It needs the URL
+    and key, applies the settings above first, and reads only. The ID is a
+    property of the location, not of a radio, so every radio on the station
+    uses the same one.
 
     The same tab has **Send frequency and mode to Wavelog**: while it is on,
     sdroxide posts the dial frequency and mode to Wavelog's radio interface

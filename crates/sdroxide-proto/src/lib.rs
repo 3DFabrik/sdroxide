@@ -1561,7 +1561,11 @@ use sdroxide_types::{
 /// hand, appended last as before, and [`sdroxide_types::AntennaRemoteStatus`]
 /// gains `count` at its tail. The status rides `ServerMsg::AntennaRemoteStatus`
 /// whole, so a v179 peer reads the end of it out of step.
-pub const PROTO_VERSION: u16 = 180;
+///
+/// v181: `Command::FindWavelogStations` and `ServerMsg::WavelogStations`, both
+/// appended last so no surviving discriminant moved. A v180 client cannot ask
+/// for the account's station locations.
+pub const PROTO_VERSION: u16 = 181;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]
@@ -2140,6 +2144,9 @@ pub enum ServerMsg {
     /// few seconds by the engine, so nothing is replayed on connect.
     /// Appended last, for the usual reason.
     AntennaRemoteStatus(sdroxide_types::AntennaRemoteStatus),
+    /// The Wavelog account's station locations, answering
+    /// `Command::FindWavelogStations`. Appended last, for the usual reason.
+    WavelogStations(Result<Vec<sdroxide_types::WavelogStation>, String>),
 }
 
 /// One radio in a station's roster, as a client sees it.

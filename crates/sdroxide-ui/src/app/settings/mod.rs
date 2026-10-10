@@ -3262,6 +3262,7 @@ impl SdroxideApp {
                         net_row(ui, "Wavelog URL", &mut io.net_edit.wavelog_url, 240.0);
                         net_secret(ui, "API key", &mut io.net_edit.wavelog_api_key, 240.0);
                         net_row(ui, "Station ID", &mut io.net_edit.wavelog_station_id, 60.0);
+                        self.wavelog_station_row(ui, cmds, io.net_edit);
                         ui.label(
                             RichText::new(
                                 "Works with Wavelog and Cloudlog. The URL is the address you open \

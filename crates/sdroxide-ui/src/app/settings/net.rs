@@ -252,6 +252,54 @@ pub(in crate::app) fn broadcast_stations_settings(
 }
 
 impl crate::app::SdroxideApp {
+    /// "Find station ID" for Wavelog, and the locations to pick from when the
+    /// operator's callsign does not settle it.
+    ///
+    /// Sends the EDITED config first, for the reason [`Self::login_test_row`] does.
+    pub(in crate::app) fn wavelog_station_row(
+        &self,
+        ui: &mut egui::Ui,
+        cmds: &mut Vec<sdroxide_types::Command>,
+        edited: &mut sdroxide_types::NetworkConfig,
+    ) {
+        ui.horizontal(|ui| {
+            let pending = self.wavelog_find_pending;
+            let btn = ui.add_enabled(
+                !pending,
+                egui::Button::new(RichText::new("Find station ID").size(11.0)),
+            );
+            if btn
+                .on_hover_text(
+                    "Ask Wavelog for the account's station locations and fill in the ID. \
+                     Applies the settings above first, and logs nothing: it only reads.",
+                )
+                .clicked()
+            {
+                cmds.push(sdroxide_types::Command::SetNetworkConfig(edited.clone()));
+                cmds.push(sdroxide_types::Command::FindWavelogStations);
+            }
+            if pending {
+                ui.label(RichText::new("checking…").size(11.0).weak());
+            } else if let Some((msg, ok)) = &self.wavelog_find_msg {
+                let colour = if *ok {
+                    crate::theme::GREEN()
+                } else {
+                    Color32::from_rgb(255, 120, 120)
+                };
+                ui.label(RichText::new(msg).size(11.0).color(colour));
+            }
+        });
+        let current = edited.wavelog_station_id.trim().to_string();
+        for s in &self.wavelog_pick {
+            let id = s.id.to_string();
+            let grid = if s.grid.is_empty() { String::new() } else { format!(", {}", s.grid) };
+            let text = format!("{id}: {} ({}{grid})", s.name, s.callsign);
+            if ui.selectable_label(id == current, RichText::new(text).size(11.0)).clicked() {
+                edited.wavelog_station_id = id;
+            }
+        }
+    }
+
     /// One "Test" button and its answer, for a logging service's credentials.
     ///
     /// The point of it: today the first sign that a password is wrong is a QSO

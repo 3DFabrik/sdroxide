@@ -444,6 +444,21 @@ impl SpotManager {
             .ok();
     }
 
+    /// List the Wavelog account's station locations; the answer arrives via `poll`.
+    ///
+    /// Uses the APPLIED config, so the dialog sends its edits first, as for
+    /// [`SpotManager::test_login`].
+    pub fn find_wavelog_stations(&self) {
+        let cfg = self.cfg.clone();
+        let tx = self.event_tx.clone();
+        std::thread::Builder::new()
+            .name("sdroxide-wavelog-stations".into())
+            .spawn(move || {
+                let _ = tx.send(NetEvent::WavelogStations(crate::wavelog::stations(&cfg)));
+            })
+            .ok();
+    }
+
     /// Download QSL confirmations; results arrive via `poll`.
     pub fn sync_confirmations(&self) {
         let cfg = self.cfg.clone();
