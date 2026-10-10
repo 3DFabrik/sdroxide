@@ -3903,7 +3903,9 @@ fn engine_thread(
     } else {
         sdroxide_types::ModeProfiles::default()
     };
-    let digi_config = sdroxide_config::load_digi_config();
+    // This radio's view of it: its own WSPR beacon settings over the shared
+    // file (issue #615).
+    let digi_config = engine_cfg.store.load_digi_config();
     // Only the per-band drive calibration is kept out of `radio.json` — the
     // engine deliberately does not hold that file (see
     // [`Engine::emit_radio_config`]), and this one table is consulted on every
@@ -5138,21 +5140,25 @@ impl Engine {
         let want_rec_main = self.recorder.is_some() && !self.caps.rx_audio_external;
         let rx0 = self.state.rx[0];
         self.refresh_channel_rate();
-        let Some(main) = self.main.as_mut() else { return };
-        // Four disjoint fields, so the chain's own borrow and the buffers its
-        // output is copied into can be live at once.
-        run_chain_block(
-            main,
-            &rx0,
-            iq,
-            want_rec_main,
-            (
-                &mut self.main_play,
-                &mut self.main_play_r,
-                &mut self.main_play_rec,
-                &mut self.main_play_r_rec,
-            ),
-        );
+        // Only the chain needs `main`: with no audio output there is none, and
+        // a transceiver's own audio and the raw-I/Q lanes still have to be fed
+        // from `finish_audio` (#640).
+        if let Some(main) = self.main.as_mut() {
+            // Four disjoint fields, so the chain's own borrow and the buffers
+            // its output is copied into can be live at once.
+            run_chain_block(
+                main,
+                &rx0,
+                iq,
+                want_rec_main,
+                (
+                    &mut self.main_play,
+                    &mut self.main_play_r,
+                    &mut self.main_play_rec,
+                    &mut self.main_play_r_rec,
+                ),
+            );
+        }
         self.finish_audio(iq);
     }
 
@@ -5231,9 +5237,7 @@ impl Engine {
             self.row_samples = 0;
             self.push_row();
         }
-        if self.main.is_some() {
-            self.finish_audio(iq);
-        }
+        self.finish_audio(iq);
     }
 
     /// Write the raw block to whichever captures are running.
@@ -5285,7 +5289,9 @@ impl Engine {
         // so its speaker and recorder taps are dropped and the transceiver's
         // audio takes their place below.
         let ext = self.caps.rx_audio_external;
-        let Some(out_rate) = self.main.as_ref().map(|m| m.out_rate) else { return };
+        // With no audio output there is no main chain, but the transceiver's
+        // audio still feeds the decoders and the raw-I/Q lanes still run (#640).
+        let out_rate = self.main.as_ref().map_or(self.audio_out_rate, |m| m.out_rate);
 
         if ext {
             // Everything the operator hears is the transceiver's: the speaker,
@@ -5307,6 +5313,13 @@ impl Engine {
             self.main_play_r.clear();
             self.main_play_rec.clear();
             self.main_play_rec.extend_from_slice(&self.audio_play_rec);
+            self.main_play_r_rec.clear();
+        } else if self.main.is_none() {
+            // Nothing demodulated here, and nothing to hear it on: no block
+            // left over from before the output went away may stand in for one.
+            self.main_play.clear();
+            self.main_play_r.clear();
+            self.main_play_rec.clear();
             self.main_play_r_rec.clear();
         } else {
             // Feed the digital-mode decoder from the clean tap (not the mixed,
@@ -7254,7 +7267,10 @@ impl Engine {
         // choosing where to call. Narrowing the display to the passband would
         // take the band away and leave pan and zoom with nothing to move over,
         // because the frame itself would no longer contain it.
-        let want_channel = want && mode.is_digital() && !self.audio_mode;
+        // And only with a main chain to feed it: its input is that chain's DDC
+        // output, so without one it would hold its seeded frame forever and
+        // stand in front of the live panadapter (#640).
+        let want_channel = want && mode.is_digital() && !self.audio_mode && self.main.is_some();
         match (want_channel, self.channel_analyzer.is_some()) {
             (true, false) => {
                 let ch_rate = self.channel_rate_hz;
@@ -8737,7 +8753,7 @@ impl Engine {
                         // Persisted and echoed like any other setup change, so
                         // the panel's controls and the next start agree with
                         // what the modem is now doing.
-                        if let Err(e) = sdroxide_config::save_digi_config(&self.digi_config) {
+                        if let Err(e) = self.store.save_digi_config(&self.digi_config) {
                             warn!("saving digi config: {e}");
                         }
                         self.mark_shared_store_write();
@@ -8951,7 +8967,7 @@ impl Engine {
                 self.hop_suspended = false;
                 self.sync_cw_filter();
                 self.sync_cw_dial();
-                if let Err(e) = sdroxide_config::save_digi_config(&self.digi_config) {
+                if let Err(e) = self.store.save_digi_config(&self.digi_config) {
                     warn!("saving digi config: {e}");
                 }
                 // This write covers whatever the rail had queued, so the
@@ -9000,7 +9016,7 @@ impl Engine {
                     && (self.digi_config.cw_pitch_hz - actual).abs() > 0.5
                 {
                     self.digi_config.cw_pitch_hz = actual;
-                    if let Err(e) = sdroxide_config::save_digi_config(&self.digi_config) {
+                    if let Err(e) = self.store.save_digi_config(&self.digi_config) {
                         warn!("saving digi config: {e}");
                     }
                 }
@@ -9034,7 +9050,7 @@ impl Engine {
                         // The nudge chips can write repeatedly, which is a few
                         // hundred bytes of JSON either way; the alternative is a
                         // debounce that loses the last move on a crash.
-                        if let Err(e) = sdroxide_config::save_digi_config(&self.digi_config) {
+                        if let Err(e) = self.store.save_digi_config(&self.digi_config) {
                             warn!("saving digi config: {e}");
                         }
                     }
@@ -11996,7 +12012,7 @@ impl Engine {
         if let Some(d) = self.digi.as_mut() {
             d.set_config(self.digi_config.clone());
         }
-        if let Err(e) = sdroxide_config::save_digi_config(&self.digi_config) {
+        if let Err(e) = self.store.save_digi_config(&self.digi_config) {
             warn!("saving digi config: {e}");
         }
         self.mark_shared_store_write();
@@ -13272,7 +13288,7 @@ impl Engine {
             if let Some(d) = self.digi.as_mut() {
                 d.set_config(self.digi_config.clone());
             }
-            if let Err(e) = sdroxide_config::save_digi_config(&self.digi_config) {
+            if let Err(e) = self.store.save_digi_config(&self.digi_config) {
                 warn!("saving digi config: {e}");
             }
             self.mark_shared_store_write();
@@ -14904,7 +14920,7 @@ impl Engine {
         if !std::mem::take(&mut self.digi_dirty) {
             return;
         }
-        if let Err(e) = sdroxide_config::save_digi_config(&self.digi_config) {
+        if let Err(e) = self.store.save_digi_config(&self.digi_config) {
             warn!("saving digi config: {e}");
         }
         self.mark_shared_store_write();
@@ -15134,7 +15150,7 @@ impl Engine {
         }
         self.sync_cw_filter();
         self.sync_cw_dial();
-        if let Err(e) = sdroxide_config::save_digi_config(&self.digi_config) {
+        if let Err(e) = self.store.save_digi_config(&self.digi_config) {
             warn!("saving digi config: {e}");
         }
         self.digi_dirty = false;
@@ -15239,7 +15255,9 @@ impl Engine {
             self.profiles = profiles;
             self.emit_profile_names();
         }
-        let digi_config = sdroxide_config::load_digi_config();
+        // Through this radio's store, so another radio's WSPR beacon settings
+        // in the shared file are not taken for this one's (issue #615).
+        let digi_config = self.store.load_digi_config();
         if digi_config != self.digi_config {
             // The same fan-out a SetDigiConfig does, minus the save: the other
             // engine already wrote the file.
@@ -15344,6 +15362,9 @@ impl Engine {
             }
         }
         self.update_tuning();
+        // The channel analyzer is fed from the main chain, so it comes and goes
+        // with it (#640). Nothing else here changes with the mode unchanged.
+        self.sync_digi_mode();
         if was_recording {
             // Reflect the auto-stop to clients (this path doesn't run `apply`).
             let _ = self.event_tx.send(RadioEvent::State(self.state.clone()));

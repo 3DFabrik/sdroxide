@@ -1565,7 +1565,16 @@ use sdroxide_types::{
 /// v181: `Command::FindWavelogStations` and `ServerMsg::WavelogStations`, both
 /// appended last so no surviving discriminant moved. A v180 client cannot ask
 /// for the account's station locations.
-pub const PROTO_VERSION: u16 = 181;
+///
+/// v182: selectable FT8 decode depth, merged from upstream, where it was
+/// numbered 173. `DigiConfig` gains `ft8_depth` (`Ft8Depth`) on its tail —
+/// `Fast` / `Normal` / `Deep`, how hard the decoder works for weak signals (no
+/// subtraction / flat multi-pass SIC / the checkpointed pass). `DigiConfig`
+/// rides `Command::SetDigiConfig` and `DigiStatus` whole, so a v181 peer reads
+/// the extra byte as the start of the next field and fails to decode every
+/// config. Upstream's 173 is a different number here: this fork had already
+/// spent 173 to 181 on other changes.
+pub const PROTO_VERSION: u16 = 182;
 const VERSION_BYTE: u8 = 0x12;
 
 #[derive(Debug, thiserror::Error)]

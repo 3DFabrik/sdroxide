@@ -4289,6 +4289,34 @@ impl LimeConfig {
     pub const SAMPLE_RATES: [f64; 9] =
         [1.0e6, 2.0e6, 2.5e6, 5.0e6, 10.0e6, 15.36e6, 20.0e6, 30.72e6, 40.0e6];
 
+    /// The lower rates a LimeSDR **Mini** also offers, and the reason they exist.
+    ///
+    /// The Mini's FT601 USB link cannot sustain 1 Msps on transmit — it
+    /// underruns, which is issue #609. Soapy runs the Mini at 100–750 ksps and
+    /// SDRconsole only transmits at 750 ksps for the same reason. These are the
+    /// rates that clear it, offered on the Mini only: the USB boards have no
+    /// need for them and the extra entries would only clutter their combo. The
+    /// full list follows, since the Mini still receives at those rates.
+    pub const MINI_SAMPLE_RATES: [f64; 13] = [
+        100_000.0, 250_000.0, 500_000.0, 750_000.0, 1.0e6, 2.0e6, 2.5e6, 5.0e6, 10.0e6, 15.36e6,
+        20.0e6, 30.72e6, 40.0e6,
+    ];
+
+    /// The rates the settings combo should offer for a board called `name`.
+    ///
+    /// The Mini gets [`Self::MINI_SAMPLE_RATES`]; every other board gets
+    /// [`Self::SAMPLE_RATES`]. Matched on the same folded name as
+    /// [`LimeDevice::rx_channels`], so a board spelled with a space or an
+    /// underscore is still recognised.
+    pub fn rates_for(name: &str) -> &'static [f64] {
+        let folded = name.trim().to_ascii_lowercase().replace([' ', '_'], "-");
+        if folded.starts_with("limesdr-mini") {
+            &Self::MINI_SAMPLE_RATES
+        } else {
+            &Self::SAMPLE_RATES
+        }
+    }
+
     /// What to say beside a rate in the combo, when there is something to say.
     ///
     /// The numbers are the host link's load at 12 bits per sample per
@@ -8797,5 +8825,23 @@ mod tests {
         // below the tuner's own floor.
         assert_eq!(Rx888Config::vhf_crossover_hz(CLOCK), 64_800_000.0);
         assert_eq!(Rx888Config::vhf_crossover_hz(32_400_000.0), 24_000_000.0);
+    }
+
+    #[test]
+    fn the_mini_gets_lower_rates_because_its_usb_link_underruns() {
+        // Issue #609: the Mini's FT601 cannot sustain 1 Msps on transmit, so it
+        // gets a list that starts at 100 ksps. Every other board keeps the full
+        // list — the lower rates would only clutter their combo.
+        assert_eq!(LimeConfig::rates_for("LimeSDR-Mini"), &LimeConfig::MINI_SAMPLE_RATES);
+        assert_eq!(LimeConfig::rates_for("LimeSDR-Mini_v2"), &LimeConfig::MINI_SAMPLE_RATES);
+        // LimeSuite 23.11 spells the same board with a bare space.
+        assert_eq!(LimeConfig::rates_for("LimeSDR Mini"), &LimeConfig::MINI_SAMPLE_RATES);
+        // The low rates are added, not substituted: the Mini still receives wide.
+        assert!(LimeConfig::MINI_SAMPLE_RATES.ends_with(&LimeConfig::SAMPLE_RATES));
+        assert_eq!(LimeConfig::rates_for("LimeSDR-USB"), &LimeConfig::SAMPLE_RATES);
+        assert_eq!(LimeConfig::rates_for("LimeSDR-PCIe"), &LimeConfig::SAMPLE_RATES);
+        assert_eq!(LimeConfig::rates_for("LimeNET-Micro"), &LimeConfig::SAMPLE_RATES);
+        // An unknown board gets the safe full list rather than an empty one.
+        assert_eq!(LimeConfig::rates_for(""), &LimeConfig::SAMPLE_RATES);
     }
 }

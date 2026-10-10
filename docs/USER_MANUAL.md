@@ -1980,6 +1980,12 @@ key** action in Settings → Controls ([6.4.1](#641-keyboard)), so you can put i
 on any key you like. A space bar's travel is long for keying, and a key with a
 shorter throw is easier to send a decent fist on.
 
+**A MIDI key.** The same action can be bound to a MIDI note — the key-down
+note of a keyer or paddle interface — in Settings → Controls
+([6.4.3](#643-midi-controller)). The note keys while it is on, whatever button
+mode the binding has, and its first press switches **KEY** on by itself. Bind
+the key note, not **PTT**: PTT in CW transmits a steady carrier.
+
 - The first press keys the transmitter; there is no need to press **TX**. Between
   elements the transmitter holds the frequency the way **TX** does, and releases
   itself once the key has been up for as long as **IDLE** says.
@@ -2134,10 +2140,14 @@ working it. Either tab carries a dot while its own work is running, and the
 subscription, anything you pasted into the TLE tab
 ([6.10](#610-tle-satellites-and-their-frequencies)), and the curated set — with
 a search box and, once your grid locator is set, live elevation and the next
-pass for each. Pick one and its published links appear: transponders,
+pass for each. Pass times are worked out in UTC and shown in UTC with your
+own local time beside them (`13:08 UTC (14:08 local)`). Pick one and its
+published links appear: transponders,
 repeaters, beacons, each with its passbands and mode, inverting transponders
 marked `inv`. **TUNE** just sets the dial and mode to the link, nothing more.
-**LOCK ON** is the mode itself.
+**LOCK ON** is the mode itself. An SSTV link — the ISS lists both its 70 cm
+(437.550 MHz) and 2 m (145.800 MHz) SSTV downlinks — tunes and locks in
+**SSTV FM**, so the picture is decoded with the Doppler corrected.
 
 **What a lock does.** The engine — not the screen — propagates the orbit with
 SGP4 a few times a second and:
@@ -3379,6 +3389,11 @@ Click **SETUP** in the QSO area to open the **FT8 / FT4 / FT2 Setup** window:
   opposite the one they were last heard transmitting in, whichever that is; the
   readout beside your transmit offset says which period is actually in use.
 - **Auto-sequence** — advance the QSO automatically (recommended on).
+- **Decode depth** (FT8) — how hard the decoder digs for weak signals hidden
+  under stronger ones. The quick single pass is always shown first, so a reply
+  is never held up; **Normal** and **Deep** then add a signal-subtraction pass
+  whose extra decodes arrive up to a second or so later. **Fast** skips it,
+  **Deep** (the default) finds the most.
 - **TX watchdog / Give up after** — how long unattended transmitting may
   continue with no progress, and how many unanswered calls to one station are
   worth making. Both 0 to disable.
@@ -4767,6 +4782,11 @@ Everything is in the `STATUS` pane; WSPR has no separate setup dialog.
   transmission. On by default: two hundred hertz shared by everyone only works
   if nobody parks in the middle of it.
 
+**TRANSMIT**, **POWER** and the band-hop settings belong to the radio they are
+set on. With several radios open, each beacons — or doesn't — on its own say:
+switching one on leaves the others as they were, and a radio added later starts
+with its beacon off.
+
 Your **callsign and grid come from the General tab of Settings** — the same
 identity the rest of the program reports under. The panel says which it is
 transmitting as, and says so in yellow if either is still blank.
@@ -5267,7 +5287,8 @@ your nearest coast station broadcasts in) and **4209.5 kHz** (tropical). What
 they tune is 1.7 kHz *below* the channel, because the quoted frequency is the
 assigned one — the centre of the two tones — and a receiver in upper sideband
 has to sit below it to put them at 1615 and 1785 Hz. That arithmetic is done
-for you, and the readout still says where the signal is.
+for you, and the readout still says where the signal is. A dial a few hundred
+hertz off is fine too: the decoder follows the tones up to ±350 Hz away.
 
 **What you see.** Two panes:
 
@@ -10871,7 +10892,9 @@ where the library is absent.
   is on. Takes effect on **Apply**: a LimeSuite stream is bound to its channel
   when it is created.
 - **Sample rate** — 1 to 40 Msps. The board's real limits are read from it when
-  it opens; this list is the useful subset.
+  it opens; this list is the useful subset. A **LimeSDR Mini** also offers 100,
+  250, 500 and 750 ksps: its USB link underruns on transmit at 1 Msps, so pick
+  one of those if your transmissions break up.
 - **Receive gain** — one combined figure, 0–73 dB, which LimeSuite distributes
   across the LNA, the TIA and the PGA itself. It takes whole decibels, so a
   slider left between two of them is a radio at the lower one, and the panel

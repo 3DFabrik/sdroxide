@@ -6,7 +6,7 @@
 use mfsk_core::msg::decode_request::DecodeRequest;
 use mfsk_core::msg::hash_table::CallsignHashTable;
 use mfsk_core::msg::wsjt77;
-use sdroxide_types::{Decode, Mode};
+use sdroxide_types::{Decode, Ft8Depth, Mode};
 
 use crate::params::{AUDIO_MAX_HZ, AUDIO_MIN_HZ};
 
@@ -144,15 +144,33 @@ pub struct Ft8Modem {
     /// The same callsigns again, hashed the way the EU VHF contest layout
     /// needs them — see [`eu_vhf::Hashes`].
     eu_hashes: eu_vhf::Hashes,
+    /// How hard the FT8 decoder works for weak signals — see
+    /// [`Ft8Depth`]. Only the FT8 path reads it.
+    ft8_depth: Ft8Depth,
 }
 
 impl Ft8Modem {
     pub fn new(mode: Mode) -> Self {
-        Ft8Modem { mode, hashes: CallsignHashTable::new(), eu_hashes: eu_vhf::Hashes::default() }
+        Ft8Modem {
+            mode,
+            hashes: CallsignHashTable::new(),
+            eu_hashes: eu_vhf::Hashes::default(),
+            ft8_depth: Ft8Depth::default(),
+        }
     }
 
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    /// How hard the FT8 decoder works — see [`Ft8Depth`]. Set from
+    /// [`crate::DigiConfig::ft8_depth`] on every config change.
+    pub fn set_ft8_depth(&mut self, depth: Ft8Depth) {
+        self.ft8_depth = depth;
+    }
+
+    pub fn ft8_depth(&self) -> Ft8Depth {
+        self.ft8_depth
     }
 
     /// Register callsigns we already know (ours, and the station we're
@@ -187,10 +205,80 @@ impl Ft8Modem {
         ap: &ApHints,
         listening_hz: f32,
     ) -> Vec<Decode> {
+        let (quick, extras) = self.decode_slot_staged(audio_12k, slot_utc, ap, listening_hz);
+        let mut all = quick;
+        all.extend(extras);
+        all
+    }
+
+    /// Decode a slot in two stages for FT8, for a caller that must act on the
+    /// quick result before the slow one lands.
+    ///
+    /// The problem: `.sic_early()` is one call that does the whole
+    /// checkpointed multi-pass and returns only at the end — about 1.15 s on a
+    /// busy slot against FT8's 0.5 s transmit offset — so an auto-sequenced
+    /// reply decided from its result goes out a cycle late. So the plain
+    /// single-pass decode runs first and is returned as `quick` immediately;
+    /// the SIC pass then runs and returns as `extras` (only the decodes it
+    /// found that the quick pass did not, deduplicated by message and offset).
+    ///
+    /// For every other mode `extras` is empty and `quick` is the whole decode.
+    pub fn decode_slot_staged(
+        &mut self,
+        audio_12k: &[i16],
+        slot_utc: i64,
+        ap: &ApHints,
+        listening_hz: f32,
+    ) -> (Vec<Decode>, Vec<Decode>) {
         let mode = self.mode;
         let ht = &self.hashes;
         let eu = &self.eu_hashes;
+        // For FT8 the quick single-pass result is emitted first and the SIC
+        // extras held back; every other mode has empty `extras`.
+        let mut extras: Vec<Decode> = Vec::new();
         let mut decodes: Vec<Decode> = match mode {
+            Mode::Ft8 => {
+                let hint = ap.ft8();
+                // The operator's chosen depth — see `Ft8Depth` — governs only
+                // the extras: `Fast` skips them, `Normal` runs flat multi-pass
+                // SIC, `Deep` the checkpointed pass (~1.2 s on a busy slot).
+                let run = |depth: Ft8Depth| -> Vec<Decode> {
+                    let req = DecodeRequest::<mfsk_core::Ft8>::new(
+                        audio_12k,
+                        AUDIO_MIN_HZ,
+                        AUDIO_MAX_HZ,
+                        SYNC_MIN,
+                        MAX_CAND,
+                    )
+                    .osd(true);
+                    let req = match depth {
+                        Ft8Depth::Fast => req,
+                        Ft8Depth::Normal => req.sic_rounds(2),
+                        Ft8Depth::Deep => req.sic_early(),
+                    };
+                    let req = match hint.as_ref() {
+                        Some(h) => req.ap_hint(h),
+                        None => req,
+                    };
+                    req.decode()
+                        .results
+                        .into_iter()
+                        .filter_map(|r| {
+                            let bits: [u8; 77] = r.message77().try_into().ok()?;
+                            build_decode(&bits, r.snr_db, r.dt_sec, r.freq_hz, slot_utc, ht, eu)
+                        })
+                        .collect()
+                };
+                let quick = run(Ft8Depth::Fast);
+                // The SIC pass supersedes the quick one; keep what it adds.
+                if self.ft8_depth != Ft8Depth::Fast {
+                    extras = run(self.ft8_depth)
+                        .into_iter()
+                        .filter(|d| !quick.iter().any(|q| same_signal(q, d)))
+                        .collect();
+                }
+                quick
+            }
             Mode::Ft4 => DecodeRequest::<mfsk_core::Ft4>::new(
                 audio_12k,
                 AUDIO_MIN_HZ,
@@ -236,9 +324,9 @@ impl Ft8Modem {
             })
             .collect(),
             _ => {
-                // With no hint this is bit-for-bit the plain wide-band decode;
-                // with one, every candidate that fails an ordinary decode gets a
-                // second attempt with our two callsigns' bits locked.
+                // FT8 is handled in `decode_slot_staged` above, in two stages;
+                // this arm is the plain single-pass fallback for any other
+                // protocol that reaches here.
                 let hint = ap.ft8();
                 let req = DecodeRequest::<mfsk_core::Ft8>::new(
                     audio_12k,
@@ -311,19 +399,23 @@ impl Ft8Modem {
                 if let Some(d) =
                     build_decode(&r.msg77, r.snr_db, r.dt_sec, r.freq_hz, slot_utc, ht, eu)
                     && !decodes.iter().any(|o| same_signal(o, &d))
+                    && !extras.iter().any(|o| same_signal(o, &d))
                 {
-                    decodes.push(d);
+                    // The contest rescue is part of the slower work, so it
+                    // rides the extras batch and does not hold up the quick one.
+                    extras.push(d);
                 }
             }
         }
-        // Remember who we heard, for the next slot's hashed messages.
-        for d in &decodes {
+        // Remember who we heard, for the next slot's hashed messages. Both
+        // batches, so an extras-only station is still remembered.
+        for d in decodes.iter().chain(extras.iter()) {
             for call in [d.to.as_deref(), d.from.as_deref()].into_iter().flatten() {
                 self.hashes.insert(call);
                 self.eu_hashes.insert(call);
             }
         }
-        decodes
+        (decodes, extras)
     }
 
     /// Synthesize a message into 12 kHz mono f32 burst audio at tone offset
@@ -2319,5 +2411,92 @@ mod tests {
         let d = decodes.iter().find(|d| d.message.contains("DL/W1AW")).expect("decoded");
         assert!(d.is_cq);
         assert_eq!(d.from.as_deref(), Some("DL/W1AW"));
+    }
+
+    /// A weak FT8 signal buried *inside* a strong neighbour's occupied
+    /// bandwidth still decodes — the whole reason FT8 runs signal subtraction.
+    ///
+    /// This is the one thing a one-signal sensitivity test cannot show: put a
+    /// strong CQ at 2310 Hz and a weak one 10–30 Hz away and, without the
+    /// checkpointed subtraction on the FT8 request (mfsk-core's default is a
+    /// bare single pass), only the strong signal comes back. Deterministic, so
+    /// it is a real gate rather than a measurement.
+    #[test]
+    fn a_weak_signal_under_a_strong_neighbour_is_recovered() {
+        let slot = |weak_hz: f32| {
+            let modem = Ft8Modem::new(Mode::Ft8);
+            let (strong, _) = modem.encode_burst_12k("CQ AB1CD FN42", 2310.0, 0.5).unwrap();
+            let weak_amp = 0.5 * 10f32.powf(-14.0 / 20.0);
+            let (weak, _) = modem.encode_burst_12k("CQ W9XYZ EN52", weak_hz, weak_amp).unwrap();
+            let mut out = vec![0.0f32; 180_000];
+            for (i, &x) in strong.iter().enumerate() {
+                out[6_000 + i] += x;
+            }
+            for (i, &x) in weak.iter().enumerate() {
+                out[6_000 + i] += x;
+            }
+            out.iter().map(|&x| (x * 12_000.0) as i16).collect::<Vec<i16>>()
+        };
+        let decode = |buf: &[i16]| {
+            Ft8Modem::new(Mode::Ft8)
+                .decode_slot(buf, 0, &ApHints::default(), 2310.0)
+                .into_iter()
+                .map(|d| d.message)
+                .collect::<Vec<_>>()
+        };
+
+        // Weak inside the strong signal's bandwidth: both must come back.
+        for weak_hz in [2300.0f32, 2320.0] {
+            let got = decode(&slot(weak_hz));
+            assert!(
+                got.iter().any(|m| m == "CQ AB1CD FN42"),
+                "the strong signal must decode at {weak_hz} Hz: {got:?}"
+            );
+            assert!(
+                got.iter().any(|m| m == "CQ W9XYZ EN52"),
+                "signal subtraction must recover the weak signal under the strong \
+                 one at {weak_hz} Hz: {got:?}"
+            );
+        }
+    }
+
+    /// The two-stage split that lets an auto-sequenced reply be decided in
+    /// time: the quick single-pass result comes back on its own, and the SIC
+    /// extras (plus the contest rescue) follow as a second batch. The quick
+    /// batch must already hold the strong signal; the extras hold the weak one
+    /// subtraction recovers.
+    #[test]
+    fn ft8_decodes_in_two_stages_for_an_on_time_reply() {
+        let modem = Ft8Modem::new(Mode::Ft8);
+        let (strong, _) = modem.encode_burst_12k("CQ AB1CD FN42", 2310.0, 0.5).unwrap();
+        let weak_amp = 0.5f32 * 10f32.powf(-14.0 / 20.0);
+        let (weak, _) = modem.encode_burst_12k("CQ W9XYZ EN52", 2320.0, weak_amp).unwrap();
+        let mut out = vec![0.0f32; 180_000];
+        for (i, &x) in strong.iter().enumerate() {
+            out[6_000 + i] += x;
+        }
+        for (i, &x) in weak.iter().enumerate() {
+            out[6_000 + i] += x;
+        }
+        let buf: Vec<i16> = out.iter().map(|&x| (x * 12_000.0) as i16).collect();
+
+        let (quick, extras) =
+            Ft8Modem::new(Mode::Ft8).decode_slot_staged(&buf, 0, &ApHints::default(), 2310.0);
+        let q: Vec<&str> = quick.iter().map(|d| d.message.as_str()).collect();
+        let e: Vec<&str> = extras.iter().map(|d| d.message.as_str()).collect();
+        assert!(q.contains(&"CQ AB1CD FN42"), "the quick pass must hold the strong signal: {q:?}");
+        assert!(
+            e.contains(&"CQ W9XYZ EN52"),
+            "the extras must hold the weak signal subtraction recovers: {e:?}"
+        );
+        // The quick pass alone is what a reply can act on within the offset.
+        assert!(!q.contains(&"CQ W9XYZ EN52"), "the weak one is the slow pass's job: {q:?}");
+
+        // `Fast` is the quick pass alone: no subtraction batch at all.
+        let mut fast = Ft8Modem::new(Mode::Ft8);
+        fast.set_ft8_depth(Ft8Depth::Fast);
+        let (quick, extras) = fast.decode_slot_staged(&buf, 0, &ApHints::default(), 2310.0);
+        assert!(quick.iter().any(|d| d.message == "CQ AB1CD FN42"));
+        assert!(extras.is_empty(), "Fast must skip the subtraction pass: {extras:?}");
     }
 }
