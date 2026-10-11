@@ -18,6 +18,8 @@
 //! | `s`        | `ant=<1-8> auto=<0\|1> band=<m> n=<count> name=<text>` then `RPRT 0` |
 //! | `M <0\|1>`  | `RPRT 0` — automatic mode off or on                |
 //! | `A <n>`    | `RPRT 0` — selects antenna `n` and switches to manual |
+//! | `P <0\|1>` | `RPRT 0` — the radio receives (0) or transmits (1) |
+//! | `W <swr>`  | `RPRT 0` — the SWR of the over in progress, e.g. `W 1.50` |
 //!
 //! `name=` is last on its line because an antenna's name may contain spaces.
 //! `band` is `0` when the frequency is outside every band, and `n=` is how many
@@ -28,7 +30,12 @@
 //! sdroxide sends `v` once after connecting, `F` whenever the frequency has
 //! settled on a new value, `M` and `A` when the operator asks, and `s` once a
 //! second — which doubles as the keep-alive, so the switch can fall back to a
-//! safe antenna when it stops arriving.
+//! safe antenna when it stops arriving. `P` goes out on every change and is
+//! repeated every two seconds, so the switch can tell a stopped report from a
+//! radio that is still transmitting; the switch holds back antenna changes while
+//! it is `1`. `W` follows about twice a second, only while transmitting and only
+//! when the radio measures an SWR. A firmware that predates `P` or `W` refuses
+//! it once and is not asked again.
 
 use serde::{Deserialize, Serialize};
 

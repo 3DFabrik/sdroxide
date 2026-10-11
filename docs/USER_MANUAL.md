@@ -12452,13 +12452,20 @@ refusal). The switch is the server:
 | `F <hz>` | `RPRT 0` — the radio's frequency in whole hertz; the switch chooses the band and antenna |
 | `s` | `ant=<1-8> auto=<0\|1> band=<metres> name=<text>`, then `RPRT 0` |
 | `M <0\|1>` | `RPRT 0` — automatic selection off or on |
+| `A <n>` | `RPRT 0` — selects antenna `n` and switches to manual |
+| `P <0\|1>` | `RPRT 0` — the radio receives (0) or transmits (1) |
+| `W <swr>` | `RPRT 0` — the SWR of the over in progress, for example `W 1.50` |
 
 `name=` comes last on its line because an antenna's name may contain spaces, and `band`
 is `0` outside every band. sdroxide sends `v` after connecting, `F` whenever the
 frequency has settled on a new value (at most about seven times a second), `M` when you
-click AUTO, and `s` once a
+click AUTO, `A` when you choose an antenna, and `s` once a
 second — which doubles as a keep-alive, so a switch that stops hearing it can fall back
-to a safe antenna. Reserved and not sent yet: `A <n>` to select an antenna (manual).
+to a safe antenna. `P` goes out on every change of the transmit state and is repeated every
+two seconds; while it is `1` the switch holds back antenna changes until the over ends.
+`W` follows about twice a second while transmitting, when the radio measures an SWR
+(a CAT rig that reports one); the switch shows it beside TX. A firmware that predates
+`P` or `W` refuses it once and is not asked again.
 You can try it by hand with `nc <address> 4540`.
 
 ### 6.10 TLE: satellites and their frequencies

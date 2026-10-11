@@ -33,11 +33,17 @@ const MIN_SEND_GAP: Duration = Duration::from_millis(150);
 const TICK: Duration = Duration::from_millis(100);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const REPLY_TIMEOUT: Duration = Duration::from_secs(4);
+/// The transmit state is repeated this often even when unchanged: the switch
+/// treats a transmit report that stops arriving as a return to receive.
+const TX_REPEAT: Duration = Duration::from_secs(2);
+/// The SWR is sent at most this often while transmitting.
+const SWR_GAP: Duration = Duration::from_millis(500);
 
 enum Cmd {
     Freq(u64),
     Auto(bool),
     Antenna(u8),
+    Air(bool, Option<f32>),
 }
 
 /// What a refusal's message starts with, so a refused request can be told from
@@ -93,6 +99,15 @@ impl AntennaRemoteClient {
         }
     }
 
+    /// Say whether the radio is transmitting and, if it measures one, the SWR.
+    /// Safe to call on every engine tick, like [`Self::set_freq`]: the worker
+    /// sends the state on a change and repeats it, and the SWR only while on the air.
+    pub fn set_air(&self, tx: bool, swr: Option<f32>) {
+        if let Some(tx_chan) = &self.tx {
+            let _ = tx_chan.try_send(Cmd::Air(tx, swr));
+        }
+    }
+
     pub fn status(&self) -> AntennaRemoteStatus {
         self.status.lock().map(|s| s.clone()).unwrap_or_default()
     }
@@ -120,9 +135,17 @@ fn worker(cfg: AntennaRemoteConfig, rx: Receiver<Cmd>, status: Arc<Mutex<Antenna
     let mut want: Option<u64> = None;
     let mut want_auto: Option<bool> = None;
     let mut want_antenna: Option<u8> = None;
+    let mut want_tx = false;
+    let mut want_swr: Option<f32> = None;
     // What the switch was last told on *this* connection: a fresh connection
     // starts from nothing, so the current frequency goes out straight away.
     let mut sent: Option<u64> = None;
+    let mut sent_tx: Option<bool> = None;
+    let mut last_tx_send = Instant::now();
+    let mut last_swr_send = Instant::now() - SWR_GAP;
+    // A firmware that predates `P` or `W` refuses it once and is not asked again.
+    let mut no_tx = false;
+    let mut no_swr = false;
     let mut last_send = Instant::now() - MIN_SEND_GAP;
     let mut next_poll = Instant::now();
 
@@ -133,6 +156,9 @@ fn worker(cfg: AntennaRemoteConfig, rx: Receiver<Cmd>, status: Arc<Mutex<Antenna
                     debug!("Antenna Remote connected: {}", cfg.address());
                     retry_every = RECONNECT_FIRST;
                     sent = None;
+                    sent_tx = None;
+                    no_tx = false;
+                    no_swr = false;
                     next_poll = Instant::now();
                     set(&status, |s| {
                         s.connected = true;
@@ -152,6 +178,7 @@ fn worker(cfg: AntennaRemoteConfig, rx: Receiver<Cmd>, status: Arc<Mutex<Antenna
             Ok(Cmd::Freq(hz)) => want = Some(hz),
             Ok(Cmd::Auto(on)) => want_auto = Some(on),
             Ok(Cmd::Antenna(n)) => want_antenna = Some(n),
+            Ok(Cmd::Air(tx, swr)) => (want_tx, want_swr) = (tx, swr),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
         }
@@ -160,6 +187,7 @@ fn worker(cfg: AntennaRemoteConfig, rx: Receiver<Cmd>, status: Arc<Mutex<Antenna
                 Cmd::Freq(hz) => want = Some(hz),
                 Cmd::Auto(on) => want_auto = Some(on),
                 Cmd::Antenna(n) => want_antenna = Some(n),
+                Cmd::Air(tx, swr) => (want_tx, want_swr) = (tx, swr),
             }
         }
         let Some(c) = conn.as_mut() else {
@@ -180,6 +208,17 @@ fn worker(cfg: AntennaRemoteConfig, rx: Receiver<Cmd>, status: Arc<Mutex<Antenna
                 last_send = now;
                 // The answer to a retune is worth having at once.
                 next_poll = now;
+            }
+            if !no_tx && (sent_tx != Some(want_tx) || now.duration_since(last_tx_send) >= TX_REPEAT) {
+                no_tx = !c.send_tx(want_tx)?;
+                sent_tx = Some(want_tx);
+                last_tx_send = now;
+            }
+            if let Some(swr) = want_swr.filter(|_| want_tx && !no_swr)
+                && now.duration_since(last_swr_send) >= SWR_GAP
+            {
+                no_swr = !c.send_swr(swr)?;
+                last_swr_send = now;
             }
             if let Some(on) = want_auto.take() {
                 c.send_auto(on)?;
@@ -281,15 +320,34 @@ impl Conn {
         self.refusable(&format!("A {n}"))
     }
 
+    /// `Ok(false)` when the switch does not know `P`.
+    fn send_tx(&mut self, tx: bool) -> Result<bool, String> {
+        self.accepted(&format!("P {}", u8::from(tx)))
+    }
+
+    /// `Ok(false)` when the switch does not know `W`. The switch takes 1.0 up to
+    /// but not including 100; a reading outside that is pulled in.
+    fn send_swr(&mut self, swr: f32) -> Result<bool, String> {
+        if !swr.is_finite() || swr <= 0.0 {
+            return Ok(true);
+        }
+        self.accepted(&format!("W {:.2}", swr.clamp(1.0, 99.9)))
+    }
+
     /// A request the switch may decline — an older firmware, or an antenna it
     /// does not have — without that being a reason to drop the connection.
     fn refusable(&mut self, line: &str) -> Result<(), String> {
+        self.accepted(line).map(|_| ())
+    }
+
+    /// Like [`Self::refusable`], telling whether the switch took it.
+    fn accepted(&mut self, line: &str) -> Result<bool, String> {
         match self.command(line) {
             Err(e) if e.starts_with(REFUSED) => {
                 warn!("Antenna Remote: {e}");
-                Ok(())
+                Ok(false)
             }
-            r => r.map(|_| ()),
+            r => r.map(|_| true),
         }
     }
 
@@ -435,6 +493,46 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1500));
         let s = client.status();
         assert!(s.connected && s.error.is_none() && s.antenna == 3, "{s:?}");
+    }
+
+    #[test]
+    fn the_transmit_state_and_swr_go_out_while_on_the_air() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let Ok((stream, _)) = listener.accept() else { return };
+            let mut out = stream.try_clone().unwrap();
+            for line in BufReader::new(stream).lines() {
+                let Ok(line) = line else { return };
+                let reply = match line.split_whitespace().next() {
+                    Some("v") => "AntennaRemote 1\nRPRT 0\n",
+                    Some("s") => "ant=1 auto=1 band=20 name=A\nRPRT 0\n",
+                    _ => "RPRT 0\n",
+                };
+                let _ = tx.send(line);
+                if out.write_all(reply.as_bytes()).is_err() {
+                    return;
+                }
+            }
+        });
+        let client = AntennaRemoteClient::start(cfg(port));
+        client.set_air(false, Some(1.2));
+        let lines = |want: &str| {
+            let end = Instant::now() + Duration::from_secs(3);
+            while let Some(left) = end.checked_duration_since(Instant::now()) {
+                match rx.recv_timeout(left) {
+                    Ok(l) if l.starts_with(want) => return Some(l),
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+            None
+        };
+        assert_eq!(lines("P").as_deref(), Some("P 0"));
+        client.set_air(true, Some(1.5));
+        assert_eq!(lines("P").as_deref(), Some("P 1"));
+        assert_eq!(lines("W").as_deref(), Some("W 1.50"));
     }
 
     #[test]

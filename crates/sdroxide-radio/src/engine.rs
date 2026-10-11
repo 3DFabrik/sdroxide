@@ -2825,6 +2825,9 @@ struct Engine {
     /// client that attaches late is not left without a status.
     antenna_remote_last: Option<sdroxide_types::AntennaRemoteStatus>,
     next_antenna_remote_emit: Instant,
+    /// The rig's SWR reading of the over in progress, for the antenna switch.
+    /// `None` while receiving or when the rig reports none.
+    tx_swr: Option<f32>,
     /// Digest of the last state published to rigctld clients. Comparing scalars
     /// keeps the per-tick check allocation-free; the full snapshot is only
     /// built when something actually moved.
@@ -4218,6 +4221,7 @@ fn engine_thread(
         antenna_remote: None,
         antenna_remote_last: None,
         next_antenna_remote_emit: Instant::now(),
+        tx_swr: None,
         rigctld_seen: None,
         last_s_dbm: -127.0,
         rds_dial_hz: 0.0,
@@ -4960,6 +4964,7 @@ fn engine_thread(
                     }
                 }
                 let (adc_peak_dbfs, adc_clip) = engine.adc.read();
+                engine.tx_swr = tele.swr;
                 Some(Meters {
                     s_dbm: -127.0,
                     pa_temp_c,
@@ -4984,6 +4989,7 @@ fn engine_thread(
                 engine.swr_over = 0;
                 engine.swr_settle = 0;
                 engine.swr_tuning = false;
+                engine.tx_swr = None;
                 let stereo = engine.main.as_ref().is_some_and(|c| c.stereo_locked());
                 let tone = engine.main.as_ref().and_then(|c| c.sub_tone());
                 // Read unconditionally, so the window is consumed whether or not
@@ -11615,6 +11621,7 @@ impl Engine {
         // (split and XIT move it), the receive frequency otherwise.
         let hz = if self.tx_active { self.state.tx_freq_hz() } else { self.state.rx_freq_hz() };
         client.set_freq(hz.round().max(0.0) as u64);
+        client.set_air(self.on_air(), self.tx_swr);
         let st = client.status();
         let now = Instant::now();
         if now >= self.next_antenna_remote_emit || self.antenna_remote_last.as_ref() != Some(&st) {
