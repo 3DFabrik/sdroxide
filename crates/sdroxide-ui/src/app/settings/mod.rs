@@ -3266,9 +3266,13 @@ impl SdroxideApp {
                         ui.label(
                             RichText::new(
                                 "Works with Wavelog and Cloudlog. The URL is the address you open \
-                                 it at, e.g. https://log.example.com. The API key must be \
-                                 read+write (account menu → API Keys). The station ID is the \
-                                 number in the URL of the station location you log to.",
+                                 it at (https://log.example.com), or with /index.php as \
+                                 WavelogGate uses. The API key must be read+write (account menu → \
+                                 API Keys). The station ID is the number in the URL of the \
+                                 station location you log to. After APPLY, change the dial — the \
+                                 line below should say the frequency was sent; in Wavelog pick \
+                                 that radio name on the QSO form (further radios appear as \
+                                 '<name> 2', '<name> 3', …).",
                             )
                             .size(10.5)
                             .color(crate::theme::gray(140)),
@@ -3281,8 +3285,8 @@ impl SdroxideApp {
                         )
                         .on_hover_text(
                             "Wavelog's logging form follows the radio. Sent when the dial or mode \
-                             changes, from the station's first radio only. Needs the API key and \
-                             URL above.",
+                             changes, from every radio on the station (further radios append their \
+                             number to the name below). Needs the API key and URL above.",
                         );
                         net_row(ui, "Radio name", &mut io.net_edit.wavelog_radio_name, 140.0);
                     }

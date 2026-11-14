@@ -4360,6 +4360,9 @@ fn engine_thread(
     if !engine.primary {
         engine.spots.stand_down();
     }
+    // Every radio pushes its own dial to Wavelog under a distinct CAT name;
+    // the instance is what keeps `SDROxide` and `SDROxide 2` apart.
+    engine.spots.set_radio_instance(engine.instance);
     engine.spots.set_operator(&engine.digi_config.my_call, &engine.report_grid());
     engine.net_cfg = sdroxide_config::load_network_config();
     // Hand the persisted account to the mailbox. Without this the manager keeps

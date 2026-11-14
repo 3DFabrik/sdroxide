@@ -12064,10 +12064,11 @@ stored in plaintext in `net.json`. How the features behave is
     minutes so Wavelog keeps showing it as live. Under split the transmit
     frequency is the one sent and the receive frequency goes as `frequency_rx`.
     Wavelog lists the radio under **Radio name** (default `SDROxide`). On a
-    station with several radios only the first reports, so they do not overwrite
-    one another under the one name. Needs the URL and key above, but not the
-    master auto-upload switch. **Test Wavelog** checks the key, that it can
-    write, and that the station ID exists.
+    station with several radios every one reports: the first keeps that name,
+    the others append their number (`SDROxide 2`, …) so each has its own entry
+    on Wavelog's QSO form. Needs the URL and key above, but not the master
+    auto-upload switch. **Test Wavelog** checks the key, that it can write, and
+    that the station ID exists.
 
   A service's own tickbox only takes effect while the master **Auto-upload each
   new QSO** is on; with it off the tab says so, and the per-QSO **UP** button in

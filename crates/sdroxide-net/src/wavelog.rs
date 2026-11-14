@@ -16,9 +16,18 @@ use crate::upload::urlencode;
 /// `{base}/api/{endpoint}` from what the operator typed.
 ///
 /// Plain `http://` is allowed on purpose: Wavelog is commonly self-hosted on a
-/// LAN without a certificate.
+/// LAN without a certificate. A trailing `/api` (the root Wavelog shows on its
+/// API keys page) and a trailing `/index.php` (what WavelogGate stores) are
+/// both accepted — the latter stays, the former is stripped so we do not build
+/// `/api/api/…`.
 fn api_url(base: &str, endpoint: &str) -> Result<String, String> {
-    let base = base.trim().trim_end_matches('/');
+    let mut base = base.trim().trim_end_matches('/').to_string();
+    if let Some(stripped) = base
+        .strip_suffix("/api")
+        .map(|s| s.trim_end_matches('/').to_string())
+    {
+        base = stripped;
+    }
     if base.is_empty() {
         return Err("Wavelog URL not set".into());
     }
@@ -255,16 +264,34 @@ fn radio_json(key: &str, name: &str, r: &Radio) -> String {
     v.to_string()
 }
 
-/// Post the radio's state to `api/radio`.
-pub fn push_radio(cfg: &NetworkConfig, r: &Radio) -> Result<(), String> {
-    let key = key(cfg).map_err(|e| format!("Wavelog: {e}"))?;
-    let url = api_url(&cfg.wavelog_url, "radio").map_err(|e| format!("Wavelog: {e}"))?;
-    let name = match cfg.wavelog_radio_name.trim() {
+/// The name Wavelog lists under Hardware Interfaces / the QSO form's radio
+/// picker. Radio 0 keeps the configured name; further radios append their
+/// 1-based index (`SDROxide 2`, …) so they do not overwrite each other.
+pub fn radio_label(cfg: &NetworkConfig, instance: u32) -> String {
+    let base = match cfg.wavelog_radio_name.trim() {
         "" => "SDROxide",
         n => n,
     };
-    let (status, reply) = http::post_json_plain_status(&url, &radio_json(key, name, r))?;
-    if status == 200 {
+    if instance == 0 {
+        base.to_string()
+    } else {
+        format!("{base} {}", instance + 1)
+    }
+}
+
+/// Post the radio's state to `api/radio`.
+///
+/// `instance` is the engine's radio id ([`sdroxide_radio`]'s `EngineConfig::instance`):
+/// every radio on the station reports, each under its own [`radio_label`].
+pub fn push_radio(cfg: &NetworkConfig, r: &Radio, instance: u32) -> Result<(), String> {
+    let key = key(cfg).map_err(|e| format!("Wavelog: {e}"))?;
+    let url = api_url(&cfg.wavelog_url, "radio").map_err(|e| format!("Wavelog: {e}"))?;
+    let name = radio_label(cfg, instance);
+    // Transport errors must carry the same "Wavelog" prefix the UI filters on,
+    // or the Wavelog tab stays on "No message yet" while the push is failing.
+    let (status, reply) = http::post_json_plain_status(&url, &radio_json(key, &name, r))
+        .map_err(|e| format!("Wavelog radio: {e}"))?;
+    if status == 200 || status == 201 {
         return Ok(());
     }
     Err(format!("Wavelog radio: {}", reason(status, &reply)))
@@ -330,6 +357,19 @@ mod tests {
             api_url("http://192.168.1.5/wavelog", "radio").unwrap(),
             "http://192.168.1.5/wavelog/api/radio"
         );
+        // WavelogGate-style base keeps index.php; a pasted API root does not double /api.
+        assert_eq!(
+            api_url("https://log.example.com/index.php", "radio").unwrap(),
+            "https://log.example.com/index.php/api/radio"
+        );
+        assert_eq!(
+            api_url("https://log.example.com/index.php/api", "radio").unwrap(),
+            "https://log.example.com/index.php/api/radio"
+        );
+        assert_eq!(
+            api_url("https://log.example.com/api/", "qso").unwrap(),
+            "https://log.example.com/api/qso"
+        );
         assert!(api_url("", "qso").is_err());
         assert!(api_url("ftp://x", "qso").is_err());
         assert!(api_url("log.example.com", "qso").is_err());
@@ -373,6 +413,17 @@ mod tests {
         let v: Value = serde_json::from_str(&radio_json("K", "R", &split)).unwrap();
         assert_eq!(v["frequency_rx"], 14_200_000);
         assert_eq!(v["mode_rx"], "LSB");
+    }
+
+    #[test]
+    fn further_radios_get_their_own_cat_name() {
+        let mut cfg = NetworkConfig::default();
+        assert_eq!(radio_label(&cfg, 0), "SDROxide");
+        assert_eq!(radio_label(&cfg, 1), "SDROxide 2");
+        assert_eq!(radio_label(&cfg, 2), "SDROxide 3");
+        cfg.wavelog_radio_name = "Shack".into();
+        assert_eq!(radio_label(&cfg, 0), "Shack");
+        assert_eq!(radio_label(&cfg, 1), "Shack 2");
     }
 
     #[test]

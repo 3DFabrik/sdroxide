@@ -70,8 +70,11 @@ pub struct SpotManager {
 
     /// When to tell Wavelog about a change of dial frequency or mode.
     wavelog_qrg: crate::wavelog::QrgPusher,
-    /// Whether the operator has been told that this radio is not the one that reports.
+    /// Whether the operator has been told that URL/key are still missing.
     wavelog_note: bool,
+    /// This engine's radio id — shapes the Wavelog CAT name so every radio
+    /// reports under its own label (`SDROxide`, `SDROxide 2`, …).
+    radio_instance: u32,
 
     /// Whether this manager may hold the station's long-lived feeds.
     ///
@@ -115,6 +118,7 @@ impl SpotManager {
             rep_visible: false,
             wavelog_qrg: crate::wavelog::QrgPusher::default(),
             wavelog_note: false,
+            radio_instance: 0,
             station: true,
         }
     }
@@ -124,9 +128,16 @@ impl SpotManager {
     ///
     /// Configuration still applies; only the long-lived logins and sockets stay
     /// away. Call before the first [`SpotManager::set_config`]: anything already
-    /// running keeps running.
+    /// running keeps running. Wavelog QRG push is unaffected: every radio
+    /// reports under its own name.
     pub fn stand_down(&mut self) {
         self.station = false;
+    }
+
+    /// Bind this manager to a radio id for Wavelog's CAT label. Call once at
+    /// engine start, before the dial starts moving.
+    pub fn set_radio_instance(&mut self, instance: u32) {
+        self.radio_instance = instance;
     }
 
     /// Apply a new configuration, (re)starting only the feeds whose settings
@@ -316,24 +327,21 @@ impl SpotManager {
     /// Report the dial to Wavelog's radio interface, when that is switched on.
     ///
     /// Called on every engine tick; [`crate::wavelog::QrgPusher`] decides when
-    /// something is actually worth sending. Only the station's primary radio
-    /// reports: Wavelog lists one radio by name, and several engines posting
-    /// under it would overwrite each other.
+    /// something is actually worth sending. Every radio on the station reports
+    /// under its own [`crate::wavelog::radio_label`], so a second radio no
+    /// longer stays silent and does not clobber the first under one name.
     pub fn set_wavelog_radio(&mut self, tx_hz: f64, rx_hz: Option<f64>, mode: sdroxide_types::Mode) {
         let cfg = &self.cfg;
-        if !cfg.wavelog_push_qrg
-            || cfg.wavelog_url.trim().is_empty()
-            || cfg.wavelog_api_key.trim().is_empty()
-        {
+        if !cfg.wavelog_push_qrg {
             return;
         }
-        if !self.station {
-            // Said once: nothing else would tell the operator why this radio never reports.
+        // Said once: a ticked box with no URL/key otherwise looks like the push
+        // is broken, because nothing is attempted and the tab stays empty.
+        if cfg.wavelog_url.trim().is_empty() || cfg.wavelog_api_key.trim().is_empty() {
             if !self.wavelog_note {
                 self.wavelog_note = true;
                 let _ = self.event_tx.send(NetEvent::Status(Some(
-                    "Wavelog: frequency and mode are sent by the station's first radio, not this one"
-                        .into(),
+                    "Wavelog: set the URL and a read+write API key, then APPLY".into(),
                 )));
             }
             return;
@@ -347,13 +355,15 @@ impl SpotManager {
             return;
         }
         let cfg = self.cfg.clone();
+        let instance = self.radio_instance;
+        let label = crate::wavelog::radio_label(&cfg, instance);
         let tx = self.event_tx.clone();
         std::thread::Builder::new()
             .name("sdroxide-wavelog".into())
             .spawn(move || {
-                let line = match crate::wavelog::push_radio(&cfg, &radio) {
+                let line = match crate::wavelog::push_radio(&cfg, &radio, instance) {
                     Ok(()) => format!(
-                        "Wavelog radio: {:.4} MHz {} sent",
+                        "Wavelog radio: {label} {:.4} MHz {} sent",
                         radio.freq_hz as f64 / 1e6,
                         radio.mode
                     ),
